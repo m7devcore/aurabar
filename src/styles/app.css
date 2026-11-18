@@ -14,6 +14,7 @@
   --border-hairline: rgba(255, 255, 255, 0.16);
   --border-strong: rgba(255, 255, 255, 0.28);
   --glass-highlight: rgba(255, 255, 255, 0.2);
+  --glass-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   --text-primary: #f7f9fc;
   --text-muted: #b0bac9;
   --accent: #60a5fa;
@@ -64,6 +65,7 @@
   --border-hairline: rgba(255, 255, 255, 0.72);
   --border-strong: rgba(15, 23, 42, 0.22);
   --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-text-shadow: none;
   --text-primary: #0f172a;
   --text-muted: #334155;
   --accent: #0284c7;
@@ -87,10 +89,14 @@ body,
   height: 100%;
   overflow: hidden;
   background: transparent;
-  --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-  --font-text: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Inter Variable', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  --font-text: 'Inter Variable', 'IBM Plex Sans Arabic', system-ui, sans-serif;
   font-family: var(--font-text);
+  font-optical-sizing: auto;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  font-weight: 500;
   color: var(--text-primary);
+  text-shadow: var(--glass-text-shadow);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -781,9 +787,10 @@ body,
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-primary);
-  font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font-family: var(--font-display);
   font-size: 13.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   text-align: center;
   padding: 3px 8px;
   outline: none;
@@ -935,10 +942,10 @@ body,
 }
 
 .popover-title {
-  font-family: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', sans-serif;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
 .popover-body {
