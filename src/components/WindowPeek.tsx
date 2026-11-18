@@ -17,9 +17,11 @@ interface Props {
   onMouseLeave: () => void;
 }
 
-const CARD_WIDTH = 212;
-const CARD_GAP = 8;
-const PADDING = 10;
+const CARD_WIDTH = 148;
+const CARD_GAP = 4;
+const PADDING = 6;
+// 1px border on each side; leaving it out made the content overflow and show a scrollbar
+const BORDER = 1;
 
 // Windows-taskbar-style hover preview: one card per open window of an app, with a live
 // thumbnail (refreshed while open), its title, and a close button
@@ -36,7 +38,7 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
     let alive = true;
     const load = async () => {
       for (const w of windows) {
-        if (!w.hwnd || w.isMinimized) continue;
+        if (!w.hwnd) continue;
         const url = await dockBridge.getWindowThumb(w.hwnd);
         if (!alive) return;
         if (url) setThumbs((prev) => (prev[w.hwnd!] === url ? prev : { ...prev, [w.hwnd!]: url }));
@@ -51,9 +53,9 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
     // windows is captured through hwndKey; refetch only when the set of windows changes
   }, [hwndKey]);
 
-  const maxCards = Math.max(1, Math.floor((window.innerWidth - 24 - PADDING * 2 + CARD_GAP) / (CARD_WIDTH + CARD_GAP)));
+  const maxCards = Math.max(1, Math.floor((window.innerWidth - 24 - BORDER * 2 - PADDING * 2 + CARD_GAP) / (CARD_WIDTH + CARD_GAP)));
   const visibleCount = Math.min(windows.length, maxCards);
-  const width = PADDING * 2 + visibleCount * CARD_WIDTH + (visibleCount - 1) * CARD_GAP;
+  const width = BORDER * 2 + PADDING * 2 + visibleCount * CARD_WIDTH + (visibleCount - 1) * CARD_GAP;
   const left = Math.round(Math.max(12, Math.min(window.innerWidth - width - 12, x - width / 2)));
 
   const appIcon = (size: number) =>
@@ -75,7 +77,8 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
       aria-label={appName}
     >
       {windows.map((win) => {
-        const thumb = win.hwnd && !win.isMinimized ? thumbs[win.hwnd] : undefined;
+        // Minimized windows get the last frame captured before they were minimized
+        const thumb = win.hwnd ? thumbs[win.hwnd] : undefined;
         const iconUrl = win.iconDataUrl ?? appIconUrl;
         return (
           <div
@@ -112,7 +115,7 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
                     onCloseWindow(win);
                   }}
                 >
-                  <X size={12} />
+                  <X size={10} strokeWidth={2.5} />
                 </button>
               )}
             </div>
@@ -121,7 +124,7 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
                 <img src={thumb} alt="" draggable={false} />
               ) : (
                 <div className="peek-card-placeholder">
-                  {appIcon(30)}
+                  {appIcon(22)}
                   {win.isMinimized && (
                     <span>{lang === 'ar' ? 'مصغّرة' : 'Minimized'}</span>
                   )}

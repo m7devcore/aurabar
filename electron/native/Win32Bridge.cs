@@ -244,6 +244,17 @@ namespace AuraBarNative {
     private static readonly object procCacheLock = new object();
     private static volatile bool keepOnTop = true;
     private static string replyPrefix = "";
+
+    // Last good preview per window. A minimized window cannot be rendered, so - like the Windows
+    // taskbar - the peek shows the frame captured before it was minimized.
+    private struct ThumbEntry {
+      public string url;
+      public long at;
+    }
+    private static readonly Dictionary<long, ThumbEntry> thumbCache = new Dictionary<long, ThumbEntry>();
+    private static readonly object thumbCacheLock = new object();
+    private const int THUMB_W = 400;
+    private const int THUMB_H = 240;
     private static bool taskbarHiddenByUs = false;
     private static int savedScreenLeft = 0;
     private static int savedScreenRight = 1920;
@@ -378,6 +389,7 @@ namespace AuraBarNative {
     }
 
     private static void PollForegroundLoop() {
+      long lastFgSnapAt = 0;
       while (true) {
         try {
           if (taskbarHiddenByUs) {
@@ -400,7 +412,16 @@ namespace AuraBarNative {
             GetWindowThreadProcessId(fg, out pid);
             if (!IsAuraBarWindow(pid, fg) && IsTaskbarWindow(fg)) {
               if (fg != lastExternalForeground) {
+                IntPtr leaving = lastExternalForeground;
                 lastExternalForeground = fg;
+                // The window being left is usually still visible here, before any minimize
+                if (leaving != IntPtr.Zero) SnapshotThumb(leaving);
+                SnapshotThumb(fg);
+                lastFgSnapAt = Environment.TickCount;
+              } else if (unchecked(Environment.TickCount - lastFgSnapAt) > 4000) {
+                // Keeps a recent frame for windows minimized via their own title-bar button
+                SnapshotThumb(fg);
+                lastFgSnapAt = Environment.TickCount;
               }
             } else if (lastExternalForeground != IntPtr.Zero &&
                        (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
@@ -577,6 +598,7 @@ namespace AuraBarNative {
             maximizedHwnds.Remove(hwndVal);
           }
         }
+        SnapshotThumbIfStale(hWnd, 1500);
         ShowWindowAsync(hWnd, 6); // SW_MINIMIZE
         if (lastExternalForeground == hWnd) {
           lastExternalForeground = IntPtr.Zero;
@@ -959,8 +981,58 @@ namespace AuraBarNative {
 
     // Taskbar-style preview: render the window via PrintWindow (PW_RENDERFULLCONTENT so GPU/Chromium
     // content is captured), crop the invisible DWM resize borders, and downscale to a small JPEG.
-    private static string GetWindowThumbDataUrl(long hwndVal, int maxW, int maxH) {
+    private static string GetWindowThumbDataUrl(long hwndVal) {
       IntPtr hWnd = new IntPtr(hwndVal);
+      if (hWnd == IntPtr.Zero) return "";
+      if (!IsWindow(hWnd)) {
+        lock (thumbCacheLock) { thumbCache.Remove(hwndVal); }
+        return "";
+      }
+      if (!IsIconic(hWnd)) {
+        string fresh = CaptureWindowThumb(hWnd, THUMB_W, THUMB_H);
+        if (fresh.Length > 0) {
+          StoreThumb(hwndVal, fresh);
+          return fresh;
+        }
+      }
+      ThumbEntry cached;
+      lock (thumbCacheLock) {
+        if (thumbCache.TryGetValue(hwndVal, out cached)) return cached.url;
+      }
+      return "";
+    }
+
+    private static void StoreThumb(long hwndVal, string url) {
+      lock (thumbCacheLock) {
+        if (thumbCache.Count > 80) {
+          List<long> dead = new List<long>();
+          foreach (long k in thumbCache.Keys) {
+            if (!IsWindow(new IntPtr(k))) dead.Add(k);
+          }
+          foreach (long k in dead) thumbCache.Remove(k);
+          if (thumbCache.Count > 80) thumbCache.Clear();
+        }
+        thumbCache[hwndVal] = new ThumbEntry { url = url, at = Environment.TickCount };
+      }
+    }
+
+    private static void SnapshotThumb(IntPtr hWnd) {
+      if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || IsIconic(hWnd) || !IsWindowVisible(hWnd)) return;
+      string url = CaptureWindowThumb(hWnd, THUMB_W, THUMB_H);
+      if (url.Length > 0) StoreThumb(hWnd.ToInt64(), url);
+    }
+
+    private static void SnapshotThumbIfStale(IntPtr hWnd, int maxAgeMs) {
+      ThumbEntry cached;
+      bool fresh;
+      lock (thumbCacheLock) {
+        fresh = thumbCache.TryGetValue(hWnd.ToInt64(), out cached) &&
+          unchecked(Environment.TickCount - (int)cached.at) < maxAgeMs;
+      }
+      if (!fresh) SnapshotThumb(hWnd);
+    }
+
+    private static string CaptureWindowThumb(IntPtr hWnd, int maxW, int maxH) {
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || IsIconic(hWnd)) return "";
       // WM_PRINT to a hung window would block the whole command loop
       if (IsHungAppWindow(hWnd)) return "";
@@ -1235,9 +1307,7 @@ namespace AuraBarNative {
             Reply(GetFileIconDataUrl(line.Substring(5).Trim()));
           } else if (line.StartsWith("THUMB ")) {
             string[] parts = line.Substring(6).Trim().Split(' ');
-            int tw = parts.Length > 1 ? int.Parse(parts[1]) : 400;
-            int th = parts.Length > 2 ? int.Parse(parts[2]) : 240;
-            Reply(GetWindowThumbDataUrl(long.Parse(parts[0]), Math.Max(32, Math.Min(tw, 800)), Math.Max(32, Math.Min(th, 600))));
+            Reply(GetWindowThumbDataUrl(long.Parse(parts[0])));
           } else if (line.StartsWith("WINICON ")) {
             long hv = long.Parse(line.Substring(8).Trim());
             Reply(GetWindowIconDataUrl(hv));
