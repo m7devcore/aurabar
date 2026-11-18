@@ -15,6 +15,7 @@ import { getSystemStats } from './services/systemStats';
 import { win32Daemon } from './services/win32Daemon';
 import {
   adjustSystemVolume,
+  closeWindowByHwnd,
   createPinnedAppFromPath,
   focusWindowByPid,
   getIconDataUrl,
@@ -23,9 +24,11 @@ import {
   getSystemVolume,
   importTaskbarPinnedApps,
   launchTarget,
+  listBackgroundApps,
   listInstalledApps,
   listRunningWindows,
   pickExecutableOrFolder,
+  quitAppByPid,
   resolveExeName,
   restoreWindowsTaskbarSync,
   runQuickSystemAction,
@@ -517,6 +520,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('aurabar:get-system-stats', () => getSystemStats());
   ipcMain.handle('aurabar:get-running-windows', () => listRunningWindows());
+  ipcMain.handle('aurabar:get-background-apps', () => listBackgroundApps());
   ipcMain.handle('aurabar:get-installed-apps', () => listInstalledApps());
   ipcMain.handle('aurabar:create-pinned-from-path', (_e, filePath: string) =>
     createPinnedAppFromPath(filePath)
@@ -525,6 +529,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:focus-window', (_e, pid: number, hwnd?: string) =>
     focusWindowByPid(pid, hwnd)
   );
+  ipcMain.handle('aurabar:close-window', (_e, hwnd: string) => closeWindowByHwnd(hwnd));
+  ipcMain.handle('aurabar:quit-process', (_e, pid: number) => quitAppByPid(pid));
   ipcMain.handle('aurabar:launch-target', (_e, target: string) => launchTarget(target));
   ipcMain.handle('aurabar:pick-app-file', () => pickExecutableOrFolder(dockWindow));
   ipcMain.handle('aurabar:get-media-info', () => getCurrentMedia());

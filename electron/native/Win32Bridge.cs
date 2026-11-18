@@ -65,6 +65,9 @@ namespace AuraBarNative {
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
 
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
     private static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
 
@@ -186,6 +189,7 @@ namespace AuraBarNative {
     private const int WS_EX_APPWINDOW = 0x00040000;
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
+    private const uint WM_CLOSE = 0x0010;
     private const uint GW_HWNDPREV = 3;
     private const uint GW_OWNER = 4;
     private const int DWMWA_CLOAKED = 14;
@@ -486,6 +490,153 @@ namespace AuraBarNative {
       }
     }
 
+    private static string CloseWindowByHwnd(long hwndVal) {
+      IntPtr hWnd = new IntPtr(hwndVal);
+      if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
+      bool sent = PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+      return sent ? "ok" : "false";
+    }
+
+    private static int GetPESubsystem(string exePath) {
+      try {
+        using (FileStream fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (BinaryReader br = new BinaryReader(fs)) {
+          if (fs.Length < 0x100) return 0;
+          fs.Position = 0x3C;
+          int peOffset = br.ReadInt32();
+          if (peOffset < 0 || peOffset + 94 > fs.Length) return 0;
+          fs.Position = peOffset + 24 + 68;
+          return br.ReadUInt16();
+        }
+      } catch {
+        return 0;
+      }
+    }
+
+    private static bool IsExcludedBackgroundExe(string procName, string exePath) {
+      if (string.IsNullOrEmpty(exePath)) return true;
+      string lowerPath = exePath.ToLowerInvariant();
+      string lowerName = procName.ToLowerInvariant();
+      if (lowerPath.StartsWith("c:\\windows\\") || lowerPath.StartsWith("c:\\windows/")) return true;
+      if (lowerPath.Contains("\\.vscode\\extensions\\") || lowerPath.Contains("\\node_modules\\")) return true;
+      string[] blocked = new string[] {
+        "aurabar", "win32bridge", "electron", "crashhandler", "crashpad", "msedgewebview2",
+        "webview", "elevation_service", "widgetservice", "widgetboard", "crossdeviceservice",
+        "startfeedprovider", "nvcontainer", "amdrsserv", "amdrssrcext", "amdow", "cncmd",
+        "lghub_agent", "omencommandcenterbackground", "securityhealthservice", "openconsole",
+        "extension-host", "node_repl", "updater", "spotify_migrator", "spotifylauncher",
+        "helper", "installmonitor"
+      };
+      for (int i = 0; i < blocked.Length; i++) {
+        if (lowerName.Contains(blocked[i])) return true;
+      }
+      return false;
+    }
+
+    private static string ListBackgroundAppsJson() {
+      HashSet<string> taskbarExePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+        if (!IsTaskbarWindow(hWnd)) return true;
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        if (pid == 0 || IsAuraBarWindow(pid, hWnd)) return true;
+        ProcMeta meta = GetProcMeta(pid);
+        if (!string.IsNullOrEmpty(meta.exePath)) {
+          taskbarExePaths.Add(meta.exePath);
+        }
+        return true;
+      }, IntPtr.Zero);
+
+      int mySession = Process.GetCurrentProcess().SessionId;
+      Dictionary<string, string> byExe = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+      Process[] procs = Process.GetProcesses();
+      for (int i = 0; i < procs.Length; i++) {
+        Process p = procs[i];
+        try {
+          if (p.SessionId != mySession) continue;
+          uint pid = (uint)p.Id;
+          ProcMeta meta = GetProcMeta(pid);
+          if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+          if (IsExcludedBackgroundExe(meta.name, meta.exePath)) continue;
+          if (taskbarExePaths.Contains(meta.exePath)) continue;
+          if (byExe.ContainsKey(meta.exePath)) continue;
+          if (GetPESubsystem(meta.exePath) != 2) continue;
+
+          string displayName = meta.name;
+          try {
+            FileVersionInfo fvi = FileVersionInfo.GetVersionInfo(meta.exePath);
+            if (!string.IsNullOrWhiteSpace(fvi.FileDescription)) {
+              displayName = fvi.FileDescription.Trim();
+            } else if (!string.IsNullOrWhiteSpace(fvi.ProductName)) {
+              displayName = fvi.ProductName.Trim();
+            }
+          } catch { }
+
+          byExe[meta.exePath] = string.Format(
+            "{{\"pid\":{0},\"processName\":\"{1}\",\"displayName\":\"{2}\",\"executablePath\":\"{3}\"}}",
+            pid,
+            JsonEscape(meta.name),
+            JsonEscape(displayName),
+            JsonEscape(meta.exePath)
+          );
+          if (byExe.Count >= 24) break;
+        } catch {
+        } finally {
+          p.Dispose();
+        }
+      }
+
+      string[] arr = new string[byExe.Count];
+      byExe.Values.CopyTo(arr, 0);
+      return "[" + string.Join(",", arr) + "]";
+    }
+
+    private static string QuitProcessApp(int pid) {
+      if (pid <= 4 || IsAuraBarWindow((uint)pid, IntPtr.Zero)) return "false";
+      ProcMeta targetMeta = GetProcMeta((uint)pid);
+      if (!string.IsNullOrEmpty(targetMeta.exePath) &&
+          targetMeta.exePath.StartsWith("C:\\Windows\\", StringComparison.OrdinalIgnoreCase)) {
+        return "false";
+      }
+
+      List<Process> matching = new List<Process>();
+      Process[] procs = Process.GetProcesses();
+      for (int i = 0; i < procs.Length; i++) {
+        Process p = procs[i];
+        try {
+          bool hit = p.Id == pid;
+          if (!hit && !string.IsNullOrEmpty(targetMeta.exePath)) {
+            ProcMeta pm = GetProcMeta((uint)p.Id);
+            hit = string.Equals(pm.exePath, targetMeta.exePath, StringComparison.OrdinalIgnoreCase);
+          }
+          if (hit && !IsAuraBarWindow((uint)p.Id, IntPtr.Zero)) {
+            matching.Add(p);
+          } else {
+            p.Dispose();
+          }
+        } catch {
+          p.Dispose();
+        }
+      }
+
+      if (matching.Count == 0) return "false";
+
+      for (int i = 0; i < matching.Count; i++) {
+        try { matching[i].CloseMainWindow(); } catch { }
+      }
+      Thread.Sleep(220);
+      for (int i = 0; i < matching.Count; i++) {
+        try {
+          if (!matching[i].HasExited) matching[i].Kill();
+        } catch {
+        } finally {
+          matching[i].Dispose();
+        }
+      }
+      return "ok";
+    }
+
     private static void TapKey(byte vk) {
       keybd_event(vk, 0, 0, 0);
       keybd_event(vk, 0, 2, 0);
@@ -684,9 +835,17 @@ namespace AuraBarNative {
         try {
           if (line == "LIST") {
             Console.WriteLine(ListWindowsJson());
+          } else if (line == "LIST_BG") {
+            Console.WriteLine(ListBackgroundAppsJson());
           } else if (line.StartsWith("TOGGLE ")) {
             long hv = long.Parse(line.Substring(7).Trim());
             Console.WriteLine(ToggleWindow(hv));
+          } else if (line.StartsWith("CLOSE_WIN ")) {
+            long hv = long.Parse(line.Substring(10).Trim());
+            Console.WriteLine(CloseWindowByHwnd(hv));
+          } else if (line.StartsWith("QUIT_APP ")) {
+            int pidVal = int.Parse(line.Substring(9).Trim());
+            Console.WriteLine(QuitProcessApp(pidVal));
           } else if (line == "KBD_LANG") {
             Console.WriteLine(GetKbdLang());
           } else if (line == "KBD_SWITCH") {

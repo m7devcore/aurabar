@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowLeft,
   ArrowRight,
+  ChevronUp,
   ExternalLink,
   FolderOpen,
   Lock,
@@ -22,6 +23,7 @@ import { t } from '../i18n';
 import type {
   ActivePanel,
   AppConfig,
+  BackgroundApp,
   MediaInfo,
   NetworkInfo,
   PinnedApp,
@@ -43,10 +45,12 @@ import {
 
 interface CtxMenuState {
   x: number;
-  kind: 'pinned' | 'running';
+  anchorOffset?: number;
+  kind: 'pinned' | 'running' | 'bg';
   pinned?: PinnedApp;
   pinnedIndex?: number;
   running?: RunningWindow;
+  bg?: BackgroundApp;
 }
 
 interface TooltipState {
@@ -118,6 +122,9 @@ export function DockBar({
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
   const [ccFlyout, setCcFlyout] = useState<{ x: number } | null>(null);
+  const [overflowTray, setOverflowTray] = useState<{ x: number } | null>(null);
+  const [backgroundApps, setBackgroundApps] = useState<BackgroundApp[]>([]);
+  const [hoveredOverflowLabel, setHoveredOverflowLabel] = useState<string | null>(null);
   const [trayVol, setTrayVol] = useState<VolumeInfo>({ level: 70, muted: false });
   const [netInfo, setNetInfo] = useState<NetworkInfo>({ connected: true, kind: 'wifi' });
   const [dragOverExternal, setDragOverExternal] = useState(false);
@@ -131,6 +138,8 @@ export function DockBar({
   const folderPopoverRef = useRef<HTMLDivElement | null>(null);
   const ccFlyoutRef = useRef<HTMLDivElement | null>(null);
   const ccClusterRef = useRef<HTMLDivElement | null>(null);
+  const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
+  const overflowPopoverRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
@@ -158,6 +167,22 @@ export function DockBar({
       clearInterval(id);
     };
   }, [ccFlyout]);
+
+  // Poll background/tray running apps when the overflow chevron popover is open
+  useEffect(() => {
+    if (!overflowTray) return;
+    let alive = true;
+    const pollBg = async () => {
+      const list = await dockBridge.getBackgroundApps();
+      if (alive) setBackgroundApps(list);
+    };
+    void pollBg();
+    const id = setInterval(() => void pollBg(), 2200);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [overflowTray]);
 
   // Report exact interactive regions (with generous hover halo) to Main process
   useLayoutEffect(() => {
@@ -191,6 +216,7 @@ export function DockBar({
 
       pushOverlay(folderPopoverRef.current);
       pushOverlay(ccFlyoutRef.current);
+      pushOverlay(overflowPopoverRef.current);
       pushOverlay(ctxMenuRef.current);
       const popoverEl = document.querySelector<HTMLElement>('.popover-card');
       pushOverlay(popoverEl);
@@ -204,6 +230,7 @@ export function DockBar({
       if (dockBarRef.current) ro.observe(dockBarRef.current);
       if (folderPopoverRef.current) ro.observe(folderPopoverRef.current);
       if (ccFlyoutRef.current) ro.observe(ccFlyoutRef.current);
+      if (overflowPopoverRef.current) ro.observe(overflowPopoverRef.current);
       if (ctxMenuRef.current) ro.observe(ctxMenuRef.current);
     }
     return () => ro?.disconnect();
@@ -212,6 +239,8 @@ export function DockBar({
     activeFolderObj?.id,
     activeFolderObj?.children?.length,
     ccFlyout,
+    overflowTray,
+    backgroundApps.length,
     ctxMenu,
     pinnedApps.length,
     runningWindows.length,
@@ -221,13 +250,14 @@ export function DockBar({
     settings.showOpenWindowsInBar
   ]);
 
-  // Close context menu, Control Center flyout, or folder on Esc, blur, or click outside
+  // Close context menu, Control Center flyout, overflow tray, or folder on Esc, blur, or click outside
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setCtxMenu(null);
         setOpenFolder(null);
         setCcFlyout(null);
+        setOverflowTray(null);
         dragCandidateRef.current = null;
         dragSnapshotRef.current = null;
         liveDragRef.current = null;
@@ -240,6 +270,7 @@ export function DockBar({
       setCtxMenu(null);
       setOpenFolder(null);
       setCcFlyout(null);
+      setOverflowTray(null);
       dragCandidateRef.current = null;
       dragSnapshotRef.current = null;
       liveDragRef.current = null;
@@ -259,6 +290,14 @@ export function DockBar({
       if (ccFlyout && !target.closest('.control-center-flyout') && !target.closest('.cc-trigger-btn')) {
         setCcFlyout(null);
       }
+      if (
+        overflowTray &&
+        !target.closest('.tray-overflow-popover') &&
+        !target.closest('.tray-overflow-btn') &&
+        !target.closest('.taskbar-ctx-menu')
+      ) {
+        setOverflowTray(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
@@ -268,7 +307,7 @@ export function DockBar({
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousedown', onDocMouseDown);
     };
-  }, [ctxMenu, openFolder, ccFlyout]);
+  }, [ctxMenu, openFolder, ccFlyout, overflowTray]);
 
   // Imperative pointer-drag start: ZERO React state update until pointer moves >= 11px!
   const dragActionsRef = useRef<{
@@ -589,6 +628,7 @@ export function DockBar({
     setCtxMenu(null);
     setOpenFolder(null);
     setCcFlyout(null);
+    setOverflowTray(null);
     setTooltip(null);
     onTogglePanel(activePanel === panel ? null : panel);
   };
@@ -596,6 +636,7 @@ export function DockBar({
   const toggleControlCenter = () => {
     setCtxMenu(null);
     setOpenFolder(null);
+    setOverflowTray(null);
     setTooltip(null);
     if (ccFlyout) {
       setCcFlyout(null);
@@ -605,6 +646,24 @@ export function DockBar({
     const rect = ccClusterRef.current?.getBoundingClientRect();
     const centerX = rect ? rect.left + rect.width / 2 : window.innerWidth - 200;
     setCcFlyout({ x: centerX });
+  };
+
+  const toggleOverflowTray = () => {
+    setCtxMenu(null);
+    setOpenFolder(null);
+    setCcFlyout(null);
+    setTooltip(null);
+    setHoveredOverflowLabel(null);
+    if (overflowTray) {
+      setOverflowTray(null);
+      return;
+    }
+    onTogglePanel(null);
+    void dockBridge.getBackgroundApps().then(setBackgroundApps);
+    onRefreshWindows();
+    const rect = overflowBtnRef.current?.getBoundingClientRect();
+    const centerX = rect ? rect.left + rect.width / 2 : window.innerWidth - 320;
+    setOverflowTray({ x: centerX });
   };
 
   const quickMedia = async (cmd: 'playPause' | 'next' | 'previous') => {
@@ -650,14 +709,24 @@ export function DockBar({
     }
   }
 
-  const openContextMenu = (e: React.MouseEvent, payload: Omit<CtxMenuState, 'x'>) => {
+  const openContextMenu = (
+    e: React.MouseEvent,
+    payload: Omit<CtxMenuState, 'x'>,
+    opts?: { preserveOverflow?: boolean; aboveTrigger?: boolean }
+  ) => {
     e.preventDefault();
     e.stopPropagation();
     setTooltip(null);
     setOpenFolder(null);
+    if (!opts?.preserveOverflow) setOverflowTray(null);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const clampedX = Math.max(8, Math.min(window.innerWidth - 196, rect.left));
-    setCtxMenu({ ...payload, x: clampedX });
+    const anchorOffset = opts?.aboveTrigger
+      ? settings.position === 'bottom'
+        ? Math.min(350, Math.max(65, Math.round(window.innerHeight - rect.top + 6)))
+        : Math.min(350, Math.max(65, Math.round(rect.bottom + 6)))
+      : undefined;
+    setCtxMenu({ ...payload, x: clampedX, anchorOffset });
   };
 
   const winToPinned = (win: RunningWindow): PinnedApp | null => {
@@ -680,6 +749,41 @@ export function DockBar({
     if (pinnedExeNames.has(win.processName.toLowerCase())) return;
     onSavePinnedApps([...pinnedApps, next]);
   };
+
+  const pinBackgroundApp = (bg: BackgroundApp) => {
+    if (!bg.executablePath || pinnedExeNames.has(bg.processName.toLowerCase())) return;
+    const next: PinnedApp = {
+      id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      name: bg.displayName || bg.processName,
+      target: bg.executablePath,
+      kind: 'app',
+      icon: 'app',
+      color: '#4CB3F0',
+      iconDataUrl: bg.iconDataUrl,
+      exeName: bg.processName.toLowerCase()
+    };
+    onSavePinnedApps([...pinnedApps, next]);
+  };
+
+  // Deduplicated list of all running apps (visible windows + silent tray/background apps)
+  const overflowOpenApps: RunningWindow[] = [];
+  const overflowSeenKeys = new Set<string>();
+  for (const w of runningWindows) {
+    const key = (w.executablePath || w.processName).toLowerCase();
+    if (!overflowSeenKeys.has(key)) {
+      overflowSeenKeys.add(key);
+      overflowOpenApps.push(w);
+    }
+  }
+  const overflowBgApps: BackgroundApp[] = [];
+  for (const b of backgroundApps) {
+    const key = (b.executablePath || b.processName).toLowerCase();
+    if (!overflowSeenKeys.has(key) && !overflowSeenKeys.has(b.processName.toLowerCase())) {
+      overflowSeenKeys.add(key);
+      overflowBgApps.push(b);
+    }
+  }
+  const overflowTotalCount = overflowOpenApps.length + overflowBgApps.length;
 
   const movePinned = (index: number, delta: -1 | 1) => {
     const targetIdx = index + delta;
@@ -886,7 +990,13 @@ export function DockBar({
         </div>
       )}
 
-      {tooltip && !ctxMenu && !activePanel && !activeFolderObj && !pointerDrag?.active && (
+      {tooltip &&
+        !ctxMenu &&
+        !activePanel &&
+        !activeFolderObj &&
+        !overflowTray &&
+        !ccFlyout &&
+        !pointerDrag?.active && (
         <div
           className="dock-tooltip"
           style={{
@@ -1146,42 +1256,235 @@ export function DockBar({
         </div>
       )}
 
+      {/* Hidden / Running Apps Tray Overflow Popover */}
+      {overflowTray && (
+        <div
+          ref={overflowPopoverRef}
+          className="tray-overflow-popover"
+          style={{
+            left: Math.round(Math.max(12, Math.min(window.innerWidth - 256, overflowTray.x - 116))),
+            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="tray-overflow-header">
+            <span className="tray-overflow-title">
+              {settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
+            </span>
+            <span className="tray-overflow-count tabular">{overflowTotalCount}</span>
+          </div>
+
+          {overflowTotalCount === 0 ? (
+            <div className="tray-overflow-empty">
+              {settings.language === 'ar' ? 'لا توجد تطبيقات شغالة' : 'No running apps'}
+            </div>
+          ) : (
+            <div className="tray-overflow-grid">
+              {overflowOpenApps.map((win) => (
+                <button
+                  key={`ov-win-${win.hwnd ?? win.pid}`}
+                  type="button"
+                  className={`tray-overflow-tile ${win.isActive ? 'active' : ''}`}
+                  aria-label={win.title || win.processName}
+                  onMouseEnter={() => setHoveredOverflowLabel(win.title || win.processName)}
+                  onMouseLeave={() => setHoveredOverflowLabel(null)}
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setOverflowTray(null);
+                    void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+                      setTimeout(onRefreshWindows, 120);
+                    });
+                  }}
+                  onContextMenu={(e) =>
+                    openContextMenu(
+                      e,
+                      { kind: 'running', running: win },
+                      { preserveOverflow: true, aboveTrigger: true }
+                    )
+                  }
+                >
+                  {win.iconDataUrl ? (
+                    <img
+                      className="app-icon-img"
+                      src={win.iconDataUrl}
+                      alt={win.processName}
+                      draggable={false}
+                      style={{ width: 20, height: 20 }}
+                    />
+                  ) : (
+                    <AppIconGlyph name="app" color="var(--accent)" size={17} />
+                  )}
+                  <span
+                    className={`tray-overflow-dot ${win.isActive ? 'active' : 'window'}`}
+                    aria-hidden="true"
+                  />
+                </button>
+              ))}
+
+              {overflowBgApps.map((bg) => (
+                <button
+                  key={`ov-bg-${bg.pid}`}
+                  type="button"
+                  className="tray-overflow-tile"
+                  aria-label={bg.displayName || bg.processName}
+                  onMouseEnter={() => setHoveredOverflowLabel(bg.displayName || bg.processName)}
+                  onMouseLeave={() => setHoveredOverflowLabel(null)}
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setOverflowTray(null);
+                    void dockBridge.launchTarget(bg.executablePath);
+                  }}
+                  onContextMenu={(e) =>
+                    openContextMenu(
+                      e,
+                      { kind: 'bg', bg },
+                      { preserveOverflow: true, aboveTrigger: true }
+                    )
+                  }
+                >
+                  {bg.iconDataUrl ? (
+                    <img
+                      className="app-icon-img"
+                      src={bg.iconDataUrl}
+                      alt={bg.displayName}
+                      draggable={false}
+                      style={{ width: 20, height: 20 }}
+                    />
+                  ) : (
+                    <AppIconGlyph name="app" color="var(--text-muted)" size={17} />
+                  )}
+                  <span className="tray-overflow-dot bg" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="tray-overflow-caption">
+            {hoveredOverflowLabel ??
+              (settings.language === 'ar'
+                ? 'اضغط للفتح · كلك يمين للخيارات'
+                : 'Click to open · Right-click for options')}
+          </div>
+        </div>
+      )}
+
       {ctxMenu && (
         <div
           ref={ctxMenuRef}
           className="taskbar-ctx-menu"
           style={{
             left: ctxMenu.x,
-            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
+            ...(settings.position === 'bottom'
+              ? { bottom: ctxMenu.anchorOffset ?? 65 }
+              : { top: ctxMenu.anchorOffset ?? 65 })
           }}
           onClick={(e) => e.stopPropagation()}
         >
           {ctxMenu.kind === 'running' && ctxMenu.running && (
             <>
-              {ctxMenu.running.executablePath && (
-                <button
-                  className="taskbar-ctx-item"
-                  onClick={() => {
-                    pinRunningApp(ctxMenu.running!);
-                    setCtxMenu(null);
-                  }}
-                >
-                  <Pin size={14} style={{ color: 'var(--accent)' }} />
-                  <span>{settings.language === 'ar' ? 'تثبيت في الشريط' : 'Pin to taskbar'}</span>
-                </button>
-              )}
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  const targetWin = ctxMenu.running!;
+                  setCtxMenu(null);
+                  setOverflowTray(null);
+                  void dockBridge.focusWindow(targetWin.pid, targetWin.hwnd).then(() => {
+                    setTimeout(onRefreshWindows, 120);
+                  });
+                }}
+              >
+                <Zap size={14} style={{ color: 'var(--accent)' }} />
+                <span>{settings.language === 'ar' ? 'فتح / إظهار' : 'Open / Focus'}</span>
+              </button>
+              {ctxMenu.running.executablePath &&
+                !pinnedExeNames.has(ctxMenu.running.processName.toLowerCase()) && (
+                  <button
+                    className="taskbar-ctx-item"
+                    onClick={() => {
+                      pinRunningApp(ctxMenu.running!);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    <Pin size={14} style={{ color: 'var(--accent)' }} />
+                    <span>{settings.language === 'ar' ? 'تثبيت في الشريط' : 'Pin to taskbar'}</span>
+                  </button>
+                )}
               {ctxMenu.running.executablePath && (
                 <button
                   className="taskbar-ctx-item"
                   onClick={() => {
                     void dockBridge.launchTarget(ctxMenu.running!.executablePath!);
                     setCtxMenu(null);
+                    setOverflowTray(null);
                   }}
                 >
                   <ExternalLink size={14} />
                   <span>{settings.language === 'ar' ? 'فتح نافذة جديدة' : 'Open new window'}</span>
                 </button>
               )}
+              {ctxMenu.running.hwnd && (
+                <button
+                  className="taskbar-ctx-item danger"
+                  onClick={() => {
+                    const hwnd = ctxMenu.running!.hwnd!;
+                    setCtxMenu(null);
+                    void dockBridge.closeWindow(hwnd).then(() => {
+                      setTimeout(() => {
+                        onRefreshWindows();
+                        void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                      }, 180);
+                    });
+                  }}
+                >
+                  <X size={14} />
+                  <span>{settings.language === 'ar' ? 'إغلاق' : 'Close window'}</span>
+                </button>
+              )}
+            </>
+          )}
+
+          {ctxMenu.kind === 'bg' && ctxMenu.bg && (
+            <>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  const targetBg = ctxMenu.bg!;
+                  setCtxMenu(null);
+                  setOverflowTray(null);
+                  void dockBridge.launchTarget(targetBg.executablePath);
+                }}
+              >
+                <ExternalLink size={14} style={{ color: 'var(--accent)' }} />
+                <span>{settings.language === 'ar' ? 'فتح' : 'Open'}</span>
+              </button>
+              {!pinnedExeNames.has(ctxMenu.bg.processName.toLowerCase()) && (
+                <button
+                  className="taskbar-ctx-item"
+                  onClick={() => {
+                    pinBackgroundApp(ctxMenu.bg!);
+                    setCtxMenu(null);
+                  }}
+                >
+                  <Pin size={14} />
+                  <span>{settings.language === 'ar' ? 'تثبيت في الشريط' : 'Pin to taskbar'}</span>
+                </button>
+              )}
+              <button
+                className="taskbar-ctx-item danger"
+                onClick={() => {
+                  const targetPid = ctxMenu.bg!.pid;
+                  setCtxMenu(null);
+                  void dockBridge.quitProcess(targetPid).then(() => {
+                    setTimeout(() => {
+                      onRefreshWindows();
+                      void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                    }, 180);
+                  });
+                }}
+              >
+                <X size={14} />
+                <span>{settings.language === 'ar' ? 'إغلاق التطبيق' : 'Close app'}</span>
+              </button>
             </>
           )}
 
@@ -1596,6 +1899,38 @@ export function DockBar({
 
         {/* Right Slot: Apple-grade Glass Control Tray */}
         <div className="dock-right-tray">
+          <button
+            ref={overflowBtnRef}
+            type="button"
+            className={`tray-overflow-btn ${overflowTray ? 'active' : ''}`}
+            aria-label={settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
+            aria-expanded={Boolean(overflowTray)}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleOverflowTray();
+            }}
+            onMouseEnter={(e) =>
+              showTooltipFor(
+                e,
+                settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'
+              )
+            }
+            title={settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'}
+          >
+            <ChevronUp
+              size={14}
+              strokeWidth={2}
+              className="tray-overflow-chevron"
+              style={
+                settings.position === 'top' && !overflowTray
+                  ? { transform: 'rotate(180deg)' }
+                  : settings.position === 'top' && overflowTray
+                    ? { transform: 'rotate(0deg)' }
+                    : undefined
+              }
+            />
+          </button>
+
           <button
             className="tray-lang-pill tabular"
             aria-label={`Switch Keyboard Language (${kbdLang})`}

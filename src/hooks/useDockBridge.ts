@@ -44,11 +44,14 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
     hostname: 'LOCAL-PC'
   }),
   getRunningWindows: async () => [],
+  getBackgroundApps: async () => [],
   getInstalledApps: async () => [],
   createPinnedFromPath: async () => null,
   getPathForFile: () => '',
   importTaskbarApps: async () => [],
   focusWindow: async () => true,
+  closeWindow: async () => true,
+  quitProcess: async () => true,
   launchTarget: async (target) => {
     if (/^https?:\/\//i.test(target)) window.open(target, '_blank');
     return true;

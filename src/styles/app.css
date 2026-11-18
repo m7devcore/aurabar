@@ -446,8 +446,52 @@ body,
 .dock-bar.compact .tray-lang-pill,
 .dock-bar.compact .tray-control-cluster,
 .dock-bar.compact .tray-settings-btn,
-.dock-bar.compact .tray-clock-btn {
+.dock-bar.compact .tray-clock-btn,
+.dock-bar.compact .tray-overflow-btn {
   height: 32px;
+}
+
+.dock-bar.compact .tray-overflow-btn {
+  width: 24px;
+}
+
+.tray-overflow-btn {
+  width: 28px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease,
+    transform 0.14s ease-out;
+}
+
+.tray-overflow-btn:hover {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.tray-overflow-btn:active {
+  transform: scale(0.95);
+}
+
+.tray-overflow-btn.active {
+  background: var(--surface-hover);
+  border-color: var(--border-hairline);
+  color: var(--text-primary);
+}
+
+.tray-overflow-chevron {
+  transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.tray-overflow-btn.active .tray-overflow-chevron {
+  transform: rotate(180deg);
 }
 
 .dock-bar.compact .tray-settings-btn {
@@ -588,11 +632,13 @@ body,
 
 .taskbar-ctx-menu {
   position: fixed;
-  z-index: 50;
+  z-index: 70;
   min-width: 184px;
   padding: 5px;
   border-radius: 12px;
   background: var(--popover-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  backdrop-filter: blur(24px) saturate(1.25);
   border: 1px solid var(--border-hairline);
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.44);
   display: flex;
@@ -1643,6 +1689,127 @@ body,
   color: var(--text-muted);
 }
 
+/* Running Apps Overflow Tray Popover */
+.tray-overflow-popover {
+  position: fixed;
+  z-index: 56;
+  width: 244px;
+  padding: 10px;
+  border-radius: 16px;
+  background: var(--popover-bg);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  backdrop-filter: blur(26px) saturate(1.25);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: popReveal 0.14s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.tray-overflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.tray-overflow-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.tray-overflow-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+}
+
+.tray-overflow-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 1px;
+}
+
+.tray-overflow-tile {
+  position: relative;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.13s ease, border-color 0.13s ease, transform 0.13s ease-out;
+}
+
+.tray-overflow-tile:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hairline);
+}
+
+.tray-overflow-tile:active {
+  transform: scale(0.94);
+}
+
+.tray-overflow-tile.active {
+  background: var(--chip-hover);
+  border-color: var(--border-hairline);
+}
+
+.tray-overflow-dot {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.tray-overflow-dot.active {
+  width: 10px;
+  background: var(--accent);
+}
+
+.tray-overflow-dot.window {
+  background: var(--text-primary);
+  opacity: 0.72;
+}
+
+.tray-overflow-dot.bg {
+  background: var(--text-muted);
+  opacity: 0.45;
+}
+
+.tray-overflow-caption {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 6px 2px;
+  border-top: 1px solid var(--border-hairline);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-overflow-empty {
+  padding: 14px 6px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
 /* Desktop Keyboard Focus & System Accessibility Fallbacks */
 button:focus-visible,
 input:focus-visible,
@@ -1674,6 +1841,7 @@ input:focus-visible,
   .popover-card,
   .folder-popover,
   .control-center-flyout,
+  .tray-overflow-popover,
   .taskbar-ctx-menu,
   .dynamic-island {
     -webkit-backdrop-filter: none !important;

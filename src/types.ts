@@ -35,6 +35,14 @@ export interface RunningWindow {
   isActive?: boolean;
 }
 
+export interface BackgroundApp {
+  pid: number;
+  processName: string;
+  displayName: string;
+  executablePath: string;
+  iconDataUrl?: string;
+}
+
 export interface SystemStats {
   cpuPercent: number;
   ramPercent: number;

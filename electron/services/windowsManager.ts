@@ -4,7 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { app, dialog, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
-import type { InstalledApp, NetworkInfo, PinnedApp, RunningWindow } from '../../src/types';
+import type {
+  BackgroundApp,
+  InstalledApp,
+  NetworkInfo,
+  PinnedApp,
+  RunningWindow
+} from '../../src/types';
 import { win32Daemon } from './win32Daemon';
 
 const iconCache = new Map<string, string>();
@@ -275,6 +281,35 @@ export async function focusWindowByPid(_pid: number, hwnd?: string): Promise<boo
     return res === 'focused' || res === 'minimized';
   }
   return false;
+}
+
+export async function listBackgroundApps(): Promise<BackgroundApp[]> {
+  const raw = await win32Daemon.send('LIST_BG');
+  if (!raw || !raw.startsWith('[')) return [];
+  try {
+    const parsed = JSON.parse(raw) as BackgroundApp[];
+    const enriched = await Promise.all(
+      parsed.map(async (item) => ({
+        ...item,
+        iconDataUrl: item.executablePath ? await getIconDataUrl(item.executablePath) : undefined
+      }))
+    );
+    return enriched.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  } catch {
+    return [];
+  }
+}
+
+export async function closeWindowByHwnd(hwnd: string): Promise<boolean> {
+  if (!hwnd || !/^\d+$/.test(hwnd)) return false;
+  const res = await win32Daemon.send(`CLOSE_WIN ${hwnd}`);
+  return res === 'ok';
+}
+
+export async function quitAppByPid(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 4) return false;
+  const res = await win32Daemon.send(`QUIT_APP ${pid}`);
+  return res === 'ok';
 }
 
 export async function launchTarget(target: string): Promise<boolean> {

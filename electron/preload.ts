@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   AppConfig,
+  BackgroundApp,
   InstalledApp,
   MediaInfo,
   NetworkInfo,
@@ -27,11 +28,14 @@ export interface AuraBarApi {
   setHitRects: (view: 'dock' | 'island', rects: HitRect[]) => void;
   getSystemStats: () => Promise<SystemStats>;
   getRunningWindows: () => Promise<RunningWindow[]>;
+  getBackgroundApps: () => Promise<BackgroundApp[]>;
   getInstalledApps: () => Promise<InstalledApp[]>;
   createPinnedFromPath: (filePath: string) => Promise<PinnedApp | null>;
   getPathForFile: (file: File) => string;
   importTaskbarApps: () => Promise<PinnedApp[]>;
   focusWindow: (pid: number, hwnd?: string) => Promise<boolean>;
+  closeWindow: (hwnd: string) => Promise<boolean>;
+  quitProcess: (pid: number) => Promise<boolean>;
   launchTarget: (target: string) => Promise<boolean>;
   pickAppFile: () => Promise<{ path: string; name: string; kind: 'app' | 'folder'; iconDataUrl?: string } | null>;
   getAppIcon: (target: string) => Promise<string | undefined>;
@@ -66,11 +70,14 @@ const api: AuraBarApi = {
   setHitRects: (view, rects) => ipcRenderer.send('aurabar:set-hit-rects', view, rects),
   getSystemStats: () => ipcRenderer.invoke('aurabar:get-system-stats'),
   getRunningWindows: () => ipcRenderer.invoke('aurabar:get-running-windows'),
+  getBackgroundApps: () => ipcRenderer.invoke('aurabar:get-background-apps'),
   getInstalledApps: () => ipcRenderer.invoke('aurabar:get-installed-apps'),
   createPinnedFromPath: (filePath) => ipcRenderer.invoke('aurabar:create-pinned-from-path', filePath),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   importTaskbarApps: () => ipcRenderer.invoke('aurabar:import-taskbar-apps'),
   focusWindow: (pid, hwnd) => ipcRenderer.invoke('aurabar:focus-window', pid, hwnd),
+  closeWindow: (hwnd) => ipcRenderer.invoke('aurabar:close-window', hwnd),
+  quitProcess: (pid) => ipcRenderer.invoke('aurabar:quit-process', pid),
   launchTarget: (target) => ipcRenderer.invoke('aurabar:launch-target', target),
   pickAppFile: () => ipcRenderer.invoke('aurabar:pick-app-file'),
   getAppIcon: (target) => ipcRenderer.invoke('aurabar:get-app-icon', target),
