@@ -610,6 +610,46 @@ body,
   text-align: start;
 }
 
+.inline-music-text {
+  min-width: 0;
+  max-width: 124px;
+}
+
+/* Fixed while lyrics are on, so the dock doesn't shift each time a line changes */
+.inline-music-text.fixed {
+  width: 168px;
+  max-width: 168px;
+}
+
+.inline-music-title,
+.inline-music-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-music-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.inline-music-artist {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.inline-music-lyric {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.22;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  animation: lyricLineIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .inline-music-art {
   width: 24px;
   height: 24px;
@@ -1313,7 +1353,7 @@ body,
 
 .dynamic-island {
   position: relative;
-  width: 288px;
+  width: 264px;
   height: 40px;
   border-radius: 20px;
   padding: 0 10px 0 8px;
@@ -1537,11 +1577,9 @@ body,
   border-radius: 999px;
   background: var(--text-primary);
   transform-origin: left center;
-  transition: transform 0.35s var(--ease-out);
-}
-
-.dynamic-island.is-playing .island-timeline-fill {
-  transition: transform 1s linear;
+  transform: scaleX(0);
+  /* Painted every frame by PlaybackTimeline; a CSS transition would only add lag */
+  will-change: transform;
 }
 
 .island-ctrl-btn {
@@ -1604,6 +1642,161 @@ body,
 .island-mini-action:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.island-mini-action.is-on {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+.island-mini-action.is-on:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.island-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Lyrics: the expanded island grows to make room for a three-line karaoke window */
+.dynamic-island.expanded.with-lyrics {
+  height: 330px;
+}
+
+.island-lyrics {
+  position: relative;
+  height: 104px;
+  margin: 2px -6px 0;
+  overflow: hidden;
+  text-align: center;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26%, #000 74%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 26%, #000 74%, transparent 100%);
+  animation: islandFadeIn 0.25s ease both;
+}
+
+.lyrics-track {
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.lyrics-track.no-anim,
+.lyrics-track.no-anim .lyric-line {
+  transition: none;
+}
+
+.lyric-line {
+  padding: 3px 10px;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.38;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  opacity: 0.32;
+  transform: scale(0.95);
+  transform-origin: center;
+  transition: opacity 0.45s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  overflow-wrap: anywhere;
+}
+
+.lyric-line.past {
+  opacity: 0.2;
+}
+
+.lyric-line.active {
+  opacity: 1;
+  transform: none;
+}
+
+/* Unsynced lyrics: a calm column the user can scroll themselves */
+.island-lyrics.is-plain {
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 26px 0;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 82%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 82%, transparent 100%);
+}
+
+.island-lyrics.is-plain::-webkit-scrollbar {
+  display: none;
+}
+
+.island-lyrics.is-plain .lyric-line {
+  opacity: 0.75;
+  transform: none;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.lyric-gap {
+  height: 8px;
+}
+
+.island-lyrics.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.lyrics-shimmer {
+  background: linear-gradient(90deg, var(--text-faint) 0%, var(--text-primary) 50%, var(--text-faint) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: lyricsShimmer 1.6s linear infinite;
+}
+
+@keyframes lyricsShimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.island-lyrics.in-popover {
+  height: 112px;
+  margin: 0 -8px;
+}
+
+/* Compact island: the sung line replaces title and artist, each line fading up into place */
+.dynamic-island.has-lyric:not(.expanded) {
+  width: 318px;
+}
+
+.island-compact-lyric {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: lyricLineIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Transform + opacity only: both stay on the compositor, so the line change never janks */
+@keyframes lyricLineIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* Volume Slider — clean crisp linear track, zero glow */

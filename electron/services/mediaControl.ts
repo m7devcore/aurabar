@@ -29,13 +29,18 @@ while ($true) {
       $props = Await ($session.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
       $playback = $session.GetPlaybackInfo()
       $timeline = $session.GetTimelineProperties()
+      $updated = 0
+      try { $updated = $timeline.LastUpdatedTime.ToUnixTimeMilliseconds() } catch { $updated = 0 }
       $out = [PSCustomObject]@{
         title = $props.Title
         artist = $props.Artist
+        album = $props.AlbumTitle
         appId = $session.SourceAppUserModelId
         status = $playback.PlaybackStatus.ToString()
         posSec = [int]$timeline.Position.TotalSeconds
         endSec = [int]$timeline.EndTime.TotalSeconds
+        posMs = [long]$timeline.Position.TotalMilliseconds
+        posAt = $updated
       } | ConvertTo-Json -Compress
     }
   } catch {
@@ -131,9 +136,24 @@ function queryWorker(): Promise<string> {
   });
 }
 
+// Players that never fill LastUpdatedTime report year 1, and a few report the future; fall
+// back to "now" so the renderer's extrapolation stays sane
+function sanePosAt(raw: Partial<MediaInfo>, receivedAt: number): number {
+  const at = typeof raw.posAt === 'number' ? raw.posAt : 0;
+  if (at < 946684800000 || at > receivedAt + 2000) return receivedAt;
+  const endMs = (raw.endSec ?? 0) * 1000;
+  const posMs = typeof raw.posMs === 'number' ? raw.posMs : 0;
+  // Extrapolating from a stale stamp would run past the end of the track
+  if (endMs > 0 && raw.status === 'Playing' && posMs + (receivedAt - at) > endMs + 3000) {
+    return receivedAt;
+  }
+  return at;
+}
+
 function parseMedia(stdout: string): MediaInfo | null {
   if (!stdout.trim()) return null;
   try {
+    const receivedAt = Date.now();
     const raw = JSON.parse(stdout.trim()) as Partial<MediaInfo>;
     if (!raw.title && !raw.artist) return null;
     const status =
@@ -146,7 +166,10 @@ function parseMedia(stdout: string): MediaInfo | null {
       appId: raw.appId ?? '',
       status,
       posSec: typeof raw.posSec === 'number' ? raw.posSec : 0,
-      endSec: typeof raw.endSec === 'number' ? raw.endSec : 0
+      endSec: typeof raw.endSec === 'number' ? raw.endSec : 0,
+      album: typeof raw.album === 'string' ? raw.album : '',
+      posMs: typeof raw.posMs === 'number' ? raw.posMs : (raw.posSec ?? 0) * 1000,
+      posAt: sanePosAt(raw, receivedAt)
     };
   } catch {
     return null;

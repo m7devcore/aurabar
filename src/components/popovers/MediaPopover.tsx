@@ -1,7 +1,10 @@
-import { Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { MicVocal, Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { useMediaArtwork } from '../../hooks/useMediaArtwork';
 import { VolumeSlider } from '../VolumeSlider';
+import { IslandLyrics } from '../IslandLyrics';
+import { PlaybackTimeline } from '../PlaybackTimeline';
+import { useActiveLine, useLyrics, useLyricsPref, usePlaybackClock } from '../../hooks/useLyrics';
 import { t } from '../../i18n';
 import type { Language, MediaInfo } from '../../types';
 
@@ -14,6 +17,10 @@ interface Props {
 export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
   const dict = t(lang);
   const artworkUrl = useMediaArtwork(media);
+  const [lyricsOn, toggleLyrics] = useLyricsPref();
+  const lyrics = useLyrics(media, lyricsOn);
+  const clock = usePlaybackClock(media);
+  const activeLine = useActiveLine(lyrics.status === 'ready' ? lyrics.lyrics.synced : null, clock);
 
   const send = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
@@ -89,6 +96,34 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
           </button>
         </div>
       </div>
+
+      {media && (
+        <div className="card stack-sm" style={{ padding: '10px 14px 12px' }}>
+          <div className="row-between">
+            <div className="muted-sm" style={{ fontWeight: 600 }}>
+              {dict.lyrics}
+            </div>
+            <button
+              className={`island-mini-action ${lyricsOn ? 'is-on' : ''}`}
+              aria-label={dict.lyrics}
+              aria-pressed={lyricsOn}
+              onClick={toggleLyrics}
+              title={dict.lyrics}
+            >
+              <MicVocal size={14} />
+            </button>
+          </div>
+          {lyricsOn && (
+            <IslandLyrics
+              state={lyrics}
+              active={activeLine}
+              dict={dict}
+              className="in-popover"
+            />
+          )}
+          <PlaybackTimeline clock={clock} endSec={media.endSec ?? 0} />
+        </div>
+      )}
 
       <div className="card stack-sm" style={{ padding: '10px 14px' }}>
         <div className="muted-sm" style={{ fontWeight: 600 }}>{dict.volume}</div>

@@ -53,6 +53,10 @@ export interface Translations {
   previousTrack: string;
   nextTrack: string;
   collapse: string;
+  lyrics: string;
+  lyricsLoading: string;
+  noLyrics: string;
+  instrumental: string;
 }
 
 const EN: Translations = {
@@ -107,7 +111,11 @@ const EN: Translations = {
   pause: 'Pause',
   previousTrack: 'Previous track',
   nextTrack: 'Next track',
-  collapse: 'Collapse'
+  collapse: 'Collapse',
+  lyrics: 'Lyrics',
+  lyricsLoading: 'Finding lyrics…',
+  noLyrics: 'No lyrics found for this track',
+  instrumental: 'Instrumental'
 };
 
 const AR: Translations = {
@@ -162,7 +170,11 @@ const AR: Translations = {
   pause: 'إيقاف مؤقت',
   previousTrack: 'السابق',
   nextTrack: 'التالي',
-  collapse: 'تصغير'
+  collapse: 'تصغير',
+  lyrics: 'كلمات الأغنية',
+  lyricsLoading: 'جاري البحث عن الكلمات…',
+  noLyrics: 'ما في كلمات لهالأغنية',
+  instrumental: 'موسيقى بدون كلمات'
 };
 
 export function t(lang: Language): Translations {

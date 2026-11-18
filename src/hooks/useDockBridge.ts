@@ -62,6 +62,7 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
   getAppIcon: async () => undefined,
   getMediaInfo: async () => null,
   sendMediaCommand: async () => undefined,
+  getLyrics: async () => null,
   adjustVolume: async () => undefined,
   getVolume: async () => ({ level: 65, muted: false }),
   setVolume: async (level) => ({ level, muted: false }),

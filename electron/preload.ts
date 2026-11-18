@@ -3,6 +3,7 @@ import type {
   AppConfig,
   BackgroundApp,
   InstalledApp,
+  LyricsResult,
   MediaInfo,
   NetworkInfo,
   PinnedApp,
@@ -49,6 +50,7 @@ export interface AuraBarApi {
   getAppIcon: (target: string) => Promise<string | undefined>;
   getMediaInfo: () => Promise<MediaInfo | null>;
   sendMediaCommand: (cmd: 'playPause' | 'next' | 'previous') => Promise<void>;
+  getLyrics: (title: string, artist: string, album: string, durationSec: number) => Promise<LyricsResult | null>;
   adjustVolume: (action: 'up' | 'down' | 'mute') => Promise<void>;
   getVolume: () => Promise<VolumeInfo>;
   setVolume: (level: number) => Promise<VolumeInfo>;
@@ -93,6 +95,8 @@ const api: AuraBarApi = {
   getAppIcon: (target) => ipcRenderer.invoke('aurabar:get-app-icon', target),
   getMediaInfo: () => ipcRenderer.invoke('aurabar:get-media-info'),
   sendMediaCommand: (cmd) => ipcRenderer.invoke('aurabar:send-media-cmd', cmd),
+  getLyrics: (title, artist, album, durationSec) =>
+    ipcRenderer.invoke('aurabar:get-lyrics', title, artist, album, durationSec),
   adjustVolume: (action) => ipcRenderer.invoke('aurabar:adjust-volume', action),
   getVolume: () => ipcRenderer.invoke('aurabar:get-volume'),
   setVolume: (level) => ipcRenderer.invoke('aurabar:set-volume', level),

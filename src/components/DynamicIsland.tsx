@@ -1,15 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import {
-  ChevronUp,
-  Music,
-  Pause,
-  Play,
-  SkipBack,
-  SkipForward
-} from 'lucide-react';
+import { useLayoutEffect, useRef } from 'react';
+import { ChevronUp, MicVocal, Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
 import { VolumeSlider } from './VolumeSlider';
+import { IslandLyrics } from './IslandLyrics';
+import { PlaybackTimeline } from './PlaybackTimeline';
+import { useActiveLine, useLyrics, useLyricsPref, usePlaybackClock } from '../hooks/useLyrics';
 import { t } from '../i18n';
 import type { Language, MediaInfo } from '../types';
 
@@ -19,13 +15,6 @@ interface Props {
   expanded: boolean;
   onToggleExpand: (next: boolean) => void;
   onRefreshMedia: () => void;
-}
-
-function formatTime(sec: number): string {
-  const safe = Math.max(0, Math.floor(sec));
-  const m = Math.floor(safe / 60);
-  const s = safe % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function cleanSourceLabel(appId?: string): string | null {
@@ -49,16 +38,10 @@ function cleanSourceLabel(appId?: string): string | null {
   return head.length > 20 ? `${head.slice(0, 18)}…` : head;
 }
 
-export function DynamicIsland({
-  lang,
-  media,
-  expanded,
-  onToggleExpand,
-  onRefreshMedia
-}: Props) {
+export function DynamicIsland({ lang, media, expanded, onToggleExpand, onRefreshMedia }: Props) {
   const dict = t(lang);
   const artworkUrl = useMediaArtwork(media);
-  const [livePosSec, setLivePosSec] = useState<number>(0);
+  const [lyricsOn, toggleLyrics] = useLyricsPref();
   const islandRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
@@ -80,26 +63,20 @@ export function DynamicIsland({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(report) : null;
     if (ro && islandRef.current) ro.observe(islandRef.current);
     return () => ro?.disconnect();
-  }, [expanded, media?.title, artworkUrl, Boolean(media)]);
+  }, [expanded, media?.title, artworkUrl, Boolean(media), lyricsOn]);
 
-  const trackKey = media ? `${media.artist} - ${media.title}` : '';
   const isPlaying = media?.status === 'Playing';
+  const lyrics = useLyrics(media, lyricsOn);
+  const syncedLines = lyrics.status === 'ready' ? lyrics.lyrics.synced : null;
+  const clock = usePlaybackClock(media);
+  const activeLine = useActiveLine(syncedLines, clock);
 
-  useEffect(() => {
-    setLivePosSec(media?.posSec ?? 0);
-  }, [media?.posSec, trackKey]);
-
-  useEffect(() => {
-    if (!isPlaying) return;
-    const id = setInterval(() => {
-      setLivePosSec((prev) => {
-        const end = media?.endSec ?? 0;
-        if (end > 0 && prev >= end) return end;
-        return prev + 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [isPlaying, media?.endSec]);
+  // Compact island: the current lyric line takes over the text row while it is being sung
+  const compactLine = syncedLines && isPlaying && !expanded ? syncedLines[activeLine] : undefined;
+  const compactLyric = compactLine?.text
+    ? { key: `${activeLine}-${compactLine.timeMs}`, text: compactLine.text }
+    : null;
+  const showLyricsPanel = expanded && lyricsOn && Boolean(media) && lyrics.status !== 'off';
 
   const sendCmd = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
@@ -107,7 +84,6 @@ export function DynamicIsland({
   };
 
   const endSec = media?.endSec ?? 0;
-  const progress = endSec > 0 ? Math.min(1, Math.max(0, livePosSec / endSec)) : 0;
   const sourceLabel = cleanSourceLabel(media?.appId);
   const isIdle = !media && !expanded;
 
@@ -124,11 +100,13 @@ export function DynamicIsland({
         ref={islandRef}
         className={`dynamic-island ${expanded ? 'expanded' : ''} ${isPlaying ? 'is-playing' : ''} ${
           isIdle ? 'is-idle' : ''
-        }`}
+        } ${showLyricsPanel ? 'with-lyrics' : ''} ${compactLyric ? 'has-lyric' : ''}`}
         onClick={() => {
           if (!expanded) onToggleExpand(true);
         }}
-        title={!expanded ? (media ? `${media.title} — ${media.artist}` : dict.islandIdle) : undefined}
+        title={
+          !expanded ? (media ? `${media.title} — ${media.artist}` : dict.islandIdle) : undefined
+        }
       >
         {!expanded ? (
           <div className="island-compact-row">
@@ -140,16 +118,24 @@ export function DynamicIsland({
               </div>
             )}
 
-            <div className="island-compact-text">
-              <span className="island-compact-title" dir="auto">
-                {media?.title || dict.islandIdle}
-              </span>
-              {media?.artist && (
-                <span className="island-compact-artist" dir="auto">
-                  {media.artist}
+            {compactLyric ? (
+              <div className="island-compact-text">
+                <span key={compactLyric.key} className="island-compact-lyric" dir="auto">
+                  {compactLyric.text}
                 </span>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="island-compact-text">
+                <span className="island-compact-title" dir="auto">
+                  {media?.title || dict.islandIdle}
+                </span>
+                {media?.artist && (
+                  <span className="island-compact-artist" dir="auto">
+                    {media.artist}
+                  </span>
+                )}
+              </div>
+            )}
 
             {media && (
               <button
@@ -192,31 +178,38 @@ export function DynamicIsland({
                 </div>
               </div>
 
-              <button
-                className="island-mini-action"
-                aria-label={dict.collapse}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleExpand(false);
-                }}
-                title={dict.collapse}
-              >
-                <ChevronUp size={15} />
-              </button>
+              <div className="island-top-actions">
+                {media && (
+                  <button
+                    className={`island-mini-action ${lyricsOn ? 'is-on' : ''}`}
+                    aria-label={dict.lyrics}
+                    aria-pressed={lyricsOn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleLyrics();
+                    }}
+                    title={dict.lyrics}
+                  >
+                    <MicVocal size={14} />
+                  </button>
+                )}
+                <button
+                  className="island-mini-action"
+                  aria-label={dict.collapse}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleExpand(false);
+                  }}
+                  title={dict.collapse}
+                >
+                  <ChevronUp size={15} />
+                </button>
+              </div>
             </div>
 
-            <div className="stack-sm" style={{ gap: 5 }}>
-              <div className="island-timeline-track">
-                <div
-                  className="island-timeline-fill"
-                  style={{ transform: `scaleX(${progress.toFixed(4)})` }}
-                />
-              </div>
-              <div className="row-between tabular" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                <span>{formatTime(livePosSec)}</span>
-                <span>{endSec > 0 ? formatTime(endSec) : '--:--'}</span>
-              </div>
-            </div>
+            {showLyricsPanel && <IslandLyrics state={lyrics} active={activeLine} dict={dict} />}
+
+            <PlaybackTimeline clock={clock} endSec={endSec} />
 
             <div className="row-between" style={{ justifyContent: 'center', gap: 18 }}>
               <button

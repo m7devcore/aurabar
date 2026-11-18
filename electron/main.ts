@@ -10,6 +10,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/mediaControl';
+import { getLyrics } from './services/lyrics';
 import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
 import { win32Daemon } from './services/win32Daemon';
@@ -96,7 +97,8 @@ function computeDockBounds(settings: DockSettings) {
 function computeIslandBounds() {
   const display = screen.getPrimaryDisplay();
   const width = 440;
-  const height = 240;
+  // Tall enough for the expanded island with lyrics; the window is click-through outside it
+  const height = 360;
   const x = Math.round(display.bounds.x + (display.bounds.width - width) / 2);
   const y = display.bounds.y + 4;
   return { x, y, width, height };
@@ -613,6 +615,16 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:launch-target', (_e, target: string) => launchTarget(target));
   ipcMain.handle('aurabar:pick-app-file', () => pickExecutableOrFolder(dockWindow));
   ipcMain.handle('aurabar:get-media-info', () => getCurrentMedia());
+  ipcMain.handle(
+    'aurabar:get-lyrics',
+    (_e, title: unknown, artist: unknown, album: unknown, durationSec: unknown) =>
+      getLyrics(
+        typeof title === 'string' ? title.slice(0, 300) : '',
+        typeof artist === 'string' ? artist.slice(0, 300) : '',
+        typeof album === 'string' ? album.slice(0, 300) : '',
+        typeof durationSec === 'number' && Number.isFinite(durationSec) ? durationSec : 0
+      )
+  );
   ipcMain.handle('aurabar:send-media-cmd', (_e, cmd: 'playPause' | 'next' | 'previous') =>
     sendMediaCommand(cmd)
   );

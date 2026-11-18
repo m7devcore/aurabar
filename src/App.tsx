@@ -155,7 +155,8 @@ export function App() {
   // Media polling
   const refreshMedia = useCallback(async () => {
     const m = await dockBridge.getMediaInfo();
-    setMedia(m);
+    // Identical polls keep the same object, so the island/dock don't re-render for nothing
+    setMedia((prev) => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m));
   }, []);
 
   // Only poll where music is actually on screen: the island when it is shown, the dock when the
@@ -169,12 +170,12 @@ export function App() {
   useEffect(() => {
     if (!needsMedia) return;
     void refreshMedia();
-    const intervalMs = VIEW_MODE === 'island' ? 1500 : 2500;
+    const intervalMs = VIEW_MODE === 'island' || musicPosition === 'taskbar' ? 1500 : 2500;
     const id = setInterval(() => {
       void refreshMedia();
     }, intervalMs);
     return () => clearInterval(id);
-  }, [needsMedia, refreshMedia]);
+  }, [needsMedia, musicPosition, refreshMedia]);
 
   // Running windows polling
   const refreshWindows = useCallback(async () => {

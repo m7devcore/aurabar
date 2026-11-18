@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
+import { useLyricsPref } from '../hooks/useLyrics';
+import { InlineMusicText } from './InlineMusicText';
 import { t } from '../i18n';
 import type {
   ActivePanel,
@@ -120,6 +122,7 @@ export function DockBar({
   const { settings, pinnedApps } = config;
   const dict = t(settings.language);
   const mediaArtworkUrl = useMediaArtwork(media);
+  const [lyricsOn] = useLyricsPref();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
   const [ccFlyout, setCcFlyout] = useState<{ x: number } | null>(null);
@@ -1765,34 +1768,11 @@ export function DockBar({
                   </div>
                 )}
 
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      maxWidth: 124
-                    }}
-                  >
-                    {media?.title || dict.nothingPlaying}
-                  </div>
-                  {media?.artist && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--text-muted)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        maxWidth: 124
-                      }}
-                    >
-                      {media.artist}
-                    </div>
-                  )}
-                </div>
+                <InlineMusicText
+                  media={media}
+                  lyricsOn={lyricsOn}
+                  idleLabel={dict.nothingPlaying}
+                />
 
                 {media?.status === 'Playing' && (
                   <span className="inline-eq eq-playing" aria-hidden="true">

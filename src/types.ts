@@ -64,6 +64,22 @@ export interface MediaInfo {
   status: 'Playing' | 'Paused' | 'Closed' | 'Unknown';
   posSec?: number;
   endSec?: number;
+  album?: string;
+  /** Playback position in ms as last reported by the player, valid at `posAt` */
+  posMs?: number;
+  /** Unix ms when `posMs` was true (the player's timeline update time) */
+  posAt?: number;
+}
+
+export interface LyricLine {
+  timeMs: number;
+  text: string;
+}
+
+export interface LyricsResult {
+  synced: LyricLine[] | null;
+  plain: string[] | null;
+  instrumental: boolean;
 }
 
 export interface VolumeInfo {
