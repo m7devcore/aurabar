@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs & OS artifacts
+*.log
+npm-debug.log*
+Thumbs.db
+.DS_Store
+
+# Editor / local IDE metadata
+.vscode/
+.idea/

@@ -1,0 +1,96 @@
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type {
+  AppConfig,
+  InstalledApp,
+  MediaInfo,
+  PinnedApp,
+  RunningWindow,
+  SystemStats
+} from '../src/types';
+
+export interface HitRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface AuraBarApi {
+  getConfig: () => Promise<AppConfig>;
+  saveConfig: (config: AppConfig) => Promise<AppConfig>;
+  setPopoverOpen: (open: boolean) => Promise<void>;
+  setDockInteractive: (interactive: boolean) => void;
+  setIslandExpanded: (expanded: boolean) => Promise<void>;
+  setIslandInteractive: (interactive: boolean) => void;
+  setHitRects: (view: 'dock' | 'island', rects: HitRect[]) => void;
+  getSystemStats: () => Promise<SystemStats>;
+  getRunningWindows: () => Promise<RunningWindow[]>;
+  getInstalledApps: () => Promise<InstalledApp[]>;
+  createPinnedFromPath: (filePath: string) => Promise<PinnedApp | null>;
+  getPathForFile: (file: File) => string;
+  importTaskbarApps: () => Promise<PinnedApp[]>;
+  focusWindow: (pid: number, hwnd?: string) => Promise<boolean>;
+  launchTarget: (target: string) => Promise<boolean>;
+  pickAppFile: () => Promise<{ path: string; name: string; kind: 'app' | 'folder'; iconDataUrl?: string } | null>;
+  getAppIcon: (target: string) => Promise<string | undefined>;
+  getMediaInfo: () => Promise<MediaInfo | null>;
+  sendMediaCommand: (cmd: 'playPause' | 'next' | 'previous') => Promise<void>;
+  adjustVolume: (action: 'up' | 'down' | 'mute') => Promise<void>;
+  systemAction: (
+    action: 'lock' | 'taskmgr' | 'settings' | 'start' | 'quicksettings' | 'desktop'
+  ) => Promise<void>;
+  getKeyboardLang: () => Promise<string>;
+  switchKeyboardLang: () => Promise<void>;
+  hideDock: () => Promise<void>;
+  quitApp: () => Promise<void>;
+  onDockBlurred: (cb: () => void) => () => void;
+  onIslandBlurred: (cb: () => void) => () => void;
+  onConfigUpdated: (cb: (cfg: AppConfig) => void) => () => void;
+}
+
+const api: AuraBarApi = {
+  getConfig: () => ipcRenderer.invoke('aurabar:get-config'),
+  saveConfig: (config) => ipcRenderer.invoke('aurabar:save-config', config),
+  setPopoverOpen: (open) => ipcRenderer.invoke('aurabar:set-popover-open', open),
+  setDockInteractive: (interactive) =>
+    ipcRenderer.send('aurabar:set-dock-interactive', interactive),
+  setIslandExpanded: (expanded) => ipcRenderer.invoke('aurabar:set-island-expanded', expanded),
+  setIslandInteractive: (interactive) =>
+    ipcRenderer.send('aurabar:set-island-interactive', interactive),
+  setHitRects: (view, rects) => ipcRenderer.send('aurabar:set-hit-rects', view, rects),
+  getSystemStats: () => ipcRenderer.invoke('aurabar:get-system-stats'),
+  getRunningWindows: () => ipcRenderer.invoke('aurabar:get-running-windows'),
+  getInstalledApps: () => ipcRenderer.invoke('aurabar:get-installed-apps'),
+  createPinnedFromPath: (filePath) => ipcRenderer.invoke('aurabar:create-pinned-from-path', filePath),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  importTaskbarApps: () => ipcRenderer.invoke('aurabar:import-taskbar-apps'),
+  focusWindow: (pid, hwnd) => ipcRenderer.invoke('aurabar:focus-window', pid, hwnd),
+  launchTarget: (target) => ipcRenderer.invoke('aurabar:launch-target', target),
+  pickAppFile: () => ipcRenderer.invoke('aurabar:pick-app-file'),
+  getAppIcon: (target) => ipcRenderer.invoke('aurabar:get-app-icon', target),
+  getMediaInfo: () => ipcRenderer.invoke('aurabar:get-media-info'),
+  sendMediaCommand: (cmd) => ipcRenderer.invoke('aurabar:send-media-cmd', cmd),
+  adjustVolume: (action) => ipcRenderer.invoke('aurabar:adjust-volume', action),
+  systemAction: (action) => ipcRenderer.invoke('aurabar:system-action', action),
+  getKeyboardLang: () => ipcRenderer.invoke('aurabar:get-keyboard-lang'),
+  switchKeyboardLang: () => ipcRenderer.invoke('aurabar:switch-keyboard-lang'),
+  hideDock: () => ipcRenderer.invoke('aurabar:hide-dock'),
+  quitApp: () => ipcRenderer.invoke('aurabar:quit'),
+  onDockBlurred: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('aurabar:blurred', handler);
+    return () => ipcRenderer.removeListener('aurabar:blurred', handler);
+  },
+  onIslandBlurred: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('aurabar:island-blurred', handler);
+    return () => ipcRenderer.removeListener('aurabar:island-blurred', handler);
+  },
+  onConfigUpdated: (cb) => {
+    const handler = (_e: Electron.IpcRendererEvent, cfg: AppConfig) => cb(cfg);
+    ipcRenderer.on('aurabar:config-updated', handler);
+    return () => ipcRenderer.removeListener('aurabar:config-updated', handler);
+  }
+};
+
+contextBridge.exposeInMainWorld('auraBar', api);
