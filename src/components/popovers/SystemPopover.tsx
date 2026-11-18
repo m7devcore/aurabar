@@ -1,4 +1,4 @@
-import { Activity, BatteryCharging, HardDrive, Lock, Settings2 } from 'lucide-react';
+import { Activity, Lock, Settings2 } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { VolumeSlider } from '../VolumeSlider';
 import { t } from '../../i18n';
@@ -11,26 +11,38 @@ interface Props {
   ramHistory: number[];
 }
 
-function Sparkline({ data, color }: { data: number[]; color: string }) {
-  const width = 180;
-  const height = 42;
-  const points = (data.length > 1 ? data : [0, 0])
-    .map((v, i, arr) => {
-      const x = (i / (arr.length - 1)) * width;
-      const y = height - (Math.max(0, Math.min(100, v)) / 100) * (height - 6) - 3;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
+function DualTelemetryChart({ cpu, ram }: { cpu: number[]; ram: number[] }) {
+  const width = 460;
+  const height = 74;
+
+  const toPoints = (series: number[]) =>
+    (series.length > 1 ? series : [0, 0])
+      .map((v, i, arr) => {
+        const x = (i / (arr.length - 1)) * width;
+        const y = height - (Math.max(0, Math.min(100, v)) / 100) * (height - 10) - 5;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
 
   return (
     <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+      <line x1="0" y1={height * 0.25} x2={width} y2={height * 0.25} stroke="var(--rule)" strokeWidth="1" />
+      <line x1="0" y1={height * 0.55} x2={width} y2={height * 0.55} stroke="var(--rule)" strokeWidth="1" />
+      <line x1="0" y1={height * 0.85} x2={width} y2={height * 0.85} stroke="var(--rule)" strokeWidth="1" />
       <polyline
         fill="none"
-        stroke={color}
-        strokeWidth="2"
+        stroke="var(--text-faint)"
+        strokeWidth="1.5"
+        strokeDasharray="3 3"
+        points={toPoints(ram)}
+      />
+      <polyline
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
-        points={points}
+        points={toPoints(cpu)}
       />
     </svg>
   );
@@ -47,89 +59,94 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
 
   return (
     <div className="stack-md">
-      <div className="grid-2">
-        <div className="card stack-sm">
-          <div className="row-between">
-            <span className="muted-sm">{dict.cpu}</span>
-            <span className="metric-value tabular" style={{ color: 'var(--accent)' }}>
-              {stats.cpuPercent}%
-            </span>
-          </div>
-          <Sparkline data={cpuHistory} color="var(--accent)" />
+      {/* Divided KPI strip: typography + 1px rules, zero icon boxes */}
+      <div className="telemetry-strip">
+        <div className="telemetry-cell">
+          <span className="telemetry-label">{dict.cpu}</span>
+          <span className="telemetry-value tabular">{stats.cpuPercent}%</span>
+          <span className="telemetry-sub">{stats.hostname}</span>
         </div>
 
-        <div className="card stack-sm">
-          <div className="row-between">
-            <span className="muted-sm">
-              {dict.ram} ({stats.ramUsedGb} / {stats.ramTotalGb} GB)
-            </span>
-            <span className="metric-value tabular" style={{ color: 'var(--emerald)' }}>
-              {stats.ramPercent}%
-            </span>
-          </div>
-          <Sparkline data={ramHistory} color="var(--emerald)" />
-        </div>
-      </div>
-
-      <div className="grid-3">
-        <div className="card stack-sm">
-          <div className="row-gap muted-sm">
-            <HardDrive size={14} />
-            <span>{dict.disk}</span>
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 600 }} className="tabular">
-            {stats.diskFreeGb !== null ? `${stats.diskFreeGb} GB free` : '—'}
-          </div>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${stats.diskUsedPercent ?? 0}%` }} />
-          </div>
+        <div className="telemetry-cell">
+          <span className="telemetry-label">{dict.ram}</span>
+          <span className="telemetry-value tabular">{stats.ramPercent}%</span>
+          <span className="telemetry-sub tabular">
+            {stats.ramUsedGb} / {stats.ramTotalGb} GB
+          </span>
         </div>
 
-        <div className="card stack-sm">
-          <div className="row-gap muted-sm">
-            <BatteryCharging size={14} />
-            <span>{dict.battery}</span>
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 600 }} className="tabular">
-            {stats.batteryPercent !== null
-              ? `${stats.batteryPercent}% ${stats.batteryCharging ? '⚡' : ''}`
-              : 'AC Desktop'}
-          </div>
-          <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{
-                width: `${stats.batteryPercent ?? 100}%`,
-                background: 'var(--emerald)'
-              }}
-            />
-          </div>
+        <div className="telemetry-cell">
+          <span className="telemetry-label">{dict.disk}</span>
+          <span className="telemetry-value tabular">
+            {stats.diskFreeGb !== null ? `${stats.diskFreeGb} GB` : '—'}
+          </span>
+          <span className="telemetry-sub tabular">
+            {stats.diskUsedPercent !== null ? `${stats.diskUsedPercent}% used` : 'Free'}
+          </span>
         </div>
 
-        <div className="card stack-sm">
-          <div className="row-gap muted-sm">
-            <Activity size={14} />
-            <span>{dict.uptime}</span>
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 600 }} className="tabular">
-            {formatUptime(stats.uptimeSeconds)}
-          </div>
-          <div className="muted-sm">{stats.hostname}</div>
+        <div className="telemetry-cell">
+          <span className="telemetry-label">{dict.battery}</span>
+          <span className="telemetry-value tabular">
+            {stats.batteryPercent !== null ? `${stats.batteryPercent}%` : 'AC'}
+          </span>
+          <span className="telemetry-sub">
+            {stats.batteryPercent === null
+              ? 'Desktop'
+              : stats.batteryCharging
+                ? 'Charging'
+                : 'On battery'}
+          </span>
+        </div>
+
+        <div className="telemetry-cell">
+          <span className="telemetry-label">{dict.uptime}</span>
+          <span className="telemetry-value tabular">{formatUptime(stats.uptimeSeconds)}</span>
+          <span className="telemetry-sub">Session</span>
         </div>
       </div>
 
-      <div className="card stack-sm" style={{ padding: '10px 14px' }}>
+      {/* Single clean dual-series load trend */}
+      <div className="chart-panel">
         <div className="row-between">
-          <span className="muted-sm" style={{ fontWeight: 600 }}>{dict.volume}</span>
+          <span className="telemetry-label" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+            Processor &amp; Memory Load
+          </span>
+          <div className="row-gap" style={{ gap: 14, fontSize: 11.5, color: 'var(--text-muted)' }}>
+            <span className="row-gap" style={{ gap: 5 }}>
+              <span style={{ width: 10, height: 2, background: 'var(--accent)', display: 'inline-block' }} />
+              {dict.cpu}
+            </span>
+            <span className="row-gap" style={{ gap: 5 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 0,
+                  borderTop: '2px dashed var(--text-faint)',
+                  display: 'inline-block'
+                }}
+              />
+              {dict.ram}
+            </span>
+          </div>
+        </div>
+        <DualTelemetryChart cpu={cpuHistory} ram={ramHistory} />
+      </div>
+
+      <div className="chart-panel" style={{ padding: '10px 14px' }}>
+        <div className="row-between">
+          <span className="telemetry-label" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+            {dict.volume}
+          </span>
           <div className="row-gap">
             <button className="btn" onClick={() => void dockBridge.systemAction('taskmgr')}>
-              <Activity size={14} /> Task Mgr
+              <Activity size={13} /> Task Manager
             </button>
             <button className="btn" onClick={() => void dockBridge.systemAction('settings')}>
-              <Settings2 size={14} /> Settings
+              <Settings2 size={13} /> Settings
             </button>
             <button className="btn" onClick={() => void dockBridge.systemAction('lock')}>
-              <Lock size={14} /> Lock
+              <Lock size={13} /> Lock
             </button>
           </div>
         </div>

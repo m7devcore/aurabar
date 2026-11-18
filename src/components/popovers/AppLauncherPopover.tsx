@@ -258,7 +258,9 @@ export function AppLauncherPopover({
       {/* Installed Windows Apps (1-click Pin / Unpin) */}
       <div className="stack-sm">
         <span className="muted-sm">
-          {lang === 'ar' ? 'التطبيقات المثبتة على جهازك (اضغط 📌 للتثبيت)' : 'Installed Apps (Click 📌 to Pin)'}
+          {lang === 'ar'
+            ? `التطبيقات المثبتة على جهازك (${installedApps.length})`
+            : `Installed Apps (${installedApps.length})`}
         </span>
         {loadingInstalled ? (
           <div className="card muted-sm">Scanning Start Menu apps...</div>

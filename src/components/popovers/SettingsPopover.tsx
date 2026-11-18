@@ -106,42 +106,42 @@ export function SettingsPopover({ settings, onUpdateSettings, onOpenAppsManager 
       </div>
 
       {/* 3. Active Taskbar Behavior */}
-      <div className="stack-sm">
-        <div className="settings-section-title" style={{ marginBottom: 2 }}>
-          {dict.behaviorSection}
+      <div>
+        <div className="settings-section-title">{dict.behaviorSection}</div>
+
+        <div className="settings-group">
+          <ToggleSwitch
+            checked={settings.replaceWindowsTaskbar}
+            title={dict.replaceWindowsTaskbar}
+            desc={dict.replaceTaskbarDesc}
+            onToggle={() =>
+              onUpdateSettings({ replaceWindowsTaskbar: !settings.replaceWindowsTaskbar })
+            }
+          />
+
+          <ToggleSwitch
+            checked={settings.showOpenWindowsInBar}
+            title={dict.showOpenWindows}
+            desc={dict.showOpenWindowsDesc}
+            onToggle={() =>
+              onUpdateSettings({ showOpenWindowsInBar: !settings.showOpenWindowsInBar })
+            }
+          />
+
+          <ToggleSwitch
+            checked={settings.compactMode}
+            title={dict.compactMode}
+            desc={dict.compactModeDesc}
+            onToggle={() => onUpdateSettings({ compactMode: !settings.compactMode })}
+          />
+
+          <ToggleSwitch
+            checked={settings.alwaysOnTop}
+            title={dict.alwaysOnTop}
+            desc={dict.alwaysOnTopDesc}
+            onToggle={() => onUpdateSettings({ alwaysOnTop: !settings.alwaysOnTop })}
+          />
         </div>
-
-        <ToggleSwitch
-          checked={settings.replaceWindowsTaskbar}
-          title={dict.replaceWindowsTaskbar}
-          desc={dict.replaceTaskbarDesc}
-          onToggle={() =>
-            onUpdateSettings({ replaceWindowsTaskbar: !settings.replaceWindowsTaskbar })
-          }
-        />
-
-        <ToggleSwitch
-          checked={settings.showOpenWindowsInBar}
-          title={dict.showOpenWindows}
-          desc={dict.showOpenWindowsDesc}
-          onToggle={() =>
-            onUpdateSettings({ showOpenWindowsInBar: !settings.showOpenWindowsInBar })
-          }
-        />
-
-        <ToggleSwitch
-          checked={settings.compactMode}
-          title={dict.compactMode}
-          desc={dict.compactModeDesc}
-          onToggle={() => onUpdateSettings({ compactMode: !settings.compactMode })}
-        />
-
-        <ToggleSwitch
-          checked={settings.alwaysOnTop}
-          title={dict.alwaysOnTop}
-          desc={dict.alwaysOnTopDesc}
-          onToggle={() => onUpdateSettings({ alwaysOnTop: !settings.alwaysOnTop })}
-        />
       </div>
 
       {/* 4. Actions */}

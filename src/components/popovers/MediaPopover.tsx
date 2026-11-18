@@ -31,11 +31,10 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
               style={{
                 width: 48,
                 height: 48,
-                borderRadius: 12,
+                borderRadius: 10,
                 objectFit: 'cover',
                 flexShrink: 0,
-                border: '1px solid var(--border-hairline)',
-                boxShadow: '0 6px 18px var(--island-glow)'
+                border: '1px solid var(--border-hairline)'
               }}
             />
           ) : (
@@ -43,14 +42,13 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
               style={{
                 width: 48,
                 height: 48,
-                borderRadius: 12,
-                background: 'var(--art-grad)',
-                color: '#ffffff',
+                borderRadius: 10,
+                background: 'var(--art-bg)',
+                color: 'var(--text-muted)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                flexShrink: 0,
-                boxShadow: '0 6px 18px var(--island-glow)'
+                flexShrink: 0
               }}
             >
               <Music size={21} />

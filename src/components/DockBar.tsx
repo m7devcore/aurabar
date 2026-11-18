@@ -668,7 +668,7 @@ export function DockBar({
       target: win.executablePath,
       kind: 'app',
       icon: 'app',
-      color: '#60A5FA',
+      color: '#4CB3F0',
       iconDataUrl: win.iconDataUrl,
       exeName: win.processName.toLowerCase()
     };
@@ -773,7 +773,7 @@ export function DockBar({
           target: '',
           kind: 'group',
           icon: 'folder',
-          color: '#60A5FA',
+          color: '#4CB3F0',
           children: [targetItem, incoming]
         };
       }
@@ -996,18 +996,28 @@ export function DockBar({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="cc-bento-grid">
-            {/* Wi-Fi / Network Module */}
+            {/* Wi-Fi / Network Module — plain typographic layout, no colored circle badge */}
             <button
               type="button"
               className="cc-module-card"
               onClick={() => void dockBridge.systemAction('quicksettings')}
               title="Open Windows Quick Settings"
             >
-              <div className={`cc-icon-badge ${netInfo.connected ? 'online' : ''}`}>
-                <WifiIcon
-                  connected={netInfo.connected}
-                  signalPercent={netInfo.signalPercent}
-                  kind={netInfo.kind}
+              <div className="row-between" style={{ width: '100%' }}>
+                <span style={{ color: 'var(--text-primary)', display: 'inline-flex' }}>
+                  <WifiIcon
+                    connected={netInfo.connected}
+                    signalPercent={netInfo.signalPercent}
+                    kind={netInfo.kind}
+                  />
+                </span>
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background: netInfo.connected ? 'var(--emerald)' : 'var(--text-faint)'
+                  }}
                 />
               </div>
               <div style={{ minWidth: 0 }}>
@@ -1022,10 +1032,10 @@ export function DockBar({
                   {!netInfo.connected
                     ? settings.language === 'ar'
                       ? 'غير متصل'
-                      : 'Not Connected'
+                      : 'Not connected'
                     : netInfo.kind === 'ethernet'
                       ? settings.language === 'ar'
-                        ? 'متصل بالإنترنت'
+                        ? 'متصل'
                         : 'Connected'
                       : `${netInfo.ssid ?? 'Connected'}${
                           netInfo.signalPercent !== undefined ? ` · ${netInfo.signalPercent}%` : ''
@@ -1042,13 +1052,11 @@ export function DockBar({
                 onClick={onSwitchKbdLang}
                 title="Switch Keyboard Language"
               >
-                <div className="cc-icon-badge accent-soft" style={{ width: 28, height: 28 }}>
+                <span style={{ color: 'var(--text-muted)', display: 'inline-flex' }}>
                   <GlobeLangIcon />
-                </div>
+                </span>
                 <div style={{ minWidth: 0 }}>
-                  <div className="cc-title" style={{ fontSize: 12 }}>
-                    {kbdLang === 'AR' ? 'العربية' : kbdLang}
-                  </div>
+                  <div className="cc-title">{kbdLang === 'AR' ? 'العربية' : kbdLang}</div>
                   <div className="cc-sub">
                     {settings.language === 'ar' ? 'لغة الإدخال' : 'Input'}
                   </div>
@@ -1061,11 +1069,16 @@ export function DockBar({
                 onClick={() => toggle('system')}
                 title={dict.system}
               >
-                <div className="cc-icon-badge" style={{ width: 28, height: 28, color: 'var(--emerald)' }}>
+                <span
+                  style={{
+                    color: stats.batteryCharging ? 'var(--emerald)' : 'var(--text-muted)',
+                    display: 'inline-flex'
+                  }}
+                >
                   <Zap size={14} />
-                </div>
+                </span>
                 <div style={{ minWidth: 0 }}>
-                  <div className="cc-title tabular" style={{ fontSize: 12 }}>
+                  <div className="cc-title tabular">
                     {stats.batteryPercent !== null
                       ? `${stats.batteryPercent}%`
                       : settings.language === 'ar'
@@ -1682,7 +1695,7 @@ export function DockBar({
             title={dict.settings}
             style={
               activePanel === 'settings'
-                ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)' }
+                ? { background: 'var(--surface-hover)', color: 'var(--text-primary)' }
                 : undefined
             }
           >
