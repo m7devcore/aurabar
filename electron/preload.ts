@@ -5,7 +5,8 @@ import type {
   MediaInfo,
   PinnedApp,
   RunningWindow,
-  SystemStats
+  SystemStats,
+  VolumeInfo
 } from '../src/types';
 
 export interface HitRect {
@@ -36,6 +37,9 @@ export interface AuraBarApi {
   getMediaInfo: () => Promise<MediaInfo | null>;
   sendMediaCommand: (cmd: 'playPause' | 'next' | 'previous') => Promise<void>;
   adjustVolume: (action: 'up' | 'down' | 'mute') => Promise<void>;
+  getVolume: () => Promise<VolumeInfo>;
+  setVolume: (level: number) => Promise<VolumeInfo>;
+  toggleMute: () => Promise<VolumeInfo>;
   systemAction: (
     action: 'lock' | 'taskmgr' | 'settings' | 'start' | 'quicksettings' | 'desktop'
   ) => Promise<void>;
@@ -71,6 +75,9 @@ const api: AuraBarApi = {
   getMediaInfo: () => ipcRenderer.invoke('aurabar:get-media-info'),
   sendMediaCommand: (cmd) => ipcRenderer.invoke('aurabar:send-media-cmd', cmd),
   adjustVolume: (action) => ipcRenderer.invoke('aurabar:adjust-volume', action),
+  getVolume: () => ipcRenderer.invoke('aurabar:get-volume'),
+  setVolume: (level) => ipcRenderer.invoke('aurabar:set-volume', level),
+  toggleMute: () => ipcRenderer.invoke('aurabar:toggle-mute'),
   systemAction: (action) => ipcRenderer.invoke('aurabar:system-action', action),
   getKeyboardLang: () => ipcRenderer.invoke('aurabar:get-keyboard-lang'),
   switchKeyboardLang: () => ipcRenderer.invoke('aurabar:switch-keyboard-lang'),

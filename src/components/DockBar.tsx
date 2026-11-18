@@ -25,6 +25,7 @@ import type {
   SystemStats
 } from '../types';
 import { AppIconGlyph } from './IconMapper';
+import { VolumeSlider } from './VolumeSlider';
 import {
   BatteryIcon,
   SearchIcon,
@@ -110,6 +111,7 @@ export function DockBar({
   const mediaArtworkUrl = useMediaArtwork(media);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
+  const [volumeFlyout, setVolumeFlyout] = useState<{ x: number } | null>(null);
   const [dragOverExternal, setDragOverExternal] = useState(false);
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
   const [liveDrag, setLiveDrag] = useState<LiveDragPlan | null>(null);
@@ -119,6 +121,7 @@ export function DockBar({
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
   const folderPopoverRef = useRef<HTMLDivElement | null>(null);
+  const volumeFlyoutRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
@@ -161,6 +164,7 @@ export function DockBar({
       };
 
       pushOverlay(folderPopoverRef.current);
+      pushOverlay(volumeFlyoutRef.current);
       pushOverlay(ctxMenuRef.current);
       const popoverEl = document.querySelector<HTMLElement>('.popover-card');
       pushOverlay(popoverEl);
@@ -173,6 +177,7 @@ export function DockBar({
     if (ro) {
       if (dockBarRef.current) ro.observe(dockBarRef.current);
       if (folderPopoverRef.current) ro.observe(folderPopoverRef.current);
+      if (volumeFlyoutRef.current) ro.observe(volumeFlyoutRef.current);
       if (ctxMenuRef.current) ro.observe(ctxMenuRef.current);
     }
     return () => ro?.disconnect();
@@ -180,6 +185,7 @@ export function DockBar({
     activePanel,
     activeFolderObj?.id,
     activeFolderObj?.children?.length,
+    volumeFlyout,
     ctxMenu,
     pinnedApps.length,
     runningWindows.length,
@@ -189,12 +195,13 @@ export function DockBar({
     settings.showOpenWindowsInBar
   ]);
 
-  // Close context menu or folder on Esc, blur, or click on empty background
+  // Close context menu, volume flyout, or folder on Esc, blur, or click outside
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setCtxMenu(null);
         setOpenFolder(null);
+        setVolumeFlyout(null);
         dragCandidateRef.current = null;
         dragSnapshotRef.current = null;
         liveDragRef.current = null;
@@ -206,6 +213,7 @@ export function DockBar({
     const onBlur = () => {
       setCtxMenu(null);
       setOpenFolder(null);
+      setVolumeFlyout(null);
       dragCandidateRef.current = null;
       dragSnapshotRef.current = null;
       liveDragRef.current = null;
@@ -222,6 +230,9 @@ export function DockBar({
       if (openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
         setOpenFolder(null);
       }
+      if (volumeFlyout && !target.closest('.volume-flyout') && !target.closest('.vol-trigger-btn')) {
+        setVolumeFlyout(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
@@ -231,7 +242,7 @@ export function DockBar({
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousedown', onDocMouseDown);
     };
-  }, [ctxMenu, openFolder]);
+  }, [ctxMenu, openFolder, volumeFlyout]);
 
   // Imperative pointer-drag start: ZERO React state update until pointer moves >= 11px!
   const dragActionsRef = useRef<{
@@ -551,6 +562,7 @@ export function DockBar({
   const toggle = (panel: ActivePanel) => {
     setCtxMenu(null);
     setOpenFolder(null);
+    setVolumeFlyout(null);
     setTooltip(null);
     onTogglePanel(activePanel === panel ? null : panel);
   };
@@ -929,6 +941,33 @@ export function DockBar({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Volume Slider Flyout */}
+      {volumeFlyout && (
+        <div
+          ref={volumeFlyoutRef}
+          className="volume-flyout"
+          style={{
+            left: Math.max(152, Math.min(window.innerWidth - 152, volumeFlyout.x)),
+            ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="row-between">
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {dict.volume}
+            </span>
+            <button
+              className="btn"
+              style={{ padding: '3px 8px', fontSize: 11 }}
+              onClick={() => toggle('system')}
+            >
+              {dict.system}
+            </button>
+          </div>
+          <VolumeSlider />
         </div>
       )}
 
@@ -1397,9 +1436,29 @@ export function DockBar({
           </button>
 
           <button
-            className="tray-chip"
-            onClick={() => toggle('system')}
-            title={dict.system}
+            className={`tray-chip vol-trigger-btn ${volumeFlyout ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setCtxMenu(null);
+              setOpenFolder(null);
+              setTooltip(null);
+              if (volumeFlyout) {
+                setVolumeFlyout(null);
+              } else {
+                onTogglePanel(null);
+                const rect = e.currentTarget.getBoundingClientRect();
+                setVolumeFlyout({ x: rect.left + rect.width / 2 });
+              }
+            }}
+            onWheel={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const delta = e.deltaY < 0 ? 4 : -4;
+              void dockBridge.getVolume().then((cur) => {
+                void dockBridge.setVolume((cur.muted ? 0 : cur.level) + delta);
+              });
+            }}
+            title={dict.volume}
           >
             <VolumeIcon />
           </button>

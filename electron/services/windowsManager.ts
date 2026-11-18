@@ -328,6 +328,34 @@ export async function pickExecutableOrFolder(
   };
 }
 
+export function parseVolumeJson(raw: string): { level: number; muted: boolean } {
+  try {
+    const parsed = JSON.parse(raw) as { level?: number; muted?: boolean };
+    return {
+      level: typeof parsed.level === 'number' ? Math.max(0, Math.min(100, parsed.level)) : 50,
+      muted: Boolean(parsed.muted)
+    };
+  } catch {
+    return { level: 50, muted: false };
+  }
+}
+
+export async function getSystemVolume(): Promise<{ level: number; muted: boolean }> {
+  const res = await win32Daemon.send('VOL_GET');
+  return parseVolumeJson(res);
+}
+
+export async function setSystemVolume(level: number): Promise<{ level: number; muted: boolean }> {
+  const clamped = Math.max(0, Math.min(100, Math.round(level)));
+  const res = await win32Daemon.send(`VOL_SET ${clamped}`);
+  return parseVolumeJson(res);
+}
+
+export async function toggleSystemMute(): Promise<{ level: number; muted: boolean }> {
+  const res = await win32Daemon.send('VOL_MUTE');
+  return parseVolumeJson(res);
+}
+
 export async function adjustSystemVolume(action: 'up' | 'down' | 'mute'): Promise<void> {
   const cmd = action === 'mute' ? 'VOL_MUTE' : action === 'down' ? 'VOL_DOWN' : 'VOL_UP';
   await win32Daemon.send(cmd);

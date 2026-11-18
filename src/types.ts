@@ -58,6 +58,11 @@ export interface MediaInfo {
   endSec?: number;
 }
 
+export interface VolumeInfo {
+  level: number;
+  muted: boolean;
+}
+
 export interface CalendarEvent {
   id: string;
   date: string; // YYYY-MM-DD

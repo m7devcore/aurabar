@@ -19,6 +19,7 @@ import {
   focusWindowByPid,
   getIconDataUrl,
   getKeyboardLayoutCode,
+  getSystemVolume,
   importTaskbarPinnedApps,
   launchTarget,
   listInstalledApps,
@@ -27,8 +28,10 @@ import {
   resolveExeName,
   restoreWindowsTaskbarSync,
   runQuickSystemAction,
+  setSystemVolume,
   setWindowsTaskbarReplacement,
-  switchKeyboardLayout
+  switchKeyboardLayout,
+  toggleSystemMute
 } from './services/windowsManager';
 import type { AppConfig, DockSettings } from '../src/types';
 
@@ -530,6 +533,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:adjust-volume', (_e, action: 'up' | 'down' | 'mute') =>
     adjustSystemVolume(action)
   );
+  ipcMain.handle('aurabar:get-volume', () => getSystemVolume());
+  ipcMain.handle('aurabar:set-volume', (_e, level: number) => setSystemVolume(level));
+  ipcMain.handle('aurabar:toggle-mute', () => toggleSystemMute());
   ipcMain.handle(
     'aurabar:system-action',
     (_e, action: 'lock' | 'taskmgr' | 'settings' | 'start' | 'quicksettings' | 'desktop') =>

@@ -1,6 +1,7 @@
-import { Music, Pause, Play, SkipBack, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react';
+import { Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { useMediaArtwork } from '../../hooks/useMediaArtwork';
+import { VolumeSlider } from '../VolumeSlider';
 import { t } from '../../i18n';
 import type { Language, MediaInfo } from '../../types';
 
@@ -91,19 +92,9 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
         </div>
       </div>
 
-      <div className="card row-between">
-        <span className="muted-sm">{dict.volume}</span>
-        <div className="row-gap">
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('down')}>
-            <Volume1 size={14} /> Vol -
-          </button>
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('mute')}>
-            <VolumeX size={14} /> Mute
-          </button>
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('up')}>
-            <Volume2 size={14} /> Vol +
-          </button>
-        </div>
+      <div className="card stack-sm" style={{ padding: '10px 14px' }}>
+        <div className="muted-sm" style={{ fontWeight: 600 }}>{dict.volume}</div>
+        <VolumeSlider />
       </div>
     </div>
   );

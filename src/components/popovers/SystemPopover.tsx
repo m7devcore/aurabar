@@ -1,5 +1,6 @@
-import { Activity, BatteryCharging, HardDrive, Lock, Settings2, Volume2, VolumeX, Volume1 } from 'lucide-react';
+import { Activity, BatteryCharging, HardDrive, Lock, Settings2 } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
+import { VolumeSlider } from '../VolumeSlider';
 import { t } from '../../i18n';
 import type { Language, SystemStats } from '../../types';
 
@@ -117,31 +118,22 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
         </div>
       </div>
 
-      <div className="row-between">
-        <div className="row-gap">
-          <span className="muted-sm">{dict.volume}:</span>
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('down')}>
-            <Volume1 size={14} /> -
-          </button>
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('mute')}>
-            <VolumeX size={14} /> Mute
-          </button>
-          <button className="btn" onClick={() => void dockBridge.adjustVolume('up')}>
-            <Volume2 size={14} /> +
-          </button>
+      <div className="card stack-sm" style={{ padding: '10px 14px' }}>
+        <div className="row-between">
+          <span className="muted-sm" style={{ fontWeight: 600 }}>{dict.volume}</span>
+          <div className="row-gap">
+            <button className="btn" onClick={() => void dockBridge.systemAction('taskmgr')}>
+              <Activity size={14} /> Task Mgr
+            </button>
+            <button className="btn" onClick={() => void dockBridge.systemAction('settings')}>
+              <Settings2 size={14} /> Settings
+            </button>
+            <button className="btn" onClick={() => void dockBridge.systemAction('lock')}>
+              <Lock size={14} /> Lock
+            </button>
+          </div>
         </div>
-
-        <div className="row-gap">
-          <button className="btn" onClick={() => void dockBridge.systemAction('taskmgr')}>
-            <Activity size={14} /> Task Mgr
-          </button>
-          <button className="btn" onClick={() => void dockBridge.systemAction('settings')}>
-            <Settings2 size={14} /> Settings
-          </button>
-          <button className="btn" onClick={() => void dockBridge.systemAction('lock')}>
-            <Lock size={14} /> Lock
-          </button>
-        </div>
+        <VolumeSlider />
       </div>
     </div>
   );

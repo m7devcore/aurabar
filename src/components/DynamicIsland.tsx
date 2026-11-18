@@ -5,12 +5,11 @@ import {
   Pause,
   Play,
   SkipBack,
-  SkipForward,
-  Volume1,
-  Volume2
+  SkipForward
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
+import { VolumeSlider } from './VolumeSlider';
 import type { MediaInfo } from '../types';
 
 interface Props {
@@ -226,15 +225,7 @@ export function DynamicIsland({
               </div>
             </div>
 
-            <div className="row-between" style={{ padding: '0 6px' }}>
-              <button
-                className="island-ctrl-btn"
-                onClick={() => void dockBridge.adjustVolume('down')}
-                title="Volume Down"
-              >
-                <Volume1 size={16} />
-              </button>
-
+            <div className="row-between" style={{ justifyContent: 'center', gap: 18 }}>
               <button
                 className="island-ctrl-btn"
                 onClick={() => void sendCmd('previous')}
@@ -262,15 +253,9 @@ export function DynamicIsland({
               >
                 <SkipForward size={17} />
               </button>
-
-              <button
-                className="island-ctrl-btn"
-                onClick={() => void dockBridge.adjustVolume('up')}
-                title="Volume Up"
-              >
-                <Volume2 size={16} />
-              </button>
             </div>
+
+            <VolumeSlider compact />
           </div>
         )}
       </div>

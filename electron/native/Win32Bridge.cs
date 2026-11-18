@@ -143,6 +143,44 @@ namespace AuraBarNative {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+    [ComImport]
+    [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+    private class MMDeviceEnumeratorComObject { }
+
+    [ComImport]
+    [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDeviceEnumerator {
+      int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+      int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
+    }
+
+    [ComImport]
+    [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDevice {
+      int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+    }
+
+    [ComImport]
+    [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioEndpointVolume {
+      int RegisterControlChangeNotify(IntPtr pNotify);
+      int UnregisterControlChangeNotify(IntPtr pNotify);
+      int GetChannelCount(out uint pnChannelCount);
+      int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+      int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+      int GetMasterVolumeLevel(out float pfLevelDB);
+      int GetMasterVolumeLevelScalar(out float pfLevel);
+      int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
+      int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+      int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+      int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+      int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+      int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+    }
+
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_APPWINDOW = 0x00040000;
@@ -460,6 +498,58 @@ namespace AuraBarNative {
       keybd_event(modVk, 0, 2, 0);
     }
 
+    private static IAudioEndpointVolume GetEndpointVolume() {
+      IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+      IMMDevice device;
+      enumerator.GetDefaultAudioEndpoint(0, 1, out device);
+      if (device == null) return null;
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      object obj;
+      device.Activate(ref iid, 23, IntPtr.Zero, out obj);
+      return obj as IAudioEndpointVolume;
+    }
+
+    private static string GetVolumeJson() {
+      try {
+        IAudioEndpointVolume vol = GetEndpointVolume();
+        if (vol == null) return "{\"level\":50,\"muted\":false}";
+        float scalar;
+        bool muted;
+        vol.GetMasterVolumeLevelScalar(out scalar);
+        vol.GetMute(out muted);
+        int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100f)));
+        return "{\"level\":" + pct + ",\"muted\":" + (muted ? "true" : "false") + "}";
+      } catch {
+        return "{\"level\":50,\"muted\":false}";
+      }
+    }
+
+    private static string SetVolumeLevel(int pct) {
+      try {
+        IAudioEndpointVolume vol = GetEndpointVolume();
+        if (vol != null) {
+          int clamped = Math.Max(0, Math.Min(100, pct));
+          Guid ctx = Guid.Empty;
+          vol.SetMasterVolumeLevelScalar(clamped / 100f, ref ctx);
+          if (clamped > 0) vol.SetMute(false, ref ctx);
+        }
+      } catch { }
+      return GetVolumeJson();
+    }
+
+    private static string ToggleVolumeMute() {
+      try {
+        IAudioEndpointVolume vol = GetEndpointVolume();
+        if (vol != null) {
+          bool muted;
+          vol.GetMute(out muted);
+          Guid ctx = Guid.Empty;
+          vol.SetMute(!muted, ref ctx);
+        }
+      } catch { }
+      return GetVolumeJson();
+    }
+
     private static string GetKbdLang() {
       IntPtr fg = lastExternalForeground != IntPtr.Zero ? lastExternalForeground : GetForegroundWindow();
       uint dummy;
@@ -612,6 +702,11 @@ namespace AuraBarNative {
           } else if (line == "DESKTOP") {
             TapCombo(0x5B, 0x44);
             Console.WriteLine("ok");
+          } else if (line == "VOL_GET") {
+            Console.WriteLine(GetVolumeJson());
+          } else if (line.StartsWith("VOL_SET ")) {
+            int pct = int.Parse(line.Substring(8).Trim());
+            Console.WriteLine(SetVolumeLevel(pct));
           } else if (line == "VOL_UP") {
             TapKey(0xAF);
             Console.WriteLine("ok");
@@ -619,8 +714,7 @@ namespace AuraBarNative {
             TapKey(0xAE);
             Console.WriteLine("ok");
           } else if (line == "VOL_MUTE") {
-            TapKey(0xAD);
-            Console.WriteLine("ok");
+            Console.WriteLine(ToggleVolumeMute());
           } else if (line == "MEDIA_PLAYPAUSE") {
             TapKey(0xB3);
             Console.WriteLine("ok");
