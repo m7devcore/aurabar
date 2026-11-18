@@ -63,6 +63,14 @@ export interface VolumeInfo {
   muted: boolean;
 }
 
+export interface NetworkInfo {
+  connected: boolean;
+  kind: 'wifi' | 'ethernet' | 'offline';
+  ssid?: string;
+  signalPercent?: number;
+  band?: string;
+}
+
 export interface CalendarEvent {
   id: string;
   date: string; // YYYY-MM-DD

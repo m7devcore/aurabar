@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  Activity,
   ArrowLeft,
   ArrowRight,
   ExternalLink,
   FolderOpen,
+  Lock,
   Music,
   Pause,
   Pin,
@@ -11,7 +13,8 @@ import {
   Play,
   SkipBack,
   SkipForward,
-  X
+  X,
+  Zap
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
@@ -20,14 +23,17 @@ import type {
   ActivePanel,
   AppConfig,
   MediaInfo,
+  NetworkInfo,
   PinnedApp,
   RunningWindow,
-  SystemStats
+  SystemStats,
+  VolumeInfo
 } from '../types';
 import { AppIconGlyph } from './IconMapper';
 import { VolumeSlider } from './VolumeSlider';
 import {
   BatteryIcon,
+  GlobeLangIcon,
   SearchIcon,
   SettingsIcon,
   StartIcon,
@@ -111,7 +117,9 @@ export function DockBar({
   const mediaArtworkUrl = useMediaArtwork(media);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
-  const [volumeFlyout, setVolumeFlyout] = useState<{ x: number } | null>(null);
+  const [ccFlyout, setCcFlyout] = useState<{ x: number } | null>(null);
+  const [trayVol, setTrayVol] = useState<VolumeInfo>({ level: 70, muted: false });
+  const [netInfo, setNetInfo] = useState<NetworkInfo>({ connected: true, kind: 'wifi' });
   const [dragOverExternal, setDragOverExternal] = useState(false);
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
   const [liveDrag, setLiveDrag] = useState<LiveDragPlan | null>(null);
@@ -121,7 +129,8 @@ export function DockBar({
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
   const folderPopoverRef = useRef<HTMLDivElement | null>(null);
-  const volumeFlyoutRef = useRef<HTMLDivElement | null>(null);
+  const ccFlyoutRef = useRef<HTMLDivElement | null>(null);
+  const ccClusterRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
@@ -132,6 +141,23 @@ export function DockBar({
   const activeFolderObj = openFolder
     ? pinnedApps.find((p) => p.id === openFolder.id && p.kind === 'group') ?? null
     : null;
+
+  // Live sync tray Volume + Wi-Fi/Network state cleanly
+  useEffect(() => {
+    let alive = true;
+    const pollTray = async () => {
+      const [v, n] = await Promise.all([dockBridge.getVolume(), dockBridge.getNetworkInfo()]);
+      if (!alive) return;
+      setTrayVol(v);
+      setNetInfo(n);
+    };
+    void pollTray();
+    const id = setInterval(() => void pollTray(), ccFlyout ? 650 : 2800);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [ccFlyout]);
 
   // Report exact interactive regions (with generous hover halo) to Main process
   useLayoutEffect(() => {
@@ -164,7 +190,7 @@ export function DockBar({
       };
 
       pushOverlay(folderPopoverRef.current);
-      pushOverlay(volumeFlyoutRef.current);
+      pushOverlay(ccFlyoutRef.current);
       pushOverlay(ctxMenuRef.current);
       const popoverEl = document.querySelector<HTMLElement>('.popover-card');
       pushOverlay(popoverEl);
@@ -177,7 +203,7 @@ export function DockBar({
     if (ro) {
       if (dockBarRef.current) ro.observe(dockBarRef.current);
       if (folderPopoverRef.current) ro.observe(folderPopoverRef.current);
-      if (volumeFlyoutRef.current) ro.observe(volumeFlyoutRef.current);
+      if (ccFlyoutRef.current) ro.observe(ccFlyoutRef.current);
       if (ctxMenuRef.current) ro.observe(ctxMenuRef.current);
     }
     return () => ro?.disconnect();
@@ -185,7 +211,7 @@ export function DockBar({
     activePanel,
     activeFolderObj?.id,
     activeFolderObj?.children?.length,
-    volumeFlyout,
+    ccFlyout,
     ctxMenu,
     pinnedApps.length,
     runningWindows.length,
@@ -195,13 +221,13 @@ export function DockBar({
     settings.showOpenWindowsInBar
   ]);
 
-  // Close context menu, volume flyout, or folder on Esc, blur, or click outside
+  // Close context menu, Control Center flyout, or folder on Esc, blur, or click outside
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setCtxMenu(null);
         setOpenFolder(null);
-        setVolumeFlyout(null);
+        setCcFlyout(null);
         dragCandidateRef.current = null;
         dragSnapshotRef.current = null;
         liveDragRef.current = null;
@@ -213,7 +239,7 @@ export function DockBar({
     const onBlur = () => {
       setCtxMenu(null);
       setOpenFolder(null);
-      setVolumeFlyout(null);
+      setCcFlyout(null);
       dragCandidateRef.current = null;
       dragSnapshotRef.current = null;
       liveDragRef.current = null;
@@ -230,8 +256,8 @@ export function DockBar({
       if (openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
         setOpenFolder(null);
       }
-      if (volumeFlyout && !target.closest('.volume-flyout') && !target.closest('.vol-trigger-btn')) {
-        setVolumeFlyout(null);
+      if (ccFlyout && !target.closest('.control-center-flyout') && !target.closest('.cc-trigger-btn')) {
+        setCcFlyout(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -242,7 +268,7 @@ export function DockBar({
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousedown', onDocMouseDown);
     };
-  }, [ctxMenu, openFolder, volumeFlyout]);
+  }, [ctxMenu, openFolder, ccFlyout]);
 
   // Imperative pointer-drag start: ZERO React state update until pointer moves >= 11px!
   const dragActionsRef = useRef<{
@@ -554,17 +580,31 @@ export function DockBar({
     minute: '2-digit'
   });
   const dateStr = now.toLocaleDateString(settings.language === 'ar' ? 'ar-EG' : 'en-US', {
-    year: 'numeric',
-    month: 'numeric',
+    weekday: 'short',
+    month: 'short',
     day: 'numeric'
   });
 
   const toggle = (panel: ActivePanel) => {
     setCtxMenu(null);
     setOpenFolder(null);
-    setVolumeFlyout(null);
+    setCcFlyout(null);
     setTooltip(null);
     onTogglePanel(activePanel === panel ? null : panel);
+  };
+
+  const toggleControlCenter = () => {
+    setCtxMenu(null);
+    setOpenFolder(null);
+    setTooltip(null);
+    if (ccFlyout) {
+      setCcFlyout(null);
+      return;
+    }
+    onTogglePanel(null);
+    const rect = ccClusterRef.current?.getBoundingClientRect();
+    const centerX = rect ? rect.left + rect.width / 2 : window.innerWidth - 200;
+    setCcFlyout({ x: centerX });
   };
 
   const quickMedia = async (cmd: 'playPause' | 'next' | 'previous') => {
@@ -944,30 +984,152 @@ export function DockBar({
         </div>
       )}
 
-      {/* Volume Slider Flyout */}
-      {volumeFlyout && (
+      {/* Apple Liquid Glass Control Center Flyout */}
+      {ccFlyout && (
         <div
-          ref={volumeFlyoutRef}
-          className="volume-flyout"
+          ref={ccFlyoutRef}
+          className="control-center-flyout"
           style={{
-            left: Math.max(152, Math.min(window.innerWidth - 152, volumeFlyout.x)),
+            left: Math.max(172, Math.min(window.innerWidth - 172, ccFlyout.x)),
             ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="row-between">
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {dict.volume}
-            </span>
+          <div className="cc-bento-grid">
+            {/* Wi-Fi / Network Module */}
             <button
-              className="btn"
-              style={{ padding: '3px 8px', fontSize: 11 }}
-              onClick={() => toggle('system')}
+              type="button"
+              className="cc-module-card"
+              onClick={() => void dockBridge.systemAction('quicksettings')}
+              title="Open Windows Quick Settings"
             >
-              {dict.system}
+              <div className={`cc-icon-badge ${netInfo.connected ? 'online' : ''}`}>
+                <WifiIcon
+                  connected={netInfo.connected}
+                  signalPercent={netInfo.signalPercent}
+                  kind={netInfo.kind}
+                />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="cc-title">
+                  {netInfo.kind === 'ethernet'
+                    ? settings.language === 'ar'
+                      ? 'سلكي Ethernet'
+                      : 'Ethernet'
+                    : 'Wi-Fi'}
+                </div>
+                <div className="cc-sub">
+                  {!netInfo.connected
+                    ? settings.language === 'ar'
+                      ? 'غير متصل'
+                      : 'Not Connected'
+                    : netInfo.kind === 'ethernet'
+                      ? settings.language === 'ar'
+                        ? 'متصل بالإنترنت'
+                        : 'Connected'
+                      : `${netInfo.ssid ?? 'Connected'}${
+                          netInfo.signalPercent !== undefined ? ` · ${netInfo.signalPercent}%` : ''
+                        }`}
+                </div>
+              </div>
             </button>
+
+            {/* Language + Power Stack */}
+            <div className="cc-mini-stack">
+              <button
+                type="button"
+                className="cc-mini-tile"
+                onClick={onSwitchKbdLang}
+                title="Switch Keyboard Language"
+              >
+                <div className="cc-icon-badge accent-soft" style={{ width: 28, height: 28 }}>
+                  <GlobeLangIcon />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="cc-title" style={{ fontSize: 12 }}>
+                    {kbdLang === 'AR' ? 'العربية' : kbdLang}
+                  </div>
+                  <div className="cc-sub">
+                    {settings.language === 'ar' ? 'لغة الإدخال' : 'Input'}
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className="cc-mini-tile"
+                onClick={() => toggle('system')}
+                title={dict.system}
+              >
+                <div className="cc-icon-badge" style={{ width: 28, height: 28, color: 'var(--emerald)' }}>
+                  <Zap size={14} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="cc-title tabular" style={{ fontSize: 12 }}>
+                    {stats.batteryPercent !== null
+                      ? `${stats.batteryPercent}%`
+                      : settings.language === 'ar'
+                        ? 'كهرباء AC'
+                        : 'AC Power'}
+                  </div>
+                  <div className="cc-sub">
+                    {stats.batteryCharging
+                      ? settings.language === 'ar'
+                        ? 'قيد الشحن'
+                        : 'Charging'
+                      : settings.language === 'ar'
+                        ? 'الطاقة'
+                        : 'Power'}
+                  </div>
+                </div>
+              </button>
+            </div>
           </div>
-          <VolumeSlider />
+
+          {/* Interactive Sound Module */}
+          <div className="cc-sound-card">
+            <div className="row-between">
+              <span className="cc-title" style={{ fontSize: 12 }}>
+                {dict.volume}
+              </span>
+              <span className="cc-sub tabular">
+                {trayVol.muted
+                  ? settings.language === 'ar'
+                    ? 'مكتوم'
+                    : 'Muted'
+                  : `${trayVol.level}%`}
+              </span>
+            </div>
+            <VolumeSlider />
+          </div>
+
+          {/* Hardware Telemetry Footer */}
+          <div className="cc-footer-bar tabular">
+            <span>
+              CPU {stats.cpuPercent}% · RAM {stats.ramPercent}%
+              {stats.diskFreeGb !== null ? ` · C: ${stats.diskFreeGb}G` : ''}
+            </span>
+            <div className="row-gap" style={{ gap: 4 }}>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '3px 7px', fontSize: 11 }}
+                onClick={() => void dockBridge.systemAction('lock')}
+                title="Lock PC"
+              >
+                <Lock size={11} />
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '3px 8px', fontSize: 11 }}
+                onClick={() => toggle('system')}
+              >
+                <Activity size={11} />
+                <span>{dict.system}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1304,7 +1466,7 @@ export function DockBar({
                       if (isGroup) {
                         const rect = e.currentTarget.getBoundingClientRect();
                         const centerX = rect.left + rect.width / 2;
-                        setVolumeFlyout(null);
+                        setCcFlyout(null);
                         if (openFolder?.id === app.id) {
                           setOpenFolder(null);
                         } else {
@@ -1314,7 +1476,7 @@ export function DockBar({
                         return;
                       }
                       setOpenFolder(null);
-                      setVolumeFlyout(null);
+                      setCcFlyout(null);
                       if (matchedWin && !e.shiftKey) {
                         void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
                           setTimeout(onRefreshWindows, 120);
@@ -1419,67 +1581,87 @@ export function DockBar({
 
         <div className="dock-divider" />
 
-        {/* Right Slot: Premium Windows System Tray */}
+        {/* Right Slot: Apple-grade Glass Control Tray */}
         <div className="dock-right-tray">
           <button
-            className="tray-chip tabular"
+            className="tray-lang-pill tabular"
             aria-label={`Switch Keyboard Language (${kbdLang})`}
             onClick={onSwitchKbdLang}
             title="Switch Keyboard Language"
           >
-            {kbdLang}
+            <GlobeLangIcon />
+            <span>{kbdLang}</span>
           </button>
 
-          <button
-            className="tray-chip"
-            aria-label="Wi-Fi and Quick Settings"
-            onClick={() => void dockBridge.systemAction('quicksettings')}
-            title="Wi-Fi & Quick Settings"
+          <div
+            ref={ccClusterRef}
+            className={`tray-control-cluster ${ccFlyout ? 'open' : ''}`}
           >
-            <WifiIcon />
-          </button>
-
-          <button
-            className={`tray-chip vol-trigger-btn ${volumeFlyout ? 'active' : ''}`}
-            aria-label={dict.volume}
-            aria-expanded={Boolean(volumeFlyout)}
-            onClick={(e) => {
-              e.stopPropagation();
-              setCtxMenu(null);
-              setOpenFolder(null);
-              setTooltip(null);
-              if (volumeFlyout) {
-                setVolumeFlyout(null);
-              } else {
-                onTogglePanel(null);
-                const rect = e.currentTarget.getBoundingClientRect();
-                setVolumeFlyout({ x: rect.left + rect.width / 2 });
-              }
-            }}
-            onWheel={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const delta = e.deltaY < 0 ? 4 : -4;
-              void dockBridge.getVolume().then((cur) => {
-                void dockBridge.setVolume((cur.muted ? 0 : cur.level) + delta);
-              });
-            }}
-            title={dict.volume}
-          >
-            <VolumeIcon />
-          </button>
-
-          {stats.batteryPercent !== null && (
             <button
-              className="tray-chip tabular"
-              aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
-              onClick={() => toggle('system')}
-              title={`${dict.battery}: ${stats.batteryPercent}%`}
+              className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
+              aria-label="Wi-Fi and Control Center"
+              aria-expanded={Boolean(ccFlyout)}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleControlCenter();
+              }}
+              title={
+                netInfo.connected
+                  ? `${netInfo.ssid ?? 'Connected'}${
+                      netInfo.signalPercent !== undefined ? ` (${netInfo.signalPercent}%)` : ''
+                    }`
+                  : 'Not Connected'
+              }
             >
-              <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
-              <span style={{ fontSize: 11.5 }}>{stats.batteryPercent}%</span>
+              <WifiIcon
+                connected={netInfo.connected}
+                signalPercent={netInfo.signalPercent}
+                kind={netInfo.kind}
+              />
+              {netInfo.connected && <span className="tray-wifi-dot" />}
             </button>
-          )}
+
+            <span className="tray-cluster-sep" aria-hidden="true" />
+
+            <button
+              className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
+              aria-label={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
+              aria-expanded={Boolean(ccFlyout)}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleControlCenter();
+              }}
+              onWheel={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const delta = e.deltaY < 0 ? 4 : -4;
+                const nextLevel = Math.max(0, Math.min(100, (trayVol.muted ? 0 : trayVol.level) + delta));
+                setTrayVol({ level: nextLevel, muted: nextLevel === 0 });
+                void dockBridge.setVolume(nextLevel).then(setTrayVol);
+              }}
+              title={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
+            >
+              <VolumeIcon level={trayVol.level} muted={trayVol.muted} />
+              <span className="tray-vol-pct tabular">
+                {trayVol.muted ? '0%' : `${trayVol.level}%`}
+              </span>
+            </button>
+
+            {stats.batteryPercent !== null && (
+              <>
+                <span className="tray-cluster-sep" aria-hidden="true" />
+                <button
+                  className={`tray-cluster-btn tabular ${activePanel === 'system' ? 'active' : ''}`}
+                  aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
+                  onClick={() => toggle('system')}
+                  title={`${dict.battery}: ${stats.batteryPercent}%`}
+                >
+                  <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
+                  <span>{stats.batteryPercent}%</span>
+                </button>
+              </>
+            )}
+          </div>
 
           <button
             className={`tray-clock-btn tabular ${activePanel === 'calendar' ? 'active' : ''}`}
@@ -1488,12 +1670,12 @@ export function DockBar({
             onClick={() => toggle('calendar')}
             title={dict.calendar}
           >
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{timeStr}</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{dateStr}</span>
+            <span className="tray-clock-time">{timeStr}</span>
+            <span className="tray-clock-date">{dateStr}</span>
           </button>
 
           <button
-            className="app-icon-btn"
+            className="tray-settings-btn"
             aria-label={dict.settings}
             aria-expanded={activePanel === 'settings'}
             onClick={() => toggle('settings')}

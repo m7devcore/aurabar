@@ -19,6 +19,7 @@ import {
   focusWindowByPid,
   getIconDataUrl,
   getKeyboardLayoutCode,
+  getNetworkInfo,
   getSystemVolume,
   importTaskbarPinnedApps,
   launchTarget,
@@ -543,6 +544,7 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle('aurabar:get-keyboard-lang', () => getKeyboardLayoutCode());
   ipcMain.handle('aurabar:switch-keyboard-lang', () => switchKeyboardLayout());
+  ipcMain.handle('aurabar:get-network-info', () => getNetworkInfo());
   ipcMain.handle('aurabar:hide-dock', () => {
     isPopoverOpen = false;
     dockInteractiveLock = false;

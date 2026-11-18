@@ -3,6 +3,7 @@ import type {
   AppConfig,
   InstalledApp,
   MediaInfo,
+  NetworkInfo,
   PinnedApp,
   RunningWindow,
   SystemStats,
@@ -45,6 +46,7 @@ export interface AuraBarApi {
   ) => Promise<void>;
   getKeyboardLang: () => Promise<string>;
   switchKeyboardLang: () => Promise<void>;
+  getNetworkInfo: () => Promise<NetworkInfo>;
   hideDock: () => Promise<void>;
   quitApp: () => Promise<void>;
   onDockBlurred: (cb: () => void) => () => void;
@@ -81,6 +83,7 @@ const api: AuraBarApi = {
   systemAction: (action) => ipcRenderer.invoke('aurabar:system-action', action),
   getKeyboardLang: () => ipcRenderer.invoke('aurabar:get-keyboard-lang'),
   switchKeyboardLang: () => ipcRenderer.invoke('aurabar:switch-keyboard-lang'),
+  getNetworkInfo: () => ipcRenderer.invoke('aurabar:get-network-info'),
   hideDock: () => ipcRenderer.invoke('aurabar:hide-dock'),
   quitApp: () => ipcRenderer.invoke('aurabar:quit'),
   onDockBlurred: (cb) => {

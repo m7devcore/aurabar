@@ -64,6 +64,7 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
   systemAction: async () => undefined,
   getKeyboardLang: async () => 'EN',
   switchKeyboardLang: async () => undefined,
+  getNetworkInfo: async () => ({ connected: true, kind: 'wifi', ssid: 'Wi-Fi', signalPercent: 85 }),
   hideDock: async () => undefined,
   quitApp: async () => undefined,
   onDockBlurred: () => () => undefined,

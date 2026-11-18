@@ -1,9 +1,10 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { app, dialog, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
-import type { InstalledApp, PinnedApp, RunningWindow } from '../../src/types';
+import type { InstalledApp, NetworkInfo, PinnedApp, RunningWindow } from '../../src/types';
 import { win32Daemon } from './win32Daemon';
 
 const iconCache = new Map<string, string>();
@@ -359,6 +360,56 @@ export async function toggleSystemMute(): Promise<{ level: number; muted: boolea
 export async function adjustSystemVolume(action: 'up' | 'down' | 'mute'): Promise<void> {
   const cmd = action === 'mute' ? 'VOL_MUTE' : action === 'down' ? 'VOL_DOWN' : 'VOL_UP';
   await win32Daemon.send(cmd);
+}
+
+let cachedNetInfo: NetworkInfo = { connected: false, kind: 'offline' };
+let lastNetFetch = 0;
+
+function hasActiveEthernetInterface(): boolean {
+  const ifaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!addrs || /loopback|vEthernet|WSL|VMware|VirtualBox|Pseudo/i.test(name)) continue;
+    for (const a of addrs) {
+      if (!a.internal && a.family === 'IPv4') return true;
+    }
+  }
+  return false;
+}
+
+export function getNetworkInfo(): Promise<NetworkInfo> {
+  const now = Date.now();
+  if (now - lastNetFetch < 3500) {
+    return Promise.resolve(cachedNetInfo);
+  }
+  return new Promise((resolve) => {
+    execFile('netsh', ['wlan', 'show', 'interfaces'], { timeout: 1400 }, (err, stdout) => {
+      lastNetFetch = Date.now();
+      if (!err && stdout) {
+        const stateMatch = /^\s*State\s*:\s*(.+)$/im.exec(stdout);
+        const state = stateMatch?.[1]?.trim().toLowerCase() ?? '';
+        if (state === 'connected') {
+          const ssid = /^\s*SSID\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
+          const sigRaw = /^\s*Signal\s*:\s*(\d+)%/im.exec(stdout)?.[1];
+          const band = /^\s*Band\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
+          cachedNetInfo = {
+            connected: true,
+            kind: 'wifi',
+            ssid: ssid || 'Wi-Fi',
+            signalPercent: sigRaw ? Number(sigRaw) : undefined,
+            band: band || undefined
+          };
+          resolve(cachedNetInfo);
+          return;
+        }
+      }
+      if (hasActiveEthernetInterface()) {
+        cachedNetInfo = { connected: true, kind: 'ethernet' };
+      } else {
+        cachedNetInfo = { connected: false, kind: 'offline' };
+      }
+      resolve(cachedNetInfo);
+    });
+  });
 }
 
 export function runQuickSystemAction(
