@@ -56,12 +56,22 @@ interface PointerDragState {
   startY: number;
   x: number;
   y: number;
-  active: boolean; // becomes true once pointer moves >= 7px
+  active: boolean; // becomes true once pointer moves >= 11px
 }
 
-interface DropHint {
-  targetId: string;
-  zone: 'before' | 'after' | 'merge';
+interface DragSlotSnapshot {
+  stripTop: number;
+  stripBottom: number;
+  stripLeft: number;
+  stripRight: number;
+  step: number;
+  origIndex: number; // >= 0 for pinned, -1 for folder-child / running
+  slots: Array<{ id: string; x: number; isGroup: boolean }>;
+}
+
+interface LiveDragPlan {
+  gapIndex: number | null;
+  mergeTargetId: string | null;
 }
 
 interface Props {
@@ -99,7 +109,8 @@ export function DockBar({
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
   const [dragOverExternal, setDragOverExternal] = useState(false);
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
-  const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const [liveDrag, setLiveDrag] = useState<LiveDragPlan | null>(null);
+  const [justDropped, setJustDropped] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const stripRef = useRef<HTMLDivElement | null>(null);
@@ -109,6 +120,8 @@ export function DockBar({
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
   const dragCandidateRef = useRef<PointerDragState | null>(null);
+  const dragSnapshotRef = useRef<DragSlotSnapshot | null>(null);
+  const liveDragRef = useRef<LiveDragPlan | null>(null);
 
   const activeFolderObj = openFolder
     ? pinnedApps.find((p) => p.id === openFolder.id && p.kind === 'group') ?? null
@@ -180,18 +193,22 @@ export function DockBar({
         setCtxMenu(null);
         setOpenFolder(null);
         dragCandidateRef.current = null;
+        dragSnapshotRef.current = null;
+        liveDragRef.current = null;
         dockBridge.setDockInteractive(false);
         setPointerDrag(null);
-        setDropHint(null);
+        setLiveDrag(null);
       }
     };
     const onBlur = () => {
       setCtxMenu(null);
       setOpenFolder(null);
       dragCandidateRef.current = null;
+      dragSnapshotRef.current = null;
+      liveDragRef.current = null;
       dockBridge.setDockInteractive(false);
       setPointerDrag(null);
-      setDropHint(null);
+      setLiveDrag(null);
     };
     const onDocMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
@@ -217,7 +234,11 @@ export function DockBar({
   const dragActionsRef = useRef<{
     pinnedApps: PinnedApp[];
     applyWaveAtClientX: (x: number | null) => void;
-    executePinnedDrop: (payload: DragPayload, targetId: string, zone: 'before' | 'after' | 'merge') => void;
+    executeLiveDrop: (
+      payload: DragPayload,
+      plan: LiveDragPlan,
+      snapshot: DragSlotSnapshot | null
+    ) => void;
     removeChildFromFolder: (folderId: string, childId: string, ejectToBar: boolean) => void;
     pinRunningApp: (win: RunningWindow) => void;
   } | null>(null);
@@ -234,45 +255,143 @@ export function DockBar({
   };
 
   useEffect(() => {
-    const computeDropHintAt = (
-      payload: DragPayload,
-      clientX: number,
-      clientY: number
-    ): DropHint | null => {
+    const captureSnapshot = (payload: DragPayload): DragSlotSnapshot | null => {
       const strip = stripRef.current;
       if (!strip) return null;
       const stripRect = strip.getBoundingClientRect();
-      if (clientY < stripRect.top - 28 || clientY > stripRect.bottom + 24) {
-        return null;
-      }
-
       const appsList = dragActionsRef.current?.pinnedApps ?? [];
       const btns = Array.from(strip.querySelectorAll<HTMLButtonElement>('[data-pinned-id]'));
-      for (const btn of btns) {
-        const rect = btn.getBoundingClientRect();
-        if (clientX >= rect.left - 6 && clientX <= rect.right + 6) {
-          const targetId = btn.dataset.pinnedId!;
-          if (payload.kind === 'pinned' && payload.item.id === targetId) {
-            return null;
-          }
-          const targetApp = appsList.find((p) => p.id === targetId);
-          if (!targetApp) return null;
 
-          const relX = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
-          const sourceIsGroup = payload.kind === 'pinned' && payload.item.kind === 'group';
+      // Clear any inline wave transform before measuring unshifted static slot centers
+      btns.forEach((b) => {
+        b.style.transform = '';
+      });
 
-          let zone: 'before' | 'after' | 'merge';
-          if (sourceIsGroup) {
-            zone = relX < 0.5 ? 'before' : 'after';
-          } else if (targetApp.kind === 'group') {
-            zone = relX < 0.22 ? 'before' : relX > 0.78 ? 'after' : 'merge';
-          } else {
-            zone = relX < 0.28 ? 'before' : relX > 0.72 ? 'after' : 'merge';
+      const slots = btns.map((btn) => {
+        const r = btn.getBoundingClientRect();
+        const id = btn.dataset.pinnedId!;
+        const app = appsList.find((p) => p.id === id);
+        return {
+          id,
+          x: r.left + r.width / 2,
+          isGroup: app?.kind === 'group'
+        };
+      });
+
+      const step = slots.length >= 2 ? Math.max(32, slots[1].x - slots[0].x) : 44;
+      const origIndex =
+        payload.kind === 'pinned' ? appsList.findIndex((p) => p.id === payload.item.id) : -1;
+
+      return {
+        stripTop: stripRect.top,
+        stripBottom: stripRect.bottom,
+        stripLeft: slots.length > 0 ? slots[0].x - step * 0.8 : stripRect.left,
+        stripRight:
+          slots.length > 0 ? slots[slots.length - 1].x + step * 1.1 : stripRect.right,
+        step,
+        origIndex,
+        slots
+      };
+    };
+
+    const computeLivePlan = (
+      snap: DragSlotSnapshot | null,
+      payload: DragPayload,
+      clientX: number,
+      clientY: number,
+      prevPlan: LiveDragPlan | null
+    ): LiveDragPlan => {
+      if (!snap) return { gapIndex: null, mergeTargetId: null };
+      const { slots, origIndex, step, stripTop, stripBottom, stripLeft, stripRight } = snap;
+      const n = slots.length;
+
+      const insideY = clientY >= stripTop - 38 && clientY <= stripBottom + 32;
+      const insideX = clientX >= stripLeft - 24 && clientX <= stripRight + 24;
+      if (!insideY || !insideX) {
+        return {
+          gapIndex: origIndex >= 0 ? origIndex : null,
+          mergeTargetId: null
+        };
+      }
+
+      if (n === 0) return { gapIndex: 0, mergeTargetId: null };
+
+      const sourceIsGroup = payload.kind === 'pinned' && payload.item.kind === 'group';
+
+      // Case 1: Reordering an existing pinned item live across N slots
+      if (origIndex >= 0) {
+        const curGap = prevPlan?.gapIndex ?? origIndex;
+        const otherSlots = slots.filter((_, idx) => idx !== origIndex);
+
+        // Find closest fixed slot index k in [0 .. n-1]
+        let k = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < n; i++) {
+          const d = Math.abs(clientX - slots[i].x);
+          if (d < bestDist) {
+            bestDist = d;
+            k = i;
           }
-          return { targetId, zone };
+        }
+
+        if (k === curGap) {
+          return { gapIndex: curGap, mergeTargetId: null };
+        }
+
+        // Visual occupant currently sitting at slot k under curGap ordering
+        const occIdx = k < curGap ? k : k - 1;
+        const occ = otherSlots[occIdx];
+        if (!occ) return { gapIndex: k, mergeTargetId: null };
+
+        const dx = clientX - slots[k].x;
+        const canMerge = !sourceIsGroup;
+        const mergeHalf = canMerge ? 10 : 0;
+
+        if (curGap < k) {
+          // Moving right into slot k
+          if (k - curGap > 1 || dx > mergeHalf) {
+            return { gapIndex: k, mergeTargetId: null };
+          }
+          if (canMerge && dx >= -11 && dx <= mergeHalf) {
+            return { gapIndex: curGap, mergeTargetId: occ.id };
+          }
+          return prevPlan ?? { gapIndex: curGap, mergeTargetId: null };
+        } else {
+          // Moving left into slot k
+          if (curGap - k > 1 || dx < -mergeHalf) {
+            return { gapIndex: k, mergeTargetId: null };
+          }
+          if (canMerge && dx <= 11 && dx >= -mergeHalf) {
+            return { gapIndex: curGap, mergeTargetId: occ.id };
+          }
+          return prevPlan ?? { gapIndex: curGap, mergeTargetId: null };
         }
       }
-      return null;
+
+      // Case 2: Dragging folder child or unpinned running app into the pinned strip
+      if (clientX < slots[0].x - step * 0.35) {
+        return { gapIndex: 0, mergeTargetId: null };
+      }
+      if (clientX > slots[n - 1].x + step * 0.35) {
+        return { gapIndex: n, mergeTargetId: null };
+      }
+
+      let k = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < n; i++) {
+        const d = Math.abs(clientX - slots[i].x);
+        if (d < bestDist) {
+          bestDist = d;
+          k = i;
+        }
+      }
+      const slot = slots[k];
+      const canMerge = !(payload.kind === 'folder-child' && payload.folderId === slot.id);
+      const dx = clientX - slot.x;
+      if (canMerge && Math.abs(dx) <= 10) {
+        return { gapIndex: null, mergeTargetId: slot.id };
+      }
+      return { gapIndex: dx >= 0 ? k + 1 : k, mergeTargetId: null };
     };
 
     const onMove = (e: PointerEvent) => {
@@ -290,11 +409,27 @@ export function DockBar({
         dockBridge.setDockInteractive(true);
         dragActionsRef.current?.applyWaveAtClientX(null);
         setTooltip(null);
+        dragSnapshotRef.current = captureSnapshot(candidate.payload);
+        liveDragRef.current = {
+          gapIndex:
+            dragSnapshotRef.current && dragSnapshotRef.current.origIndex >= 0
+              ? dragSnapshotRef.current.origIndex
+              : null,
+          mergeTargetId: null
+        };
       }
 
       candidate.x = e.clientX;
       candidate.y = e.clientY;
-      setDropHint(computeDropHintAt(candidate.payload, e.clientX, e.clientY));
+      const nextPlan = computeLivePlan(
+        dragSnapshotRef.current,
+        candidate.payload,
+        e.clientX,
+        e.clientY,
+        liveDragRef.current
+      );
+      liveDragRef.current = nextPlan;
+      setLiveDrag(nextPlan);
       setPointerDrag({ ...candidate });
     };
 
@@ -310,9 +445,18 @@ export function DockBar({
         }, 80);
 
         const actions = dragActionsRef.current;
-        const hint = computeDropHintAt(candidate.payload, e.clientX, e.clientY);
-        if (hint && actions) {
-          actions.executePinnedDrop(candidate.payload, hint.targetId, hint.zone);
+        const snap = dragSnapshotRef.current;
+        const finalPlan =
+          liveDragRef.current ??
+          computeLivePlan(snap, candidate.payload, e.clientX, e.clientY, liveDragRef.current);
+
+        dragSnapshotRef.current = null;
+        liveDragRef.current = null;
+
+        if (actions && (finalPlan.mergeTargetId || finalPlan.gapIndex !== null)) {
+          setJustDropped(true);
+          setTimeout(() => setJustDropped(false), 50);
+          actions.executeLiveDrop(candidate.payload, finalPlan, snap);
         } else if (actions) {
           const barRect = dockBarRef.current?.getBoundingClientRect();
           const insideBar =
@@ -336,7 +480,7 @@ export function DockBar({
         }
         dockBridge.setDockInteractive(false);
         setPointerDrag(null);
-        setDropHint(null);
+        setLiveDrag(null);
       }
     };
 
@@ -587,10 +731,57 @@ export function DockBar({
     onSavePinnedApps(normalizeAppsList(working));
   };
 
+  const executeLiveDrop = (
+    payload: DragPayload,
+    plan: LiveDragPlan,
+    snapshot: DragSlotSnapshot | null
+  ) => {
+    if (plan.mergeTargetId) {
+      executePinnedDrop(payload, plan.mergeTargetId, 'merge');
+      return;
+    }
+    if (plan.gapIndex === null) return;
+
+    let working = [...pinnedApps];
+    if (payload.kind === 'pinned') {
+      const origIdx = snapshot?.origIndex ?? working.findIndex((p) => p.id === payload.item.id);
+      if (origIdx === -1 || origIdx === plan.gapIndex) return;
+      const [moved] = working.splice(origIdx, 1);
+      const bounded = Math.max(0, Math.min(working.length, plan.gapIndex));
+      working.splice(bounded, 0, moved);
+      onSavePinnedApps(normalizeAppsList(working));
+      return;
+    }
+
+    if (payload.kind === 'folder-child') {
+      working = working.map((p) =>
+        p.id === payload.folderId
+          ? { ...p, children: (p.children ?? []).filter((c) => c.id !== payload.item.id) }
+          : p
+      );
+      working = normalizeAppsList(working);
+      if (!working.some((p) => p.id === payload.folderId && p.kind === 'group')) {
+        setOpenFolder(null);
+      }
+      const bounded = Math.max(0, Math.min(working.length, plan.gapIndex));
+      working.splice(bounded, 0, payload.item);
+      onSavePinnedApps(working);
+      return;
+    }
+
+    if (payload.kind === 'running') {
+      const incoming = winToPinned(payload.win);
+      if (!incoming) return;
+      const bounded = Math.max(0, Math.min(working.length, plan.gapIndex));
+      working.splice(bounded, 0, incoming);
+      onSavePinnedApps(working);
+    }
+  };
+
   dragActionsRef.current = {
     pinnedApps,
     applyWaveAtClientX,
-    executePinnedDrop,
+    executeLiveDrop,
     removeChildFromFolder,
     pinRunningApp
   };
@@ -928,167 +1119,207 @@ export function DockBar({
         )}
 
         {/* Center Slot: Start + Search + Pinned Apps / Folders + Open Windows */}
-        <div
-          ref={stripRef}
-          className="dock-apps-strip"
-          onMouseMove={handleStripMouseMove}
-          onMouseLeave={handleStripMouseLeave}
-        >
-          <button
-            className="dock-app-btn"
-            style={{ background: 'transparent' }}
-            onClick={() => void dockBridge.systemAction('start')}
-            onMouseEnter={(e) => showTooltipFor(e, 'Start')}
-          >
-            <StartIcon />
-          </button>
+        {(() => {
+          const isLiveDragging = Boolean(pointerDrag?.active);
+          const slotStep = dragSnapshotRef.current?.step ?? (settings.compactMode ? 39 : 44);
+          const draggedPinnedId =
+            isLiveDragging && pointerDrag?.payload.kind === 'pinned'
+              ? pointerDrag.payload.item.id
+              : null;
+          const origDraggedIndex =
+            draggedPinnedId !== null ? pinnedApps.findIndex((p) => p.id === draggedPinnedId) : -1;
+          const isExternalInsertGap =
+            isLiveDragging &&
+            draggedPinnedId === null &&
+            liveDrag?.gapIndex !== null &&
+            liveDrag?.gapIndex !== undefined;
 
-          <button
-            className={`dock-app-btn ${activePanel === 'apps' ? 'active' : ''}`}
-            onClick={() => toggle('apps')}
-            onMouseEnter={(e) => showTooltipFor(e, dict.apps)}
-            style={
-              activePanel === 'apps'
-                ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)' }
-                : undefined
-            }
-          >
-            <SearchIcon />
-          </button>
-
-          {pinnedApps.map((app, index) => {
-            const isGroup = app.kind === 'group';
-            const matchedWin = isGroup
-              ? findWindowForGroup(app.children)
-              : findWindowForPinned(app.exeName);
-            const hintClass =
-              dropHint?.targetId === app.id
-                ? dropHint.zone === 'merge'
-                  ? 'drop-merge'
-                  : dropHint.zone === 'before'
-                    ? 'drop-before'
-                    : 'drop-after'
-                : '';
-
-            const isBeingDragged =
-              pointerDrag?.active &&
-              pointerDrag.payload.kind === 'pinned' &&
-              pointerDrag.payload.item.id === app.id;
-
-            return (
+          return (
+            <div
+              ref={stripRef}
+              className={`dock-apps-strip ${isLiveDragging ? 'is-live-dragging' : ''} ${
+                justDropped ? 'no-transform-transition' : ''
+              }`}
+              style={
+                isExternalInsertGap
+                  ? { paddingRight: slotStep, transition: 'padding-right 0.2s cubic-bezier(0.22, 1, 0.36, 1)' }
+                  : undefined
+              }
+              onMouseMove={handleStripMouseMove}
+              onMouseLeave={handleStripMouseLeave}
+            >
               <button
-                key={app.id}
-                data-pinned-id={app.id}
-                className={`dock-app-btn ${hintClass}`}
-                style={{
-                  ...(matchedWin?.isActive
-                    ? { background: 'var(--chip-hover)', borderColor: 'var(--border-hairline)' }
-                    : {}),
-                  ...(isBeingDragged ? { opacity: 0.35 } : {})
-                }}
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return;
-                  beginPointerDrag({ kind: 'pinned', item: app }, e.clientX, e.clientY);
-                }}
-                onMouseEnter={(e) =>
-                  showTooltipFor(
-                    e,
-                    isGroup
-                      ? `${app.name} (${app.children?.length ?? 0})`
-                      : matchedWin
-                        ? `${app.name} — ${matchedWin.title}`
-                        : app.name
-                  )
-                }
-                onContextMenu={(e) =>
-                  openContextMenu(e, { kind: 'pinned', pinned: app, pinnedIndex: index })
-                }
-                onClick={(e) => {
-                  if (suppressNextClickRef.current) return;
-                  e.stopPropagation();
-                  setCtxMenu(null);
-                  setTooltip(null);
-                  if (isGroup) {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const centerX = rect.left + rect.width / 2;
-                    if (openFolder?.id === app.id) {
-                      setOpenFolder(null);
-                    } else {
-                      onTogglePanel(null);
-                      setOpenFolder({ id: app.id, x: centerX });
-                    }
-                    return;
-                  }
-                  setOpenFolder(null);
-                  if (matchedWin && !e.shiftKey) {
-                    void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
-                      setTimeout(onRefreshWindows, 120);
-                    });
-                  } else {
-                    void dockBridge.launchTarget(app.target);
-                  }
-                }}
+                className="dock-app-btn"
+                style={{ background: 'transparent' }}
+                onClick={() => void dockBridge.systemAction('start')}
+                onMouseEnter={(e) => showTooltipFor(e, 'Start')}
               >
-                {isGroup ? (
-                  <div className="dock-folder-mini-grid">
-                    {(app.children ?? []).slice(0, 4).map((child) =>
-                      child.iconDataUrl ? (
-                        <img
-                          key={child.id}
-                          className="dock-folder-mini-img"
-                          src={child.iconDataUrl}
-                          alt={child.name}
-                          draggable={false}
-                        />
-                      ) : (
-                        <AppIconGlyph key={child.id} name={child.icon} color={child.color} size={9} />
-                      )
-                    )}
-                  </div>
-                ) : (
-                  renderAppThumb(app, 21)
-                )}
-
-                {matchedWin && (
-                  <span
-                    className={`running-dot ${
-                      matchedWin.isActive ? 'active' : matchedWin.isMinimized ? 'minimized' : ''
-                    }`}
-                  />
-                )}
+                <StartIcon />
               </button>
-            );
-          })}
 
-          {settings.showOpenWindowsInBar && barWindows.length > 0 && (
-            <>
-              {barWindows.map((win) => {
-                const asPinned = winToPinned(win);
+              <button
+                className={`dock-app-btn ${activePanel === 'apps' ? 'active' : ''}`}
+                onClick={() => toggle('apps')}
+                onMouseEnter={(e) => showTooltipFor(e, dict.apps)}
+                style={
+                  activePanel === 'apps'
+                    ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)' }
+                    : undefined
+                }
+              >
+                <SearchIcon />
+              </button>
+
+              {pinnedApps.map((app, index) => {
+                const isGroup = app.kind === 'group';
+                const matchedWin = isGroup
+                  ? findWindowForGroup(app.children)
+                  : findWindowForPinned(app.exeName);
+                const isMergeTarget = isLiveDragging && liveDrag?.mergeTargetId === app.id;
+                const isBeingDragged = origDraggedIndex === index;
+
+                let shiftPx = 0;
+                if (isLiveDragging) {
+                  if (origDraggedIndex >= 0 && !isBeingDragged) {
+                    const gap = liveDrag?.gapIndex ?? origDraggedIndex;
+                    if (index > origDraggedIndex && index <= gap) shiftPx = -slotStep;
+                    else if (index < origDraggedIndex && index >= gap) shiftPx = slotStep;
+                  } else if (isExternalInsertGap && index >= liveDrag!.gapIndex!) {
+                    shiftPx = slotStep;
+                  }
+                }
+
+                const liveTransform =
+                  isLiveDragging && (shiftPx !== 0 || isMergeTarget)
+                    ? `${shiftPx !== 0 ? `translateX(${shiftPx}px)` : ''} ${
+                        isMergeTarget ? 'scale(1.14)' : ''
+                      }`.trim()
+                    : undefined;
+
                 return (
                   <button
-                    key={win.hwnd ?? win.pid}
-                    className="dock-app-btn"
-                    style={
-                      win.isActive
+                    key={app.id}
+                    data-pinned-id={app.id}
+                    className={`dock-app-btn ${isMergeTarget ? 'drop-merge' : ''}`}
+                    style={{
+                      ...(matchedWin?.isActive
                         ? { background: 'var(--chip-hover)', borderColor: 'var(--border-hairline)' }
-                        : undefined
-                    }
-                    onPointerDown={(e) => {
-                      if (e.button !== 0 || !asPinned) return;
-                      beginPointerDrag({ kind: 'running', win, item: asPinned }, e.clientX, e.clientY);
+                        : {}),
+                      ...(liveTransform ? { transform: liveTransform } : {}),
+                      ...(isBeingDragged ? { opacity: 0, pointerEvents: 'none' } : {})
                     }}
-                    onMouseEnter={(e) => showTooltipFor(e, `${win.processName} — ${win.title}`)}
-                    onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: win })}
-                    onClick={() => {
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      beginPointerDrag({ kind: 'pinned', item: app }, e.clientX, e.clientY);
+                    }}
+                    onMouseEnter={(e) =>
+                      showTooltipFor(
+                        e,
+                        isGroup
+                          ? `${app.name} (${app.children?.length ?? 0})`
+                          : matchedWin
+                            ? `${app.name} — ${matchedWin.title}`
+                            : app.name
+                      )
+                    }
+                    onContextMenu={(e) =>
+                      openContextMenu(e, { kind: 'pinned', pinned: app, pinnedIndex: index })
+                    }
+                    onClick={(e) => {
                       if (suppressNextClickRef.current) return;
+                      e.stopPropagation();
                       setCtxMenu(null);
-                      setOpenFolder(null);
                       setTooltip(null);
-                      void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
-                        setTimeout(onRefreshWindows, 120);
-                      });
+                      if (isGroup) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const centerX = rect.left + rect.width / 2;
+                        if (openFolder?.id === app.id) {
+                          setOpenFolder(null);
+                        } else {
+                          onTogglePanel(null);
+                          setOpenFolder({ id: app.id, x: centerX });
+                        }
+                        return;
+                      }
+                      setOpenFolder(null);
+                      if (matchedWin && !e.shiftKey) {
+                        void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
+                          setTimeout(onRefreshWindows, 120);
+                        });
+                      } else {
+                        void dockBridge.launchTarget(app.target);
+                      }
                     }}
                   >
+                    {isGroup ? (
+                      <div className="dock-folder-mini-grid">
+                        {(app.children ?? []).slice(0, 4).map((child) =>
+                          child.iconDataUrl ? (
+                            <img
+                              key={child.id}
+                              className="dock-folder-mini-img"
+                              src={child.iconDataUrl}
+                              alt={child.name}
+                              draggable={false}
+                            />
+                          ) : (
+                            <AppIconGlyph key={child.id} name={child.icon} color={child.color} size={9} />
+                          )
+                        )}
+                      </div>
+                    ) : (
+                      renderAppThumb(app, 21)
+                    )}
+
+                    {matchedWin && (
+                      <span
+                        className={`running-dot ${
+                          matchedWin.isActive ? 'active' : matchedWin.isMinimized ? 'minimized' : ''
+                        }`}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+
+              {settings.showOpenWindowsInBar && barWindows.length > 0 && (
+                <>
+                  {barWindows.map((win) => {
+                    const asPinned = winToPinned(win);
+                    const isDraggedRunning =
+                      isLiveDragging &&
+                      pointerDrag?.payload.kind === 'running' &&
+                      pointerDrag.payload.win.pid === win.pid &&
+                      pointerDrag.payload.win.hwnd === win.hwnd;
+                    return (
+                      <button
+                        key={win.hwnd ?? win.pid}
+                        className="dock-app-btn"
+                        style={{
+                          ...(win.isActive
+                            ? { background: 'var(--chip-hover)', borderColor: 'var(--border-hairline)' }
+                            : {}),
+                          ...(isExternalInsertGap
+                            ? { transform: `translateX(${slotStep}px)` }
+                            : {}),
+                          ...(isDraggedRunning ? { opacity: 0.28 } : {})
+                        }}
+                        onPointerDown={(e) => {
+                          if (e.button !== 0 || !asPinned) return;
+                          beginPointerDrag({ kind: 'running', win, item: asPinned }, e.clientX, e.clientY);
+                        }}
+                        onMouseEnter={(e) => showTooltipFor(e, `${win.processName} — ${win.title}`)}
+                        onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: win })}
+                        onClick={() => {
+                          if (suppressNextClickRef.current) return;
+                          setCtxMenu(null);
+                          setOpenFolder(null);
+                          setTooltip(null);
+                          void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+                            setTimeout(onRefreshWindows, 120);
+                          });
+                        }}
+                      >
                     {win.iconDataUrl ? (
                       <img
                         className="app-icon-img"
@@ -1107,9 +1338,11 @@ export function DockBar({
                   </button>
                 );
               })}
-            </>
-          )}
-        </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="dock-divider" />
 
