@@ -1,5 +1,6 @@
 import { Music, Pause, Play, SkipBack, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
+import { useMediaArtwork } from '../../hooks/useMediaArtwork';
 import { t } from '../../i18n';
 import type { Language, MediaInfo } from '../../types';
 
@@ -11,6 +12,7 @@ interface Props {
 
 export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
   const dict = t(lang);
+  const artworkUrl = useMediaArtwork(media);
 
   const send = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
@@ -21,21 +23,38 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
     <div className="stack-md">
       <div className="card row-between" style={{ padding: 16 }}>
         <div className="row-gap" style={{ minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: 'var(--accent-soft)',
-              color: 'var(--accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0
-            }}
-          >
-            <Music size={20} />
-          </div>
+          {artworkUrl ? (
+            <img
+              src={artworkUrl}
+              alt={media?.title ?? ''}
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                objectFit: 'cover',
+                flexShrink: 0,
+                border: '1px solid var(--border-hairline)',
+                boxShadow: '0 6px 18px var(--island-glow)'
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background: 'var(--art-grad)',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: '0 6px 18px var(--island-glow)'
+              }}
+            >
+              <Music size={21} />
+            </div>
+          )}
           <div style={{ minWidth: 0 }}>
             <div
               style={{

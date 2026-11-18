@@ -1,6 +1,14 @@
 :root {
   --dock-bg: linear-gradient(180deg, rgba(26, 32, 48, 0.64) 0%, rgba(12, 15, 24, 0.76) 100%);
   --popover-bg: linear-gradient(160deg, rgba(24, 30, 44, 0.78) 0%, rgba(12, 15, 24, 0.86) 100%);
+  --island-bg: linear-gradient(165deg, rgba(24, 31, 48, 0.8) 0%, rgba(10, 14, 24, 0.9) 100%);
+  --island-glow: rgba(96, 165, 250, 0.28);
+  --art-grad: linear-gradient(135deg, #60a5fa 0%, #818cf8 100%);
+  --eq-c1: #34d399;
+  --eq-c2: #60a5fa;
+  --eq-c3: #a78bfa;
+  --play-btn-bg: #f8fafc;
+  --play-btn-fg: #0b0e14;
   --chip-bg: rgba(255, 255, 255, 0.075);
   --chip-hover: rgba(255, 255, 255, 0.15);
   --border-hairline: rgba(255, 255, 255, 0.16);
@@ -18,6 +26,14 @@
 [data-theme='platinum'] {
   --dock-bg: linear-gradient(180deg, rgba(32, 33, 40, 0.66) 0%, rgba(16, 17, 22, 0.78) 100%);
   --popover-bg: linear-gradient(160deg, rgba(28, 29, 36, 0.8) 0%, rgba(15, 16, 21, 0.88) 100%);
+  --island-bg: linear-gradient(165deg, rgba(34, 34, 42, 0.82) 0%, rgba(14, 15, 20, 0.92) 100%);
+  --island-glow: rgba(230, 198, 135, 0.28);
+  --art-grad: linear-gradient(135deg, #e6c687 0%, #b78d4a 100%);
+  --eq-c1: #f5d896;
+  --eq-c2: #e6c687;
+  --eq-c3: #cbd5e1;
+  --play-btn-bg: linear-gradient(135deg, #f3d9a4 0%, #d5ae65 100%);
+  --play-btn-fg: #14120d;
   --chip-bg: rgba(255, 255, 255, 0.08);
   --chip-hover: rgba(255, 255, 255, 0.155);
   --border-hairline: rgba(235, 214, 172, 0.22);
@@ -35,6 +51,14 @@
 [data-theme='frost'] {
   --dock-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(236, 242, 250, 0.78) 100%);
   --popover-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.82) 0%, rgba(238, 243, 250, 0.88) 100%);
+  --island-bg: linear-gradient(165deg, rgba(255, 255, 255, 0.82) 0%, rgba(234, 242, 252, 0.9) 100%);
+  --island-glow: rgba(2, 132, 199, 0.2);
+  --art-grad: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+  --eq-c1: #0284c7;
+  --eq-c2: #059669;
+  --eq-c3: #6366f1;
+  --play-btn-bg: #0f172a;
+  --play-btn-fg: #ffffff;
   --chip-bg: rgba(15, 23, 42, 0.065);
   --chip-hover: rgba(15, 23, 42, 0.13);
   --border-hairline: rgba(255, 255, 255, 0.72);
@@ -314,16 +338,25 @@ body,
 }
 
 .inline-music-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 36px;
-  padding: 0 6px 0 6px;
-  border-radius: 10px;
+  padding: 0 7px 0 6px;
+  border-radius: 11px;
   border: 1px solid var(--border-hairline);
   background: var(--chip-bg);
-  max-width: 280px;
-  transition: background 0.14s ease, border-color 0.14s ease;
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  max-width: 292px;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.inline-music-pill.playing {
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    0 4px 14px var(--island-glow);
 }
 
 .inline-music-pill.active {
@@ -346,13 +379,29 @@ body,
 .inline-music-art {
   width: 24px;
   height: 24px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), #818cf8);
+  border-radius: 7px;
+  background: var(--art-grad);
+  object-fit: cover;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   color: #ffffff;
+  box-shadow: 0 2px 8px var(--island-glow);
+}
+
+.inline-eq {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+}
+
+.inline-eq .eq-bar {
+  width: 2px;
+  height: 4px;
 }
 
 .media-mini-btn {
@@ -366,11 +415,26 @@ body,
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.1s ease;
 }
 
 .media-mini-btn:hover {
   background: var(--chip-hover);
   color: var(--text-primary);
+}
+
+.media-mini-btn.play {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.media-mini-btn.play:hover {
+  background: var(--accent);
+  color: var(--play-btn-fg);
+}
+
+.media-mini-btn:active {
+  transform: scale(0.9);
 }
 
 .dock-bar.drag-over {
@@ -1007,17 +1071,18 @@ body,
 }
 
 .dynamic-island {
-  width: 276px;
-  height: 38px;
-  border-radius: 20px;
-  padding: 0 10px 0 8px;
-  background: linear-gradient(165deg, rgba(18, 21, 30, 0.82) 0%, rgba(6, 7, 11, 0.9) 100%);
-  backdrop-filter: blur(26px) saturate(180%);
-  color: #f8fafc;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  position: relative;
+  width: 288px;
+  height: 40px;
+  border-radius: 21px;
+  padding: 0 11px 0 8px;
+  background: var(--island-bg);
+  backdrop-filter: blur(28px) saturate(185%);
+  color: var(--text-primary);
+  border: 1px solid var(--border-hairline);
   box-shadow:
-    0 8px 22px rgba(0, 0, 0, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    0 10px 26px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 var(--glass-highlight);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1033,23 +1098,48 @@ body,
     box-shadow 0.3s ease;
 }
 
+.dynamic-island::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.13) 0%,
+    rgba(255, 255, 255, 0.03) 36%,
+    transparent 62%
+  );
+  pointer-events: none;
+}
+
+.dynamic-island.is-playing {
+  border-color: var(--border-strong);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.38),
+    0 4px 20px var(--island-glow),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
 .dynamic-island:hover {
-  border-color: rgba(255, 255, 255, 0.24);
+  border-color: var(--border-strong);
 }
 
 .dynamic-island.expanded {
-  width: 396px;
-  height: 192px;
+  width: 404px;
+  height: 196px;
   border-radius: 28px;
-  padding: 15px 18px;
+  padding: 16px 18px;
   justify-content: space-between;
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.44),
+    0 6px 26px var(--island-glow),
+    inset 0 1px 0 var(--glass-highlight);
   cursor: default;
 }
 
 .island-compact-row {
   width: 100%;
-  height: 38px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1077,65 +1167,86 @@ body,
 }
 
 .island-art-sm {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
+  width: 25px;
+  height: 25px;
+  border-radius: 8px;
   object-fit: cover;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  background: var(--art-grad);
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 10px var(--island-glow);
 }
 
 .island-art-lg {
-  width: 54px;
-  height: 54px;
-  border-radius: 13px;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   object-fit: cover;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  background: var(--art-grad);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 8px 22px var(--island-glow);
+}
+
+.island-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-top: 4px;
 }
 
 .island-eq-btn {
   display: flex;
   align-items: center;
   gap: 2.5px;
-  height: 22px;
-  padding: 2px 5px;
+  height: 24px;
+  padding: 2px 6px;
   border-radius: 999px;
-  border: none;
-  background: transparent;
+  border: 1px solid transparent;
+  background: var(--chip-bg);
   cursor: pointer;
   flex-shrink: 0;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
 
 .island-eq-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--chip-hover);
+  border-color: var(--border-hairline);
 }
 
 .eq-bar {
   width: 2.5px;
   height: 6px;
   border-radius: 999px;
-  background: #34d399;
-  transition: height 0.2s ease;
+  background: var(--text-muted);
+  transition: height 0.2s ease, background 0.2s ease;
 }
 
 .eq-playing .eq-bar:nth-child(1) {
+  background: var(--eq-c1);
   animation: eqWave 0.85s ease-in-out infinite 0s;
 }
 .eq-playing .eq-bar:nth-child(2) {
+  background: var(--eq-c2);
   animation: eqWave 0.72s ease-in-out infinite 0.18s;
 }
 .eq-playing .eq-bar:nth-child(3) {
+  background: var(--eq-c3);
   animation: eqWave 0.92s ease-in-out infinite 0.34s;
 }
 .eq-playing .eq-bar:nth-child(4) {
+  background: var(--eq-c1);
   animation: eqWave 0.78s ease-in-out infinite 0.12s;
 }
 
@@ -1153,14 +1264,15 @@ body,
   width: 100%;
   height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--chip-bg);
   overflow: hidden;
 }
 
 .island-timeline-fill {
   height: 100%;
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--island-glow);
   transition: width 0.4s linear;
 }
 
@@ -1168,18 +1280,19 @@ body,
   width: 36px;
   height: 36px;
   border-radius: 999px;
-  border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f8fafc;
+  border: 1px solid transparent;
+  background: var(--chip-bg);
+  color: var(--text-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.14s ease, transform 0.12s ease;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
 }
 
 .island-ctrl-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--chip-hover);
+  border-color: var(--border-hairline);
 }
 
 .island-ctrl-btn:active {
@@ -1191,17 +1304,18 @@ body,
   height: 44px;
   border-radius: 999px;
   border: none;
-  background: #ffffff;
-  color: #050507;
+  background: var(--play-btn-bg);
+  color: var(--play-btn-fg);
+  box-shadow: 0 6px 16px var(--island-glow);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.12s ease, opacity 0.14s ease;
+  transition: transform 0.12s ease, opacity 0.14s ease, box-shadow 0.2s ease;
 }
 
 .island-play-btn:hover {
-  opacity: 0.92;
+  opacity: 0.94;
 }
 
 .island-play-btn:active {
@@ -1212,16 +1326,17 @@ body,
   width: 26px;
   height: 26px;
   border-radius: 999px;
-  border: none;
-  background: rgba(255, 255, 255, 0.07);
-  color: #94a3b8;
+  border: 1px solid transparent;
+  background: var(--chip-bg);
+  color: var(--text-muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 
 .island-mini-action:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #ffffff;
+  background: var(--chip-hover);
+  color: var(--text-primary);
 }

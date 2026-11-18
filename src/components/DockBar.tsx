@@ -9,10 +9,12 @@ import {
   Pin,
   PinOff,
   Play,
+  SkipBack,
   SkipForward,
   X
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
+import { useMediaArtwork } from '../hooks/useMediaArtwork';
 import { t } from '../i18n';
 import type {
   ActivePanel,
@@ -105,6 +107,7 @@ export function DockBar({
 }: Props) {
   const { settings, pinnedApps } = config;
   const dict = t(settings.language);
+  const mediaArtworkUrl = useMediaArtwork(media);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
   const [dragOverExternal, setDragOverExternal] = useState(false);
@@ -552,7 +555,7 @@ export function DockBar({
     onTogglePanel(activePanel === panel ? null : panel);
   };
 
-  const quickMedia = async (cmd: 'playPause' | 'next') => {
+  const quickMedia = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
     setTimeout(onRefreshMedia, 250);
   };
@@ -1060,15 +1063,29 @@ export function DockBar({
         {/* Left Inline Music Player when musicPosition === 'taskbar' */}
         {settings.musicPosition === 'taskbar' && (
           <>
-            <div className={`inline-music-pill ${activePanel === 'media' ? 'active' : ''}`}>
+            <div
+              className={`inline-music-pill ${activePanel === 'media' ? 'active' : ''} ${
+                media?.status === 'Playing' ? 'playing' : ''
+              }`}
+            >
               <button
                 className="inline-music-trigger"
                 onClick={() => toggle('media')}
-                title={media?.title || dict.media}
+                title={media?.title ? `${media.title}${media.artist ? ` — ${media.artist}` : ''}` : dict.media}
               >
-                <div className="inline-music-art">
-                  <Music size={13} />
-                </div>
+                {mediaArtworkUrl ? (
+                  <img
+                    className="inline-music-art"
+                    src={mediaArtworkUrl}
+                    alt={media?.title ?? ''}
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="inline-music-art">
+                    <Music size={13} />
+                  </div>
+                )}
+
                 <div style={{ minWidth: 0 }}>
                   <div
                     style={{
@@ -1077,7 +1094,7 @@ export function DockBar({
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
-                      maxWidth: 135
+                      maxWidth: 124
                     }}
                   >
                     {media?.title || dict.nothingPlaying}
@@ -1090,17 +1107,32 @@ export function DockBar({
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
-                        maxWidth: 135
+                        maxWidth: 124
                       }}
                     >
                       {media.artist}
                     </div>
                   )}
                 </div>
+
+                {media?.status === 'Playing' && (
+                  <span className="inline-eq eq-playing" aria-hidden="true">
+                    <span className="eq-bar" />
+                    <span className="eq-bar" />
+                    <span className="eq-bar" />
+                  </span>
+                )}
               </button>
 
               <button
                 className="media-mini-btn"
+                onClick={() => void quickMedia('previous')}
+                title="Previous"
+              >
+                <SkipBack size={12} />
+              </button>
+              <button
+                className="media-mini-btn play"
                 onClick={() => void quickMedia('playPause')}
                 title="Play / Pause"
               >

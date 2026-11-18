@@ -10,6 +10,7 @@ import {
   Volume2
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
+import { useMediaArtwork } from '../hooks/useMediaArtwork';
 import type { MediaInfo } from '../types';
 
 interface Props {
@@ -19,13 +20,18 @@ interface Props {
   onRefreshMedia: () => void;
 }
 
-const artworkCache = new Map<string, string | null>();
-
 function formatTime(sec: number): string {
   const safe = Math.max(0, Math.floor(sec));
   const m = Math.floor(safe / 60);
   const s = safe % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function cleanSourceLabel(appId?: string): string | null {
+  if (!appId) return null;
+  const base = appId.split('!')[0].replace(/\.exe$/i, '').trim();
+  if (!base) return null;
+  return base.length > 20 ? `${base.slice(0, 18)}…` : base;
 }
 
 export function DynamicIsland({
@@ -34,7 +40,7 @@ export function DynamicIsland({
   onToggleExpand,
   onRefreshMedia
 }: Props) {
-  const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
+  const artworkUrl = useMediaArtwork(media);
   const [livePosSec, setLivePosSec] = useState<number>(0);
   const islandRef = useRef<HTMLDivElement | null>(null);
 
@@ -78,35 +84,6 @@ export function DynamicIsland({
     return () => clearInterval(id);
   }, [isPlaying, media?.endSec]);
 
-  useEffect(() => {
-    if (!media?.title) {
-      setArtworkUrl(null);
-      return;
-    }
-    if (artworkCache.has(trackKey)) {
-      setArtworkUrl(artworkCache.get(trackKey) ?? null);
-      return;
-    }
-
-    let cancelled = false;
-    const query = [media.artist, media.title].filter(Boolean).join(' ');
-    fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { results?: { artworkUrl100?: string }[] } | null) => {
-        if (cancelled) return;
-        const art = data?.results?.[0]?.artworkUrl100?.replace('100x100', '300x300') ?? null;
-        artworkCache.set(trackKey, art);
-        setArtworkUrl(art);
-      })
-      .catch(() => {
-        if (!cancelled) setArtworkUrl(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [trackKey, media?.title, media?.artist]);
-
   const sendCmd = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
     setTimeout(onRefreshMedia, 250);
@@ -114,6 +91,7 @@ export function DynamicIsland({
 
   const endSec = media?.endSec ?? 0;
   const pct = endSec > 0 ? Math.min(100, Math.round((livePosSec / endSec) * 100)) : 0;
+  const sourceLabel = cleanSourceLabel(media?.appId);
 
   return (
     <div
@@ -126,7 +104,7 @@ export function DynamicIsland({
     >
       <div
         ref={islandRef}
-        className={`dynamic-island ${expanded ? 'expanded' : ''}`}
+        className={`dynamic-island ${expanded ? 'expanded' : ''} ${isPlaying ? 'is-playing' : ''}`}
         onClick={() => {
           if (!expanded) onToggleExpand(true);
         }}
@@ -147,6 +125,7 @@ export function DynamicIsland({
                 style={{
                   fontSize: 12.5,
                   fontWeight: 600,
+                  color: 'var(--text-primary)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap'
@@ -158,7 +137,7 @@ export function DynamicIsland({
                 <span
                   style={{
                     fontSize: 11.5,
-                    color: '#94a3b8',
+                    color: 'var(--text-muted)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -178,10 +157,10 @@ export function DynamicIsland({
               }}
               title={isPlaying ? 'Pause' : 'Play'}
             >
-              <span className="eq-bar" style={{ background: isPlaying ? '#34d399' : '#64748b' }} />
-              <span className="eq-bar" style={{ background: isPlaying ? '#38bdf8' : '#64748b' }} />
-              <span className="eq-bar" style={{ background: isPlaying ? '#a78bfa' : '#64748b' }} />
-              <span className="eq-bar" style={{ background: isPlaying ? '#34d399' : '#64748b' }} />
+              <span className="eq-bar" />
+              <span className="eq-bar" />
+              <span className="eq-bar" />
+              <span className="eq-bar" />
             </button>
           </div>
         ) : (
@@ -201,6 +180,7 @@ export function DynamicIsland({
                     style={{
                       fontSize: 14.5,
                       fontWeight: 600,
+                      color: 'var(--text-primary)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap'
@@ -211,7 +191,7 @@ export function DynamicIsland({
                   <div
                     style={{
                       fontSize: 12.5,
-                      color: '#94a3b8',
+                      color: 'var(--text-muted)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -220,6 +200,7 @@ export function DynamicIsland({
                   >
                     {media?.artist || 'Start Spotify, YouTube, or any media'}
                   </div>
+                  {sourceLabel && <span className="island-source-badge">{sourceLabel}</span>}
                 </div>
               </div>
 
@@ -239,7 +220,7 @@ export function DynamicIsland({
               <div className="island-timeline-track">
                 <div className="island-timeline-fill" style={{ width: `${pct}%` }} />
               </div>
-              <div className="row-between tabular" style={{ fontSize: 11, color: '#94a3b8' }}>
+              <div className="row-between tabular" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 <span>{formatTime(livePosSec)}</span>
                 <span>{endSec > 0 ? formatTime(endSec) : '--:--'}</span>
               </div>
@@ -267,7 +248,11 @@ export function DynamicIsland({
                 onClick={() => void sendCmd('playPause')}
                 title={isPlaying ? 'Pause' : 'Play'}
               >
-                {isPlaying ? <Pause size={20} fill="#050507" /> : <Play size={20} fill="#050507" />}
+                {isPlaying ? (
+                  <Pause size={20} fill="currentColor" />
+                ) : (
+                  <Play size={20} fill="currentColor" />
+                )}
               </button>
 
               <button

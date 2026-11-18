@@ -306,6 +306,15 @@ function createWindows(): void {
 
 let rebuildTrayMenu: () => void = () => undefined;
 
+function broadcastConfig(cfg: AppConfig): void {
+  if (dockWindow && !dockWindow.isDestroyed()) {
+    dockWindow.webContents.send('aurabar:config-updated', cfg);
+  }
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    islandWindow.webContents.send('aurabar:config-updated', cfg);
+  }
+}
+
 function setupTray(): void {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('AuraBar — Taskbar & Music Island');
@@ -328,7 +337,7 @@ function setupTray(): void {
             saveConfig(currentConfig);
             isIslandExpanded = false;
             applyAllLayouts(currentConfig.settings);
-            dockWindow?.webContents.send('aurabar:config-updated', currentConfig);
+            broadcastConfig(currentConfig);
             rebuildTrayMenu();
           }
         },
@@ -342,7 +351,7 @@ function setupTray(): void {
             saveConfig(currentConfig);
             syncTaskbarReplacement(currentConfig.settings);
             applyAllLayouts(currentConfig.settings);
-            dockWindow?.webContents.send('aurabar:config-updated', currentConfig);
+            broadcastConfig(currentConfig);
             rebuildTrayMenu();
           }
         },
@@ -454,6 +463,7 @@ function registerIpcHandlers(): void {
     currentConfig = saveConfig(nextConfig);
     syncTaskbarReplacement(currentConfig.settings);
     applyAllLayouts(currentConfig.settings);
+    broadcastConfig(currentConfig);
     rebuildTrayMenu();
     return currentConfig;
   });

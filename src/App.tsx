@@ -62,9 +62,8 @@ export function App() {
     [config, persistConfig]
   );
 
-  // Initial config load + Tray updates
+  // Initial config load + live Tray / Settings sync for both Dock & Top Island
   useEffect(() => {
-    if (VIEW_MODE !== 'dock') return;
     void dockBridge.getConfig().then(setConfig);
     return dockBridge.onConfigUpdated((updated) => {
       setConfig(updated);
