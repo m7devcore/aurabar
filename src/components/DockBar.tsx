@@ -891,7 +891,7 @@ export function DockBar({
           className="dock-tooltip"
           style={{
             left: Math.max(60, Math.min(window.innerWidth - 60, tooltip.x)),
-            ...(settings.position === 'bottom' ? { bottom: 64 } : { top: 64 })
+            ...(settings.position === 'bottom' ? { bottom: 68 } : { top: 68 })
           }}
         >
           {tooltip.label}
@@ -905,7 +905,7 @@ export function DockBar({
           className="folder-popover"
           style={{
             left: Math.round(Math.max(12, Math.min(window.innerWidth - 280, openFolder.x - 134))),
-            ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
+            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -991,7 +991,7 @@ export function DockBar({
           className="control-center-flyout"
           style={{
             left: Math.round(Math.max(12, Math.min(window.innerWidth - 332, ccFlyout.x - 160))),
-            ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
+            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1152,7 +1152,7 @@ export function DockBar({
           className="taskbar-ctx-menu"
           style={{
             left: ctxMenu.x,
-            ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
+            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
         >
