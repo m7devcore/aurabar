@@ -167,6 +167,15 @@ namespace AuraBarNative {
     [DllImport("dwmapi.dll")]
     private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    private static extern int DwmGetWindowRect(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    [DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsHungAppWindow(IntPtr hWnd);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -948,6 +957,70 @@ namespace AuraBarNative {
       return "";
     }
 
+    // Taskbar-style preview: render the window via PrintWindow (PW_RENDERFULLCONTENT so GPU/Chromium
+    // content is captured), crop the invisible DWM resize borders, and downscale to a small JPEG.
+    private static string GetWindowThumbDataUrl(long hwndVal, int maxW, int maxH) {
+      IntPtr hWnd = new IntPtr(hwndVal);
+      if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || IsIconic(hWnd)) return "";
+      // WM_PRINT to a hung window would block the whole command loop
+      if (IsHungAppWindow(hWnd)) return "";
+
+      RECT wr;
+      if (!GetWindowRect(hWnd, out wr)) return "";
+      int w = wr.right - wr.left;
+      int h = wr.bottom - wr.top;
+      if (w <= 0 || h <= 0 || w > 10000 || h > 10000) return "";
+
+      RECT fr;
+      Rectangle crop = new Rectangle(0, 0, w, h);
+      if (DwmGetWindowRect(hWnd, 9, out fr, Marshal.SizeOf(typeof(RECT))) == 0) { // DWMWA_EXTENDED_FRAME_BOUNDS
+        Rectangle visible = Rectangle.Intersect(
+          new Rectangle(fr.left - wr.left, fr.top - wr.top, fr.right - fr.left, fr.bottom - fr.top),
+          crop
+        );
+        if (visible.Width > 0 && visible.Height > 0) crop = visible;
+      }
+
+      try {
+        // 24bpp: GDI leaves alpha at 0, which would make a 32bpp capture fully transparent
+        using (Bitmap full = new Bitmap(w, h, PixelFormat.Format24bppRgb)) {
+          using (Graphics g = Graphics.FromImage(full)) {
+            IntPtr hdc = g.GetHdc();
+            bool ok;
+            try { ok = PrintWindow(hWnd, hdc, 2); } finally { g.ReleaseHdc(hdc); }
+            if (!ok) return "";
+          }
+
+          double scale = Math.Min(1.0, Math.Min((double)maxW / crop.Width, (double)maxH / crop.Height));
+          int tw = Math.Max(1, (int)Math.Round(crop.Width * scale));
+          int th = Math.Max(1, (int)Math.Round(crop.Height * scale));
+          using (Bitmap thumb = new Bitmap(tw, th, PixelFormat.Format24bppRgb))
+          using (Graphics g2 = Graphics.FromImage(thumb))
+          using (MemoryStream ms = new MemoryStream()) {
+            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g2.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g2.DrawImage(full, new Rectangle(0, 0, tw, th), crop, GraphicsUnit.Pixel);
+
+            ImageCodecInfo jpeg = null;
+            foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders()) {
+              if (c.MimeType == "image/jpeg") { jpeg = c; break; }
+            }
+            if (jpeg == null) {
+              thumb.Save(ms, ImageFormat.Png);
+              return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+            }
+            using (EncoderParameters ep = new EncoderParameters(1)) {
+              ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 82L);
+              thumb.Save(ms, jpeg, ep);
+            }
+            return "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
+          }
+        }
+      } catch {
+        return "";
+      }
+    }
+
     private static string GetWindowIconDataUrl(long hwndVal) {
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero) return "";
@@ -1160,6 +1233,11 @@ namespace AuraBarNative {
             Reply("ok");
           } else if (line.StartsWith("ICON ")) {
             Reply(GetFileIconDataUrl(line.Substring(5).Trim()));
+          } else if (line.StartsWith("THUMB ")) {
+            string[] parts = line.Substring(6).Trim().Split(' ');
+            int tw = parts.Length > 1 ? int.Parse(parts[1]) : 400;
+            int th = parts.Length > 2 ? int.Parse(parts[2]) : 240;
+            Reply(GetWindowThumbDataUrl(long.Parse(parts[0]), Math.Max(32, Math.Min(tw, 800)), Math.Max(32, Math.Min(th, 600))));
           } else if (line.StartsWith("WINICON ")) {
             long hv = long.Parse(line.Substring(8).Trim());
             Reply(GetWindowIconDataUrl(hv));

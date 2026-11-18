@@ -311,6 +311,22 @@ export async function listBackgroundApps(): Promise<BackgroundApp[]> {
   }
 }
 
+// Previews are requested while hovering and refreshed while the peek stays open; a short cache
+// keeps quick hover-in/hover-out from re-rendering the same window over and over
+const thumbCache = new Map<string, { url: string; at: number }>();
+const THUMB_TTL_MS = 1500;
+
+export async function getWindowThumbnail(hwnd: string): Promise<string | undefined> {
+  if (!hwnd || !/^\d+$/.test(hwnd)) return undefined;
+  const cached = thumbCache.get(hwnd);
+  if (cached && Date.now() - cached.at < THUMB_TTL_MS) return cached.url || undefined;
+  const res = await win32Daemon.send(`THUMB ${hwnd} 400 240`);
+  const url = res.startsWith('data:image/') ? res : '';
+  if (thumbCache.size > 60) thumbCache.clear();
+  thumbCache.set(hwnd, { url, at: Date.now() });
+  return url || undefined;
+}
+
 export async function closeWindowByHwnd(hwnd: string): Promise<boolean> {
   if (!hwnd || !/^\d+$/.test(hwnd)) return false;
   const res = await win32Daemon.send(`CLOSE_WIN ${hwnd}`);

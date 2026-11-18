@@ -22,6 +22,7 @@ import {
   getKeyboardLayoutCode,
   getNetworkInfo,
   getSystemVolume,
+  getWindowThumbnail,
   importTaskbarPinnedApps,
   launchTarget,
   listBackgroundApps,
@@ -605,6 +606,7 @@ function registerIpcHandlers(): void {
     openAppByPid(pid, executablePath)
   );
   ipcMain.handle('aurabar:close-window', (_e, hwnd: string) => closeWindowByHwnd(hwnd));
+  ipcMain.handle('aurabar:get-window-thumb', (_e, hwnd: string) => getWindowThumbnail(hwnd));
   ipcMain.handle('aurabar:quit-process', (_e, pid: number, executablePath?: string) =>
     quitAppByPid(pid, executablePath)
   );

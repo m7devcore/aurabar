@@ -33,6 +33,7 @@ import type {
 } from '../types';
 import { AppIconGlyph } from './IconMapper';
 import { VolumeSlider } from './VolumeSlider';
+import { WindowPeek } from './WindowPeek';
 import {
   BatteryIcon,
   GlobeLangIcon,
@@ -133,6 +134,11 @@ export function DockBar({
   const [justDropped, setJustDropped] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [folderNameDraft, setFolderNameDraft] = useState<string | null>(null);
+  // Hover preview of an app's open windows; key is `pin:<id>` or `proc:<process name>`
+  const [peek, setPeek] = useState<{ key: string; x: number } | null>(null);
+  const peekRef = useRef<HTMLDivElement | null>(null);
+  const peekOpenTimerRef = useRef<number | null>(null);
+  const peekCloseTimerRef = useRef<number | null>(null);
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
@@ -233,6 +239,7 @@ export function DockBar({
       pushOverlay(ccFlyoutRef.current);
       pushOverlay(overflowPopoverRef.current);
       pushOverlay(ctxMenuRef.current);
+      pushOverlay(peekRef.current);
       const popoverEl = document.querySelector<HTMLElement>('.popover-card');
       pushOverlay(popoverEl);
 
@@ -247,6 +254,7 @@ export function DockBar({
       if (ccFlyoutRef.current) ro.observe(ccFlyoutRef.current);
       if (overflowPopoverRef.current) ro.observe(overflowPopoverRef.current);
       if (ctxMenuRef.current) ro.observe(ctxMenuRef.current);
+      if (peekRef.current) ro.observe(peekRef.current);
     }
     return () => ro?.disconnect();
   }, [
@@ -257,6 +265,7 @@ export function DockBar({
     overflowTray,
     backgroundApps.length,
     ctxMenu,
+    peek?.key,
     pinnedApps.length,
     runningWindows.length,
     settings.position,
@@ -269,6 +278,7 @@ export function DockBar({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        setPeek(null);
         setCtxMenu(null);
         setOpenFolder(null);
         setCcFlyout(null);
@@ -282,6 +292,7 @@ export function DockBar({
       }
     };
     const onBlur = () => {
+      setPeek(null);
       setCtxMenu(null);
       setOpenFolder(null);
       setCcFlyout(null);
@@ -298,6 +309,9 @@ export function DockBar({
       if (!target) return;
       if (ctxMenu && !target.closest('.taskbar-ctx-menu')) {
         setCtxMenu(null);
+      }
+      if (peek && !target.closest('.window-peek') && !target.closest('.dock-app-btn')) {
+        setPeek(null);
       }
       if (openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
         // Blur first so an in-progress folder rename commits before the input unmounts
@@ -324,7 +338,7 @@ export function DockBar({
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousedown', onDocMouseDown);
     };
-  }, [ctxMenu, openFolder, ccFlyout, overflowTray]);
+  }, [ctxMenu, openFolder, ccFlyout, overflowTray, peek]);
 
   // Imperative pointer-drag start: ZERO React state update until pointer moves >= 11px!
   const dragActionsRef = useRef<{
@@ -502,6 +516,7 @@ export function DockBar({
 
       if (!candidate.active) {
         candidate.active = true;
+        setPeek(null);
         dockBridge.setDockInteractive(true);
         dragActionsRef.current?.applyWaveAtClientX(null);
         setTooltip(null);
@@ -642,6 +657,7 @@ export function DockBar({
   });
 
   const toggle = (panel: ActivePanel) => {
+    closePeekNow();
     setCtxMenu(null);
     setOpenFolder(null);
     setCcFlyout(null);
@@ -651,6 +667,7 @@ export function DockBar({
   };
 
   const toggleControlCenter = () => {
+    closePeekNow();
     setCtxMenu(null);
     setOpenFolder(null);
     setOverflowTray(null);
@@ -666,6 +683,7 @@ export function DockBar({
   };
 
   const toggleOverflowTray = () => {
+    closePeekNow();
     setCtxMenu(null);
     setOpenFolder(null);
     setCcFlyout(null);
@@ -706,6 +724,61 @@ export function DockBar({
     return matches.find((w) => w.isActive) ?? matches[0];
   };
 
+  const windowsForProcess = (processName?: string): RunningWindow[] => {
+    if (!processName) return [];
+    const target = processName.toLowerCase();
+    return runningWindows.filter((w) => w.processName.toLowerCase() === target);
+  };
+
+  const clearPeekTimers = () => {
+    if (peekOpenTimerRef.current) window.clearTimeout(peekOpenTimerRef.current);
+    if (peekCloseTimerRef.current) window.clearTimeout(peekCloseTimerRef.current);
+    peekOpenTimerRef.current = null;
+    peekCloseTimerRef.current = null;
+  };
+
+  function closePeekNow() {
+    clearPeekTimers();
+    setPeek(null);
+  }
+
+  const openPeek = (key: string, el: HTMLElement, immediate = false) => {
+    clearPeekTimers();
+    if (dragCandidateRef.current?.active || ctxMenu || activePanel || openFolder || ccFlyout || overflowTray) {
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const next = { key, x: rect.left + rect.width / 2 };
+    // Once a preview is showing, sliding to the next icon switches instantly, like Windows
+    if (immediate || peek) {
+      setTooltip(null);
+      setPeek(next);
+      return;
+    }
+    peekOpenTimerRef.current = window.setTimeout(() => {
+      peekOpenTimerRef.current = null;
+      setTooltip(null);
+      setPeek(next);
+    }, 420);
+  };
+
+  const schedulePeekClose = () => {
+    if (peekOpenTimerRef.current) window.clearTimeout(peekOpenTimerRef.current);
+    peekOpenTimerRef.current = null;
+    if (peekCloseTimerRef.current) window.clearTimeout(peekCloseTimerRef.current);
+    peekCloseTimerRef.current = window.setTimeout(() => {
+      peekCloseTimerRef.current = null;
+      setPeek(null);
+    }, 260);
+  };
+
+  const cancelPeekClose = () => {
+    if (peekCloseTimerRef.current) window.clearTimeout(peekCloseTimerRef.current);
+    peekCloseTimerRef.current = null;
+  };
+
+  useEffect(() => () => clearPeekTimers(), []);
+
   const findWindowForGroup = (children?: PinnedApp[]): RunningWindow | undefined => {
     if (!children) return undefined;
     for (const c of children) {
@@ -733,6 +806,7 @@ export function DockBar({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+    closePeekNow();
     setTooltip(null);
     setOpenFolder(null);
     if (!opts?.preserveOverflow) setOverflowTray(null);
@@ -996,6 +1070,21 @@ export function DockBar({
     return <AppIconGlyph name={app.icon} color={app.color} size={Math.max(14, size - 4)} />;
   };
 
+  // Resolved live from runningWindows so cards appear/disappear as windows open and close
+  let peekData: { windows: RunningWindow[]; name: string; iconUrl?: string } | null = null;
+  if (peek) {
+    if (peek.key.startsWith('pin:')) {
+      const app = pinnedApps.find((p) => p.id === peek.key.slice(4));
+      if (app && app.kind !== 'group') {
+        peekData = { windows: windowsForProcess(app.exeName), name: app.name, iconUrl: app.iconDataUrl };
+      }
+    } else {
+      const wins = windowsForProcess(peek.key.slice(5));
+      peekData = { windows: wins, name: wins[0]?.processName ?? '', iconUrl: wins[0]?.iconDataUrl };
+    }
+    if (peekData && peekData.windows.length === 0) peekData = null;
+  }
+
   return (
     <>
       {pointerDrag?.active && (
@@ -1008,6 +1097,7 @@ export function DockBar({
       )}
 
       {tooltip &&
+        !peek &&
         !ctxMenu &&
         !activePanel &&
         !activeFolderObj &&
@@ -1023,6 +1113,33 @@ export function DockBar({
         >
           {tooltip.label}
         </div>
+      )}
+
+      {peekData && peek && (
+        <WindowPeek
+          ref={peekRef}
+          windows={peekData.windows}
+          appName={peekData.name}
+          appIconUrl={peekData.iconUrl}
+          x={peek.x}
+          position={settings.position}
+          lang={settings.language}
+          onMouseEnter={cancelPeekClose}
+          onMouseLeave={schedulePeekClose}
+          onActivate={(win) => {
+            closePeekNow();
+            void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+              setTimeout(onRefreshWindows, 80);
+            });
+          }}
+          onCloseWindow={(win) => {
+            if (!win.hwnd) return;
+            void dockBridge.closeWindow(win.hwnd).then(() => {
+              setTimeout(onRefreshWindows, 150);
+              setTimeout(onRefreshWindows, 500);
+            });
+          }}
+        />
       )}
 
       {/* Open Taskbar Folder Popover */}
@@ -1771,6 +1888,8 @@ export function DockBar({
                   : findWindowForPinned(app.exeName);
                 const isMergeTarget = isLiveDragging && liveDrag?.mergeTargetId === app.id;
                 const isBeingDragged = origDraggedIndex === index;
+                const appWindows = isGroup ? [] : windowsForProcess(app.exeName);
+                const peekKey = `pin:${app.id}`;
 
                 let shiftPx = 0;
                 if (isLiveDragging) {
@@ -1806,16 +1925,20 @@ export function DockBar({
                       if (e.button !== 0) return;
                       beginPointerDrag({ kind: 'pinned', item: app }, e.clientX, e.clientY);
                     }}
-                    onMouseEnter={(e) =>
+                    onMouseEnter={(e) => {
+                      if (appWindows.length > 0) {
+                        openPeek(peekKey, e.currentTarget);
+                        return;
+                      }
+                      if (peek) closePeekNow();
                       showTooltipFor(
                         e,
-                        isGroup
-                          ? `${app.name} (${app.children?.length ?? 0})`
-                          : matchedWin
-                            ? `${app.name} — ${matchedWin.title}`
-                            : app.name
-                      )
-                    }
+                        isGroup ? `${app.name} (${app.children?.length ?? 0})` : app.name
+                      );
+                    }}
+                    onMouseLeave={() => {
+                      if (appWindows.length > 0) schedulePeekClose();
+                    }}
                     onContextMenu={(e) =>
                       openContextMenu(e, { kind: 'pinned', pinned: app, pinnedIndex: index })
                     }
@@ -1838,6 +1961,13 @@ export function DockBar({
                       }
                       setOpenFolder(null);
                       setCcFlyout(null);
+                      // Several windows: show them to pick from instead of guessing one (Windows 11)
+                      if (appWindows.length > 1 && !e.shiftKey) {
+                        if (peek?.key === peekKey) closePeekNow();
+                        else openPeek(peekKey, e.currentTarget, true);
+                        return;
+                      }
+                      closePeekNow();
                       if (matchedWin && !e.shiftKey) {
                         void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
                           setTimeout(onRefreshWindows, 80);
@@ -1871,7 +2001,7 @@ export function DockBar({
                       <span
                         className={`running-dot ${
                           matchedWin.isActive ? 'active' : matchedWin.isMinimized ? 'minimized' : ''
-                        }`}
+                        } ${appWindows.length > 1 ? 'multi' : ''}`}
                       />
                     )}
                   </button>
@@ -1882,6 +2012,9 @@ export function DockBar({
                 <>
                   {barWindows.map((win) => {
                     const asPinned = winToPinned(win);
+                    const procWindows = windowsForProcess(win.processName);
+                    const procActive = procWindows.find((w) => w.isActive);
+                    const peekKey = `proc:${win.processName.toLowerCase()}`;
                     const isDraggedRunning =
                       isLiveDragging &&
                       pointerDrag?.payload.kind === 'running' &&
@@ -1892,7 +2025,7 @@ export function DockBar({
                         key={win.hwnd ?? win.pid}
                         className="dock-app-btn"
                         style={{
-                          ...(win.isActive
+                          ...(procActive
                             ? { background: 'var(--chip-hover)', borderColor: 'var(--border-hairline)' }
                             : {}),
                           ...(isExternalInsertGap
@@ -1904,13 +2037,20 @@ export function DockBar({
                           if (e.button !== 0 || !asPinned) return;
                           beginPointerDrag({ kind: 'running', win, item: asPinned }, e.clientX, e.clientY);
                         }}
-                        onMouseEnter={(e) => showTooltipFor(e, `${win.processName} — ${win.title}`)}
-                        onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: win })}
-                        onClick={() => {
+                        onMouseEnter={(e) => openPeek(peekKey, e.currentTarget)}
+                        onMouseLeave={schedulePeekClose}
+                        onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: procActive ?? win })}
+                        onClick={(e) => {
                           if (suppressNextClickRef.current) return;
                           setCtxMenu(null);
                           setOpenFolder(null);
                           setTooltip(null);
+                          if (procWindows.length > 1) {
+                            if (peek?.key === peekKey) closePeekNow();
+                            else openPeek(peekKey, e.currentTarget, true);
+                            return;
+                          }
+                          closePeekNow();
                           void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
                             setTimeout(onRefreshWindows, 80);
                           });
@@ -1928,8 +2068,8 @@ export function DockBar({
                     )}
                     <span
                       className={`running-dot ${
-                        win.isActive ? 'active' : win.isMinimized ? 'minimized' : ''
-                      }`}
+                        procActive ? 'active' : procWindows.every((w) => w.isMinimized) ? 'minimized' : ''
+                      } ${procWindows.length > 1 ? 'multi' : ''}`}
                     />
                   </button>
                 );

@@ -52,6 +52,7 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
   focusWindow: async () => true,
   openApp: async () => true,
   closeWindow: async () => true,
+  getWindowThumb: async () => undefined,
   quitProcess: async () => true,
   launchTarget: async (target) => {
     if (/^https?:\/\//i.test(target)) window.open(target, '_blank');

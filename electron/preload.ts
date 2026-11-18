@@ -36,6 +36,7 @@ export interface AuraBarApi {
   focusWindow: (pid: number, hwnd?: string) => Promise<boolean>;
   openApp: (pid: number, executablePath?: string) => Promise<boolean>;
   closeWindow: (hwnd: string) => Promise<boolean>;
+  getWindowThumb: (hwnd: string) => Promise<string | undefined>;
   quitProcess: (pid: number, executablePath?: string) => Promise<boolean>;
   launchTarget: (target: string) => Promise<boolean>;
   pickAppFile: () => Promise<{
@@ -85,6 +86,7 @@ const api: AuraBarApi = {
   focusWindow: (pid, hwnd) => ipcRenderer.invoke('aurabar:focus-window', pid, hwnd),
   openApp: (pid, executablePath) => ipcRenderer.invoke('aurabar:open-app', pid, executablePath),
   closeWindow: (hwnd) => ipcRenderer.invoke('aurabar:close-window', hwnd),
+  getWindowThumb: (hwnd) => ipcRenderer.invoke('aurabar:get-window-thumb', hwnd),
   quitProcess: (pid, executablePath) => ipcRenderer.invoke('aurabar:quit-process', pid, executablePath),
   launchTarget: (target) => ipcRenderer.invoke('aurabar:launch-target', target),
   pickAppFile: () => ipcRenderer.invoke('aurabar:pick-app-file'),

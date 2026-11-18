@@ -2031,3 +2031,166 @@ input:focus-visible,
     transform: none !important;
   }
 }
+
+/* Taskbar window previews: one card per open window of the hovered app */
+.window-peek {
+  position: fixed;
+  z-index: 58;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  border-radius: 16px;
+  background: var(--popover-bg);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  backdrop-filter: blur(26px) saturate(1.25);
+  border: 1px solid var(--border-hairline);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow-pop);
+  transform-origin: bottom center;
+  animation: riseIn 0.16s var(--ease-out) both;
+}
+
+.pos-top .window-peek {
+  transform-origin: top center;
+}
+
+.window-peek::-webkit-scrollbar {
+  height: 5px;
+}
+
+.window-peek::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.peek-card {
+  flex: 0 0 212px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 7px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.13s ease, border-color 0.13s ease, transform 0.13s ease-out;
+}
+
+.peek-card:hover {
+  background: var(--surface-raised);
+}
+
+.peek-card:active {
+  transform: scale(0.98);
+}
+
+.peek-card.active {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.peek-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.peek-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 20px;
+}
+
+.peek-card-icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.peek-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peek-card-close {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+}
+
+.peek-card:hover .peek-card-close,
+.peek-card:focus-within .peek-card-close {
+  opacity: 1;
+}
+
+.peek-card-close:hover {
+  background: var(--rose);
+  color: #ffffff;
+}
+
+.peek-card-thumb {
+  height: 116px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--art-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px var(--border-hairline);
+}
+
+.peek-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  animation: islandFadeIn 0.18s ease both;
+}
+
+.peek-card-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Several windows for one app: the indicator splits into two segments, like Windows */
+.running-dot.multi {
+  width: 11px;
+  background: linear-gradient(
+    to right,
+    var(--text-faint) 0 4px,
+    transparent 4px 7px,
+    var(--text-faint) 7px 11px
+  );
+}
+
+.running-dot.multi.active {
+  width: 19px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 12px,
+    transparent 12px 15px,
+    color-mix(in srgb, var(--accent) 55%, transparent) 15px 19px
+  );
+}
