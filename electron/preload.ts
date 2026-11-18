@@ -38,7 +38,13 @@ export interface AuraBarApi {
   closeWindow: (hwnd: string) => Promise<boolean>;
   quitProcess: (pid: number, executablePath?: string) => Promise<boolean>;
   launchTarget: (target: string) => Promise<boolean>;
-  pickAppFile: () => Promise<{ path: string; name: string; kind: 'app' | 'folder'; iconDataUrl?: string } | null>;
+  pickAppFile: () => Promise<{
+    path: string;
+    name: string;
+    kind: 'app' | 'folder';
+    iconDataUrl?: string;
+    exeName?: string;
+  } | null>;
   getAppIcon: (target: string) => Promise<string | undefined>;
   getMediaInfo: () => Promise<MediaInfo | null>;
   sendMediaCommand: (cmd: 'playPause' | 'next' | 'previous') => Promise<void>;

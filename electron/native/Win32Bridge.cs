@@ -232,6 +232,9 @@ namespace AuraBarNative {
     private static readonly Dictionary<uint, ProcMeta> procCache = new Dictionary<uint, ProcMeta>();
     private static readonly Dictionary<string, int> subsystemCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, string> descCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly object procCacheLock = new object();
+    private static volatile bool keepOnTop = true;
+    private static string replyPrefix = "";
     private static bool taskbarHiddenByUs = false;
     private static int savedScreenLeft = 0;
     private static int savedScreenRight = 1920;
@@ -264,10 +267,26 @@ namespace AuraBarNative {
       return sb.ToString();
     }
 
+    // procCache is shared by the command loop and PollForegroundLoop; Dictionary is not
+    // thread-safe and concurrent writes can corrupt it into an infinite loop.
     private static ProcMeta GetProcMeta(uint pid) {
       ProcMeta cached;
-      if (procCache.TryGetValue(pid, out cached)) return cached;
+      lock (procCacheLock) {
+        if (procCache.TryGetValue(pid, out cached)) return cached;
+      }
 
+      ProcMeta meta = QueryProcMeta(pid);
+      if (!string.IsNullOrEmpty(meta.name)) {
+        lock (procCacheLock) {
+          if (procCache.Count > 200) procCache.Clear();
+          procCache[pid] = meta;
+        }
+      }
+      return meta;
+    }
+
+    // Uncached lookup for destructive paths: a cached entry can be stale after PID reuse
+    private static ProcMeta QueryProcMeta(uint pid) {
       string exePath = "";
       string procName = "";
       IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (int)pid);
@@ -291,16 +310,11 @@ namespace AuraBarNative {
         } catch { }
       }
 
-      ProcMeta meta = new ProcMeta {
+      return new ProcMeta {
         name = procName,
         exePath = exePath,
         isElectron = procName.Equals("electron", StringComparison.OrdinalIgnoreCase)
       };
-      if (!string.IsNullOrEmpty(procName)) {
-        if (procCache.Count > 200) procCache.Clear();
-        procCache[pid] = meta;
-      }
-      return meta;
     }
 
     private static bool IsCloaked(IntPtr hWnd) {
@@ -316,6 +330,7 @@ namespace AuraBarNative {
     }
 
     private static void KeepOnTopIfDemoted(IntPtr hWnd) {
+      if (!keepOnTop) return;
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || !IsWindowVisible(hWnd)) return;
       int exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
       bool needTopmost = (exStyle & WS_EX_TOPMOST) == 0;
@@ -688,7 +703,7 @@ namespace AuraBarNative {
     }
 
     private static HashSet<uint> CollectMatchingPids(int seedPid, out ProcMeta targetMeta) {
-      targetMeta = GetProcMeta((uint)seedPid);
+      targetMeta = QueryProcMeta((uint)seedPid);
       HashSet<uint> pids = new HashSet<uint>();
       if (seedPid > 4 && !IsAuraBarWindow((uint)seedPid, IntPtr.Zero)) {
         pids.Add((uint)seedPid);
@@ -702,7 +717,7 @@ namespace AuraBarNative {
           uint pid = (uint)p.Id;
           if (pid <= 4 || IsAuraBarWindow(pid, IntPtr.Zero)) continue;
           if (!string.IsNullOrEmpty(targetExe)) {
-            ProcMeta pm = GetProcMeta(pid);
+            ProcMeta pm = QueryProcMeta(pid);
             if (string.Equals(pm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
               pids.Add(pid);
             }
@@ -1007,6 +1022,11 @@ namespace AuraBarNative {
       }
     }
 
+    // Echo the caller's "#<id>" tag so the Node side can match replies to requests
+    private static void Reply(string text) {
+      Console.WriteLine(replyPrefix + text);
+    }
+
     public static void Main(string[] args) {
       SetProcessDPIAware();
       if (args.Length > 0) {
@@ -1025,63 +1045,72 @@ namespace AuraBarNative {
         line = line.Trim();
         if (line.Length == 0) continue;
 
+        replyPrefix = "";
+        if (line[0] == '#') {
+          int sp = line.IndexOf(' ');
+          if (sp > 1) {
+            replyPrefix = line.Substring(0, sp) + " ";
+            line = line.Substring(sp + 1).Trim();
+          }
+        }
+
         try {
           if (line == "LIST") {
-            Console.WriteLine(ListWindowsJson());
+            Reply(ListWindowsJson());
           } else if (line == "LIST_BG") {
-            Console.WriteLine(ListBackgroundAppsJson());
+            Reply(ListBackgroundAppsJson());
           } else if (line.StartsWith("TOGGLE ")) {
             long hv = long.Parse(line.Substring(7).Trim());
-            Console.WriteLine(ToggleWindow(hv));
+            Reply(ToggleWindow(hv));
           } else if (line.StartsWith("CLOSE_WIN ")) {
             long hv = long.Parse(line.Substring(10).Trim());
-            Console.WriteLine(CloseWindowByHwnd(hv));
+            Reply(CloseWindowByHwnd(hv));
           } else if (line.StartsWith("OPEN_APP ")) {
             int pidVal = int.Parse(line.Substring(9).Trim());
-            Console.WriteLine(OpenAppFromPid(pidVal));
+            Reply(OpenAppFromPid(pidVal));
           } else if (line.StartsWith("KILL_APP ")) {
             int pidVal = int.Parse(line.Substring(9).Trim());
-            Console.WriteLine(KillAppDeep(pidVal));
+            Reply(KillAppDeep(pidVal));
           } else if (line.StartsWith("QUIT_APP ")) {
             int pidVal = int.Parse(line.Substring(9).Trim());
-            Console.WriteLine(QuitProcessApp(pidVal));
+            Reply(QuitProcessApp(pidVal));
           } else if (line == "KBD_LANG") {
-            Console.WriteLine(GetKbdLang());
+            Reply(GetKbdLang());
           } else if (line == "KBD_SWITCH") {
             if (lastExternalForeground != IntPtr.Zero) ForceFocus(lastExternalForeground);
             TapCombo(0x12, 0x10);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "START") {
             TapKey(0x5B);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "QUICK") {
             TapCombo(0x5B, 0x41);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "DESKTOP") {
             TapCombo(0x5B, 0x44);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "VOL_GET") {
-            Console.WriteLine(GetVolumeJson());
+            Reply(GetVolumeJson());
           } else if (line.StartsWith("VOL_SET ")) {
             int pct = int.Parse(line.Substring(8).Trim());
-            Console.WriteLine(SetVolumeLevel(pct));
+            Reply(SetVolumeLevel(pct));
           } else if (line == "VOL_UP") {
             TapKey(0xAF);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "VOL_DOWN") {
             TapKey(0xAE);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "VOL_MUTE") {
-            Console.WriteLine(ToggleVolumeMute());
+            Reply(ToggleVolumeMute());
           } else if (line == "MEDIA_PLAYPAUSE") {
             TapKey(0xB3);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "MEDIA_NEXT") {
             TapKey(0xB0);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "MEDIA_PREV") {
             TapKey(0xB1);
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line.StartsWith("TASKBAR_HIDE ")) {
             string[] parts = line.Substring(13).Split(' ');
             HideWindowsTaskbar(
@@ -1090,10 +1119,10 @@ namespace AuraBarNative {
               int.Parse(parts[2]),
               int.Parse(parts[3])
             );
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line == "TASKBAR_SHOW") {
             RestoreWindowsTaskbar();
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line.StartsWith("SET_HWNDS ")) {
             string[] parts = line.Substring(10).Split(' ');
             dockHwnd = new IntPtr(long.Parse(parts[0]));
@@ -1106,10 +1135,10 @@ namespace AuraBarNative {
                 dockTargetRect.top,
                 dockTargetRect.right - dockTargetRect.left,
                 dockTargetRect.bottom - dockTargetRect.top,
-                0x0010
+                keepOnTop ? 0x0010u : 0x0014u
               );
             }
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line.StartsWith("PLACE_DOCK ")) {
             string[] parts = line.Substring(11).Split(' ');
             int px = int.Parse(parts[0]);
@@ -1119,27 +1148,30 @@ namespace AuraBarNative {
             dockTargetRect = new RECT { left = px, top = py, right = px + pw, bottom = py + ph };
             hasDockTargetRect = true;
             if (dockHwnd != IntPtr.Zero) {
-              SetWindowPos(dockHwnd, new IntPtr(-1), px, py, pw, ph, 0x0010);
+              SetWindowPos(dockHwnd, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
             }
-            Console.WriteLine("ok");
+            Reply("ok");
           } else if (line.StartsWith("TOPMOST ")) {
             IntPtr h = new IntPtr(long.Parse(line.Substring(8).Trim()));
-            if (h != IntPtr.Zero) SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0013 | 0x4000);
-            Console.WriteLine("ok");
+            if (h != IntPtr.Zero && keepOnTop) SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0013 | 0x4000);
+            Reply("ok");
+          } else if (line.StartsWith("KEEP_TOP ")) {
+            keepOnTop = line.Substring(9).Trim() != "0";
+            Reply("ok");
           } else if (line.StartsWith("ICON ")) {
-            Console.WriteLine(GetFileIconDataUrl(line.Substring(5).Trim()));
+            Reply(GetFileIconDataUrl(line.Substring(5).Trim()));
           } else if (line.StartsWith("WINICON ")) {
             long hv = long.Parse(line.Substring(8).Trim());
-            Console.WriteLine(GetWindowIconDataUrl(hv));
+            Reply(GetWindowIconDataUrl(hv));
           } else if (line == "EXIT") {
             if (taskbarHiddenByUs) RestoreWindowsTaskbar();
-            Console.WriteLine("bye");
+            Reply("bye");
             break;
           } else {
-            Console.WriteLine("unknown");
+            Reply("unknown");
           }
         } catch (Exception ex) {
-          Console.WriteLine("ERR:" + JsonEscape(ex.Message));
+          Reply("ERR:" + JsonEscape(ex.Message));
         }
       }
 

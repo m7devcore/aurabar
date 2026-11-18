@@ -17,6 +17,8 @@ export function useMediaArtwork(media: MediaInfo | null): string | null {
       return;
     }
 
+    // Don't keep showing the previous track's cover while the new one loads
+    setArtworkUrl(null);
     let cancelled = false;
     const query = [media.artist, media.title].filter(Boolean).join(' ');
     fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`)

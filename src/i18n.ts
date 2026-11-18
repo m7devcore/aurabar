@@ -43,6 +43,16 @@ export interface Translations {
   quitApp: string;
   reminders: string;
   addReminderPlaceholder: string;
+  noReminders: string;
+  scanningApps: string;
+  refresh: string;
+  islandIdle: string;
+  islandHint: string;
+  play: string;
+  pause: string;
+  previousTrack: string;
+  nextTrack: string;
+  collapse: string;
 }
 
 const EN: Translations = {
@@ -87,7 +97,17 @@ const EN: Translations = {
   hideDock: 'Hide (Alt+Space)',
   quitApp: 'Quit AuraBar',
   reminders: 'Reminders for Selected Day',
-  addReminderPlaceholder: 'Add reminder for this date...'
+  addReminderPlaceholder: 'Add reminder for this date...',
+  noReminders: 'No reminders for this day',
+  scanningApps: 'Scanning Start Menu apps…',
+  refresh: 'Refresh',
+  islandIdle: 'Nothing playing',
+  islandHint: 'Play something in Spotify, YouTube, or any media app',
+  play: 'Play',
+  pause: 'Pause',
+  previousTrack: 'Previous track',
+  nextTrack: 'Next track',
+  collapse: 'Collapse'
 };
 
 const AR: Translations = {
@@ -132,7 +152,17 @@ const AR: Translations = {
   hideDock: 'إخفاء (Alt+Space)',
   quitApp: 'إغلاق AuraBar',
   reminders: 'ملاحظات اليوم المحدد',
-  addReminderPlaceholder: 'أضف تذكيراً لهذا اليوم...'
+  addReminderPlaceholder: 'أضف تذكيراً لهذا اليوم...',
+  noReminders: 'لا توجد تذكيرات لهذا اليوم',
+  scanningApps: 'جارٍ البحث عن التطبيقات…',
+  refresh: 'تحديث',
+  islandIdle: 'لا يوجد تشغيل',
+  islandHint: 'شغّل أي شيء على Spotify أو YouTube أو أي مشغل',
+  play: 'تشغيل',
+  pause: 'إيقاف مؤقت',
+  previousTrack: 'السابق',
+  nextTrack: 'التالي',
+  collapse: 'تصغير'
 };
 
 export function t(lang: Language): Translations {

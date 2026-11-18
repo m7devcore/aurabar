@@ -15,6 +15,10 @@ import { win32Daemon } from './win32Daemon';
 
 const iconCache = new Map<string, string>();
 const winIconCache = new Map<string, string>();
+// Targets with no extractable icon; retried after a while since a failure can also be a
+// transient daemon timeout (e.g. while it is still compiling at startup)
+const iconMissAt = new Map<string, number>();
+const ICON_MISS_RETRY_MS = 60000;
 
 function resolveKnownSystemPath(target: string): string | null {
   const lower = target.trim().toLowerCase();
@@ -53,6 +57,8 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
   }
   const key = target.toLowerCase();
   if (iconCache.has(key)) return iconCache.get(key);
+  const missAt = iconMissAt.get(key);
+  if (missAt !== undefined && Date.now() - missAt < ICON_MISS_RETRY_MS) return undefined;
 
   let resolved = resolveKnownSystemPath(target) ?? target;
 
@@ -101,6 +107,8 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
   } catch {
     // Ignore fallback failure
   }
+  if (iconMissAt.size > 500) iconMissAt.clear();
+  iconMissAt.set(key, Date.now());
   return undefined;
 }
 
@@ -172,21 +180,18 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
     }
   }
 
-  const sorted = Array.from(deduped.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .slice(0, 80);
+  // Return the full list so search covers every app; icons are fetched lazily by the renderer
+  // for the rows it actually shows (extracting hundreds up front stalls the daemon queue)
+  const sorted = Array.from(deduped.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const apps: InstalledApp[] = sorted.map((item) => ({
+    name: item.name,
+    target: item.fullPath,
+    exeName: resolveExeName(item.fullPath),
+    iconDataUrl: iconCache.get(item.fullPath.toLowerCase())
+  }));
 
-  const enriched: InstalledApp[] = await Promise.all(
-    sorted.map(async (item) => ({
-      name: item.name,
-      target: item.fullPath,
-      exeName: resolveExeName(item.fullPath),
-      iconDataUrl: await getIconDataUrl(item.fullPath)
-    }))
-  );
-
-  cachedInstalledApps = enriched;
-  return enriched;
+  cachedInstalledApps = apps;
+  return apps;
 }
 
 export async function createPinnedAppFromPath(filePath: string): Promise<PinnedApp | null> {
@@ -412,7 +417,13 @@ export async function launchTarget(target: string): Promise<boolean> {
 
 export async function pickExecutableOrFolder(
   win: BrowserWindow | null
-): Promise<{ path: string; name: string; kind: 'app' | 'folder'; iconDataUrl?: string } | null> {
+): Promise<{
+  path: string;
+  name: string;
+  kind: 'app' | 'folder';
+  iconDataUrl?: string;
+  exeName?: string;
+} | null> {
   const result = await dialog.showOpenDialog(win ?? undefined!, {
     title: 'Select an Application or Shortcut',
     properties: ['openFile'],
@@ -431,7 +442,8 @@ export async function pickExecutableOrFolder(
     path: chosen,
     name: cleanName,
     kind: 'app',
-    iconDataUrl
+    iconDataUrl,
+    exeName: resolveExeName(chosen)
   };
 }
 

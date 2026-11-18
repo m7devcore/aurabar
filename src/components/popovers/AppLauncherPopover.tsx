@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppWindow, Download, FolderPlus, Pin, PinOff, Plus, Search, Trash2 } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { t } from '../../i18n';
@@ -27,6 +27,8 @@ export function AppLauncherPopover({
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
   const [icon, setIcon] = useState('globe');
+  const [lazyIcons, setLazyIcons] = useState<Record<string, string>>({});
+  const requestedIconsRef = useRef(new Set<string>());
 
   useEffect(() => {
     void dockBridge
@@ -51,6 +53,24 @@ export function AppLauncherPopover({
       ? installedApps.filter((a) => a.name.toLowerCase().includes(query))
       : installedApps
   ).slice(0, 24);
+
+  // The installed list arrives without icons; fetch them only for the rows on screen
+  const visibleIconKey = filteredInstalled
+    .filter((a) => !a.iconDataUrl)
+    .map((a) => a.target)
+    .join('|');
+  useEffect(() => {
+    const targets = visibleIconKey ? visibleIconKey.split('|') : [];
+    for (const target of targets) {
+      if (requestedIconsRef.current.has(target)) continue;
+      requestedIconsRef.current.add(target);
+      // Results are kept even if the filter changed meanwhile; the row may scroll back into view
+      void dockBridge.getAppIcon(target).then((url) => {
+        if (url) setLazyIcons((prev) => ({ ...prev, [target]: url }));
+      });
+    }
+  }, [visibleIconKey]);
+  const iconFor = (app: InstalledApp) => app.iconDataUrl ?? lazyIcons[app.target];
 
   const isPinnedApp = (tPath: string, exeName?: string) => {
     const check = (p: PinnedApp): boolean =>
@@ -89,7 +109,7 @@ export function AppLauncherPopover({
       kind: 'app',
       icon: 'app',
       color: '#38BDF8',
-      iconDataUrl: app.iconDataUrl,
+      iconDataUrl: iconFor(app),
       exeName: app.exeName
     };
     onSavePinnedApps([...pinnedApps, next]);
@@ -106,7 +126,7 @@ export function AppLauncherPopover({
       icon: 'app',
       color: '#38BDF8',
       iconDataUrl: picked.iconDataUrl,
-      exeName: picked.name.toLowerCase()
+      exeName: picked.exeName ?? picked.name.toLowerCase()
     };
     onSavePinnedApps([...pinnedApps, next]);
   };
@@ -263,11 +283,12 @@ export function AppLauncherPopover({
             : `Installed Apps (${installedApps.length})`}
         </span>
         {loadingInstalled ? (
-          <div className="card muted-sm">Scanning Start Menu apps...</div>
+          <div className="card muted-sm">{dict.scanningApps}</div>
         ) : (
           <div className="grid-3">
             {filteredInstalled.map((app) => {
               const pinned = isPinnedApp(app.target, app.exeName);
+              const appIcon = iconFor(app);
               return (
                 <div key={app.target} className="card row-between" style={{ padding: '7px 10px' }}>
                   <button
@@ -283,8 +304,8 @@ export function AppLauncherPopover({
                     }}
                     onClick={() => void dockBridge.launchTarget(app.target)}
                   >
-                    {app.iconDataUrl ? (
-                      <img className="app-icon-img" src={app.iconDataUrl} alt={app.name} />
+                    {appIcon ? (
+                      <img className="app-icon-img" src={appIcon} alt={app.name} />
                     ) : (
                       <AppWindow size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                     )}
@@ -324,7 +345,7 @@ export function AppLauncherPopover({
             style={{ padding: '4px 9px', fontSize: 11.5 }}
             onClick={onRefreshWindows}
           >
-            Refresh
+            {dict.refresh}
           </button>
         </div>
 

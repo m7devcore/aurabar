@@ -10,9 +10,11 @@ import {
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
 import { VolumeSlider } from './VolumeSlider';
-import type { MediaInfo } from '../types';
+import { t } from '../i18n';
+import type { Language, MediaInfo } from '../types';
 
 interface Props {
+  lang: Language;
   media: MediaInfo | null;
   expanded: boolean;
   onToggleExpand: (next: boolean) => void;
@@ -48,11 +50,13 @@ function cleanSourceLabel(appId?: string): string | null {
 }
 
 export function DynamicIsland({
+  lang,
   media,
   expanded,
   onToggleExpand,
   onRefreshMedia
 }: Props) {
+  const dict = t(lang);
   const artworkUrl = useMediaArtwork(media);
   const [livePosSec, setLivePosSec] = useState<number>(0);
   const islandRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +80,7 @@ export function DynamicIsland({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(report) : null;
     if (ro && islandRef.current) ro.observe(islandRef.current);
     return () => ro?.disconnect();
-  }, [expanded, media?.title, artworkUrl]);
+  }, [expanded, media?.title, artworkUrl, Boolean(media)]);
 
   const trackKey = media ? `${media.artist} - ${media.title}` : '';
   const isPlaying = media?.status === 'Playing';
@@ -103,8 +107,9 @@ export function DynamicIsland({
   };
 
   const endSec = media?.endSec ?? 0;
-  const pct = endSec > 0 ? Math.min(100, Math.round((livePosSec / endSec) * 100)) : 0;
+  const progress = endSec > 0 ? Math.min(1, Math.max(0, livePosSec / endSec)) : 0;
   const sourceLabel = cleanSourceLabel(media?.appId);
+  const isIdle = !media && !expanded;
 
   return (
     <div
@@ -117,11 +122,13 @@ export function DynamicIsland({
     >
       <div
         ref={islandRef}
-        className={`dynamic-island ${expanded ? 'expanded' : ''} ${isPlaying ? 'is-playing' : ''}`}
+        className={`dynamic-island ${expanded ? 'expanded' : ''} ${isPlaying ? 'is-playing' : ''} ${
+          isIdle ? 'is-idle' : ''
+        }`}
         onClick={() => {
           if (!expanded) onToggleExpand(true);
         }}
-        title={!expanded ? (media ? `${media.title} — ${media.artist}` : 'AuraBar Music Island') : undefined}
+        title={!expanded ? (media ? `${media.title} — ${media.artist}` : dict.islandIdle) : undefined}
       >
         {!expanded ? (
           <div className="island-compact-row">
@@ -129,54 +136,38 @@ export function DynamicIsland({
               <img className="island-art-sm" src={artworkUrl} alt={media?.title ?? ''} />
             ) : (
               <div className="island-art-sm">
-                <Music size={13} color="#ffffff" />
+                <Music size={13} />
               </div>
             )}
 
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span
-                style={{
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {media?.title || 'No Media Playing'}
+            <div className="island-compact-text">
+              <span className="island-compact-title" dir="auto">
+                {media?.title || dict.islandIdle}
               </span>
               {media?.artist && (
-                <span
-                  style={{
-                    fontSize: 11.5,
-                    color: 'var(--text-muted)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    flexShrink: 1
-                  }}
-                >
+                <span className="island-compact-artist" dir="auto">
                   {media.artist}
                 </span>
               )}
             </div>
 
-            <button
-              className={`island-eq-btn ${isPlaying ? 'eq-playing' : ''}`}
-              aria-label={isPlaying ? 'Pause media' : 'Play media'}
-              aria-pressed={isPlaying}
-              onClick={(e) => {
-                e.stopPropagation();
-                void sendCmd('playPause');
-              }}
-              title={isPlaying ? 'Pause' : 'Play'}
-            >
-              <span className="eq-bar" />
-              <span className="eq-bar" />
-              <span className="eq-bar" />
-              <span className="eq-bar" />
-            </button>
+            {media && (
+              <button
+                className={`island-eq-btn ${isPlaying ? 'eq-playing' : ''}`}
+                aria-label={isPlaying ? dict.pause : dict.play}
+                aria-pressed={isPlaying}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void sendCmd('playPause');
+                }}
+                title={isPlaying ? dict.pause : dict.play}
+              >
+                <span className="eq-bar" />
+                <span className="eq-bar" />
+                <span className="eq-bar" />
+                <span className="eq-bar" />
+              </button>
+            )}
           </div>
         ) : (
           <div className="island-expanded-body">
@@ -191,29 +182,11 @@ export function DynamicIsland({
                 )}
 
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 14.5,
-                      fontWeight: 600,
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {media?.title || 'Nothing Playing'}
+                  <div className="island-expanded-title" dir="auto">
+                    {media?.title || dict.islandIdle}
                   </div>
-                  <div
-                    style={{
-                      fontSize: 12.5,
-                      color: 'var(--text-muted)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      marginTop: 2
-                    }}
-                  >
-                    {media?.artist || 'Start Spotify, YouTube, or any media'}
+                  <div className="island-expanded-artist" dir="auto">
+                    {media?.artist || dict.islandHint}
                   </div>
                   {sourceLabel && <span className="island-source-badge">{sourceLabel}</span>}
                 </div>
@@ -221,12 +194,12 @@ export function DynamicIsland({
 
               <button
                 className="island-mini-action"
-                aria-label="Collapse music player"
+                aria-label={dict.collapse}
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleExpand(false);
                 }}
-                title="Collapse"
+                title={dict.collapse}
               >
                 <ChevronUp size={15} />
               </button>
@@ -234,7 +207,10 @@ export function DynamicIsland({
 
             <div className="stack-sm" style={{ gap: 5 }}>
               <div className="island-timeline-track">
-                <div className="island-timeline-fill" style={{ width: `${pct}%` }} />
+                <div
+                  className="island-timeline-fill"
+                  style={{ transform: `scaleX(${progress.toFixed(4)})` }}
+                />
               </div>
               <div className="row-between tabular" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 <span>{formatTime(livePosSec)}</span>
@@ -245,19 +221,19 @@ export function DynamicIsland({
             <div className="row-between" style={{ justifyContent: 'center', gap: 18 }}>
               <button
                 className="island-ctrl-btn"
-                aria-label="Previous track"
+                aria-label={dict.previousTrack}
                 onClick={() => void sendCmd('previous')}
-                title="Previous Track"
+                title={dict.previousTrack}
               >
                 <SkipBack size={17} />
               </button>
 
               <button
                 className="island-play-btn"
-                aria-label={isPlaying ? 'Pause' : 'Play'}
+                aria-label={isPlaying ? dict.pause : dict.play}
                 aria-pressed={isPlaying}
                 onClick={() => void sendCmd('playPause')}
-                title={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? dict.pause : dict.play}
               >
                 {isPlaying ? (
                   <Pause size={20} fill="currentColor" />
@@ -268,9 +244,9 @@ export function DynamicIsland({
 
               <button
                 className="island-ctrl-btn"
-                aria-label="Next track"
+                aria-label={dict.nextTrack}
                 onClick={() => void sendCmd('next')}
-                title="Next Track"
+                title={dict.nextTrack}
               >
                 <SkipForward size={17} />
               </button>

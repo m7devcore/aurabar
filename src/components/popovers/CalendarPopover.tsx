@@ -32,9 +32,20 @@ export function CalendarPopover({ lang, events, onSaveEvents }: Props) {
     return cells;
   }, [year, month]);
 
-  const monthLabel = cursor.toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', {
+  const locale = lang === 'ar' ? 'ar-EG' : 'en-US';
+  const monthLabel = cursor.toLocaleDateString(locale, {
     month: 'long',
     year: 'numeric'
+  });
+  // 2023-01-01 was a Sunday, matching the Sunday-first grid below
+  const weekdayLabels = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(locale, { weekday: 'narrow' });
+    return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2023, 0, 1 + i)));
+  }, [locale]);
+  const selectedLabel = new Date(`${selectedDate}T00:00:00`).toLocaleDateString(locale, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
   });
 
   const dayEvents = events.filter((e) => e.date === selectedDate);
@@ -59,21 +70,23 @@ export function CalendarPopover({ lang, events, onSaveEvents }: Props) {
         <div className="row-between">
           <button
             className="btn btn-icon"
+            aria-label={lang === 'ar' ? 'الشهر السابق' : 'Previous month'}
             onClick={() => setCursor(new Date(year, month - 1, 1))}
           >
-            <ChevronLeft size={15} />
+            <ChevronLeft size={15} className="flip-rtl" />
           </button>
           <strong style={{ fontSize: 13 }}>{monthLabel}</strong>
           <button
             className="btn btn-icon"
+            aria-label={lang === 'ar' ? 'الشهر التالي' : 'Next month'}
             onClick={() => setCursor(new Date(year, month + 1, 1))}
           >
-            <ChevronRight size={15} />
+            <ChevronRight size={15} className="flip-rtl" />
           </button>
         </div>
 
         <div className="cal-grid muted-sm" style={{ textAlign: 'center', fontSize: 11 }}>
-          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          {weekdayLabels.map((d, i) => (
             <div key={i}>{d}</div>
           ))}
         </div>
@@ -101,7 +114,7 @@ export function CalendarPopover({ lang, events, onSaveEvents }: Props) {
 
       <div className="stack-sm">
         <span className="muted-sm tabular">
-          {dict.reminders} ({selectedDate})
+          {dict.reminders} · {selectedLabel}
         </span>
         <form className="row-gap" onSubmit={addEvent}>
           <input
@@ -117,14 +130,15 @@ export function CalendarPopover({ lang, events, onSaveEvents }: Props) {
 
         <div className="stack-sm" style={{ maxHeight: 200, overflowY: 'auto' }}>
           {dayEvents.length === 0 ? (
-            <div className="card muted-sm">No reminders for {selectedDate}</div>
+            <div className="card muted-sm">{dict.noReminders}</div>
           ) : (
             dayEvents.map((ev) => (
               <div key={ev.id} className="card row-between" style={{ padding: '8px 10px' }}>
-                <span style={{ fontSize: 13 }}>{ev.title}</span>
+                <span style={{ fontSize: 13 }} dir="auto">{ev.title}</span>
                 <button
                   className="btn btn-icon"
                   style={{ width: 24, height: 24, borderColor: 'transparent' }}
+                  aria-label={lang === 'ar' ? 'حذف' : 'Delete reminder'}
                   onClick={() => removeEvent(ev.id)}
                 >
                   <Trash2 size={13} />

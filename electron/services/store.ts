@@ -94,15 +94,25 @@ export function loadConfig(): AppConfig {
       calendarEvents: Array.isArray(parsed.calendarEvents) ? parsed.calendarEvents : []
     };
   } catch {
+    // Keep the unreadable file around; otherwise the next save silently replaces the user's
+    // pinned apps and reminders with defaults
+    try {
+      fs.copyFileSync(filePath, `${filePath}.corrupt-${Date.now()}.bak`);
+    } catch {
+      // Nothing to back up
+    }
     return structuredClone(DEFAULT_CONFIG);
   }
 }
 
 export function saveConfig(config: AppConfig): AppConfig {
   const filePath = getConfigPath();
+  const tmpPath = `${filePath}.tmp`;
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
+    // Write-then-rename so a crash mid-write never leaves a truncated config behind
+    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, filePath);
   } catch (err) {
     console.error('Failed to save config:', err);
   }

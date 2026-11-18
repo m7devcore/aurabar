@@ -2,20 +2,21 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import path from 'node:path';
 
-interface PendingItem {
-  resolve: (value: string) => void;
-}
+const COMMAND_TIMEOUT_MS = 3500;
 
 class Win32Daemon {
   private proc: ChildProcessByStdio<Writable, Readable, null> | null = null;
   private buffer = '';
-  private queue: PendingItem[] = [];
+  // Every command is tagged "#<id> CMD" and the daemon echoes "#<id> <reply>", so a reply that
+  // arrives after its command timed out is dropped instead of being handed to the next caller.
+  private pending = new Map<number, (value: string) => void>();
+  private nextId = 1;
   private commandChain: Promise<void> = Promise.resolve();
 
   start(): void {
     if (this.proc && !this.proc.killed) return;
     const scriptPath = path.join(__dirname, 'native', 'win32-daemon.ps1');
-    this.proc = spawn(
+    const proc = spawn(
       'powershell.exe',
       [
         '-NoProfile',
@@ -31,33 +32,54 @@ class Win32Daemon {
         windowsHide: true
       }
     );
+    this.proc = proc;
+    this.buffer = '';
 
-    this.proc.stdout.setEncoding('utf8');
-    this.proc.stdout.on('data', (chunk: string) => {
+    // Writing to a pipe whose reader died emits EPIPE asynchronously; unhandled it crashes main
+    proc.stdin.on('error', () => undefined);
+
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk: string) => {
+      if (this.proc !== proc) return;
       this.buffer += chunk;
       let idx = this.buffer.indexOf('\n');
       while (idx !== -1) {
         const line = this.buffer.slice(0, idx).replace(/\r$/, '');
         this.buffer = this.buffer.slice(idx + 1);
-        const pending = this.queue.shift();
-        if (pending) pending.resolve(line);
+        this.handleLine(line);
         idx = this.buffer.indexOf('\n');
       }
     });
 
-    this.proc.on('exit', () => {
+    proc.on('exit', () => {
+      // A stale process exiting must not tear down a newer one started after stop()
+      if (this.proc !== proc) return;
       this.proc = null;
-      while (this.queue.length > 0) {
-        const p = this.queue.shift();
-        p?.resolve('');
-      }
+      this.buffer = '';
+      this.rejectAllPending();
     });
+  }
+
+  private handleLine(line: string): void {
+    const match = /^#(\d+) ?(.*)$/s.exec(line);
+    if (!match) return;
+    const resolve = this.pending.get(Number(match[1]));
+    if (!resolve) return;
+    this.pending.delete(Number(match[1]));
+    resolve(match[2]);
+  }
+
+  private rejectAllPending(): void {
+    const waiters = Array.from(this.pending.values());
+    this.pending.clear();
+    for (const resolve of waiters) resolve('');
   }
 
   stop(): void {
     if (this.proc && !this.proc.killed) {
       const p = this.proc;
       this.proc = null;
+      this.rejectAllPending();
       try {
         p.stdin.write('EXIT\n');
         p.stdin.end();
@@ -77,27 +99,25 @@ class Win32Daemon {
         if (!this.proc || this.proc.killed) {
           this.start();
         }
-        if (!this.proc) {
+        const proc = this.proc;
+        if (!proc) {
           resolve('');
           return;
         }
+        const id = this.nextId++;
         const timer = setTimeout(() => {
-          const idx = this.queue.findIndex((q) => q.resolve === wrappedResolve);
-          if (idx !== -1) this.queue.splice(idx, 1);
+          this.pending.delete(id);
           resolve('');
-        }, 3500);
+        }, COMMAND_TIMEOUT_MS);
 
-        const wrappedResolve = (val: string) => {
+        this.pending.set(id, (val: string) => {
           clearTimeout(timer);
           resolve(val);
-        };
-
-        this.queue.push({ resolve: wrappedResolve });
+        });
         try {
-          this.proc.stdin.write(`${command}\n`);
+          proc.stdin.write(`#${id} ${command}\n`);
         } catch {
-          const idx = this.queue.findIndex((q) => q.resolve === wrappedResolve);
-          if (idx !== -1) this.queue.splice(idx, 1);
+          this.pending.delete(id);
           clearTimeout(timer);
           resolve('');
         }

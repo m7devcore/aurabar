@@ -9,7 +9,7 @@ import {
   Tray
 } from 'electron';
 import path from 'node:path';
-import { getCurrentMedia, sendMediaCommand } from './services/mediaControl';
+import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/mediaControl';
 import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
 import { win32Daemon } from './services/win32Daemon';
@@ -38,7 +38,7 @@ import {
   switchKeyboardLayout,
   toggleSystemMute
 } from './services/windowsManager';
-import type { AppConfig, DockSettings } from '../src/types';
+import type { AppConfig, DockSettings, PinnedApp } from '../src/types';
 
 interface HitRect {
   left: number;
@@ -143,14 +143,32 @@ function getHwndNumber(win: BrowserWindow | null): string {
   return '0';
 }
 
+function applyTopmost(win: BrowserWindow | null): void {
+  if (!win || win.isDestroyed()) return;
+  win.setAlwaysOnTop(currentConfig?.settings.alwaysOnTop ?? true, 'screen-saver');
+}
+
+function syncKeepOnTop(settings: DockSettings): void {
+  void win32Daemon.send(`KEEP_TOP ${settings.alwaysOnTop ? 1 : 0}`);
+  applyTopmost(dockWindow);
+  applyTopmost(islandWindow);
+}
+
 function ensureOnTop(win: BrowserWindow | null): void {
   if (!win || win.isDestroyed()) return;
-  win.setAlwaysOnTop(true, 'screen-saver');
+  applyTopmost(win);
   win.moveTop();
   const hwnd = getHwndNumber(win);
   if (hwnd !== '0') {
     void win32Daemon.send(`TOPMOST ${hwnd}`);
   }
+}
+
+// Keep the transparent overlay windows from ever navigating away from the app (e.g. a file
+// dropped outside the dock's drop zone) or spawning new windows
+function lockDownNavigation(win: BrowserWindow): void {
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 }
 
 function placeDockPhysical(settings: DockSettings): void {
@@ -170,12 +188,12 @@ function placeDockPhysical(settings: DockSettings): void {
 
 function applyAllLayouts(settings: DockSettings): void {
   if (dockWindow && !dockWindow.isDestroyed()) {
-    dockWindow.setAlwaysOnTop(true, 'screen-saver');
+    applyTopmost(dockWindow);
     dockWindow.setBounds(computeDockBounds(settings), false);
     placeDockPhysical(settings);
   }
   if (islandWindow && !islandWindow.isDestroyed()) {
-    islandWindow.setAlwaysOnTop(true, 'screen-saver');
+    applyTopmost(islandWindow);
     islandWindow.setBounds(computeIslandBounds(), false);
     if (settings.musicPosition === 'top') {
       if (!islandWindow.isVisible()) {
@@ -200,7 +218,8 @@ function loadView(win: BrowserWindow, view: 'dock' | 'island'): void {
 }
 
 function createWindows(): void {
-  currentConfig = loadConfig();
+  const loaded = loadConfig();
+  currentConfig = { ...loaded, pinnedApps: withResolvedExeNames(loaded.pinnedApps) };
   if (currentConfig.settings.replaceWindowsTaskbar) {
     syncTaskbarReplacement(currentConfig.settings);
   }
@@ -226,12 +245,13 @@ function createWindows(): void {
       sandbox: false
     }
   });
-  dockWindow.setAlwaysOnTop(true, 'screen-saver');
+  applyTopmost(dockWindow);
   dockWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   dockWindow.setIgnoreMouseEvents(true);
+  lockDownNavigation(dockWindow);
   loadView(dockWindow, 'dock');
   dockWindow.once('ready-to-show', () => {
-    dockWindow?.setAlwaysOnTop(true, 'screen-saver');
+    applyTopmost(dockWindow);
     dockWindow?.showInactive();
     void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
     placeDockPhysical(currentConfig.settings);
@@ -266,7 +286,7 @@ function createWindows(): void {
       isPopoverOpen = false;
       dockWindow?.webContents.send('aurabar:blurred');
     }
-    dockWindow?.setAlwaysOnTop(true, 'screen-saver');
+    applyTopmost(dockWindow);
   });
 
   islandWindow = new BrowserWindow({
@@ -289,9 +309,10 @@ function createWindows(): void {
       sandbox: false
     }
   });
-  islandWindow.setAlwaysOnTop(true, 'screen-saver');
+  applyTopmost(islandWindow);
   islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   islandWindow.setIgnoreMouseEvents(true);
+  lockDownNavigation(islandWindow);
   loadView(islandWindow, 'island');
   islandWindow.once('ready-to-show', () => {
     void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
@@ -306,21 +327,69 @@ function createWindows(): void {
       isIslandExpanded = false;
       islandWindow?.webContents.send('aurabar:island-blurred');
     }
-    islandWindow?.setAlwaysOnTop(true, 'screen-saver');
+    applyTopmost(islandWindow);
   });
 
+  syncKeepOnTop(currentConfig.settings);
   void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
 }
 
 let rebuildTrayMenu: () => void = () => undefined;
 
-function broadcastConfig(cfg: AppConfig): void {
-  if (dockWindow && !dockWindow.isDestroyed()) {
-    dockWindow.webContents.send('aurabar:config-updated', cfg);
+// The window that saved a config already has it; echoing it back would race with newer local
+// edits (e.g. typing a folder name) and briefly revert them
+function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
+  for (const win of [dockWindow, islandWindow]) {
+    if (win && !win.isDestroyed() && win.webContents !== except) {
+      win.webContents.send('aurabar:config-updated', cfg);
+    }
   }
-  if (islandWindow && !islandWindow.isDestroyed()) {
-    islandWindow.webContents.send('aurabar:config-updated', cfg);
+}
+
+function layoutKeyOf(s: DockSettings): string {
+  return [s.replaceWindowsTaskbar, s.position, s.compactMode, s.musicPosition, s.alwaysOnTop].join('|');
+}
+
+function withResolvedExeNames(apps: PinnedApp[]): PinnedApp[] {
+  return apps.map((item) => {
+    if (item.kind === 'group') {
+      return { ...item, children: item.children ? withResolvedExeNames(item.children) : [] };
+    }
+    if (item.exeName || !item.target) return item;
+    const exeName = resolveExeName(item.target);
+    return exeName ? { ...item, exeName } : item;
+  });
+}
+
+async function backfillPinnedIcons(): Promise<void> {
+  const missing = new Map<string, string>();
+  const collect = (apps: PinnedApp[]) => {
+    for (const item of apps) {
+      if (item.kind === 'group') collect(item.children ?? []);
+      else if (!item.iconDataUrl && item.target) missing.set(item.id, item.target);
+    }
+  };
+  collect(currentConfig.pinnedApps);
+  if (missing.size === 0) return;
+
+  const found = new Map<string, string>();
+  for (const [id, target] of missing) {
+    const url = await getIconDataUrl(target);
+    if (url) found.set(id, url);
   }
+  if (found.size === 0) return;
+
+  // Merge into whatever the config is *now*; the user may have edited pins meanwhile
+  const apply = (apps: PinnedApp[]): PinnedApp[] =>
+    apps.map((item) =>
+      item.kind === 'group'
+        ? { ...item, children: apply(item.children ?? []) }
+        : !item.iconDataUrl && found.has(item.id)
+          ? { ...item, iconDataUrl: found.get(item.id) }
+          : item
+    );
+  currentConfig = saveConfig({ ...currentConfig, pinnedApps: apply(currentConfig.pinnedApps) });
+  broadcastConfig(currentConfig);
 }
 
 function setupTray(): void {
@@ -448,31 +517,33 @@ function updateCursorHitTesting(): void {
 }
 
 function registerIpcHandlers(): void {
+  let iconBackfillStarted = false;
   ipcMain.handle('aurabar:get-config', () => {
-    const missingIcons = currentConfig.pinnedApps.some((item) => !item.iconDataUrl);
-    if (missingIcons) {
-      void Promise.all(
-        currentConfig.pinnedApps.map(async (item) => ({
-          ...item,
-          iconDataUrl: item.iconDataUrl || (await getIconDataUrl(item.target)),
-          exeName: item.exeName ?? resolveExeName(item.target)
-        }))
-      ).then((enrichedApps) => {
-        currentConfig = { ...currentConfig, pinnedApps: enrichedApps };
-        dockWindow?.webContents.send('aurabar:config-updated', currentConfig);
-      });
+    if (!iconBackfillStarted) {
+      iconBackfillStarted = true;
+      void backfillPinnedIcons();
     }
     return currentConfig;
   });
 
   ipcMain.handle('aurabar:get-app-icon', (_e, target: string) => getIconDataUrl(target));
 
-  ipcMain.handle('aurabar:save-config', (_e, nextConfig: AppConfig) => {
-    currentConfig = saveConfig(nextConfig);
-    syncTaskbarReplacement(currentConfig.settings);
-    applyAllLayouts(currentConfig.settings);
-    broadcastConfig(currentConfig);
-    rebuildTrayMenu();
+  ipcMain.handle('aurabar:save-config', (e, nextConfig: AppConfig) => {
+    const prevSettings = currentConfig.settings;
+    currentConfig = saveConfig({
+      ...nextConfig,
+      pinnedApps: withResolvedExeNames(nextConfig.pinnedApps)
+    });
+    // Pin edits and reminders save often; only touch window layout when it can have changed
+    if (layoutKeyOf(prevSettings) !== layoutKeyOf(currentConfig.settings)) {
+      if (prevSettings.alwaysOnTop !== currentConfig.settings.alwaysOnTop) {
+        syncKeepOnTop(currentConfig.settings);
+      }
+      syncTaskbarReplacement(currentConfig.settings);
+      applyAllLayouts(currentConfig.settings);
+      rebuildTrayMenu();
+    }
+    broadcastConfig(currentConfig, e.sender);
     return currentConfig;
   });
 
@@ -612,6 +683,7 @@ if (!singleInstance) {
   app.on('before-quit', (e) => {
     if (isQuitting) return;
     isQuitting = true;
+    stopMediaWorker();
     dockWindow?.hide();
     islandWindow?.hide();
     if (taskbarWasAutoHidden) {
@@ -629,6 +701,7 @@ if (!singleInstance) {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    stopMediaWorker();
     if (taskbarWasAutoHidden) {
       restoreWindowsTaskbarSync();
     }

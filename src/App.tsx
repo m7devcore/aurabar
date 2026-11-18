@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { DockBar } from './components/DockBar';
 import { DynamicIsland } from './components/DynamicIsland';
@@ -45,21 +45,38 @@ export function App() {
   const [kbdLang, setKbdLang] = useState('EN');
   const [now, setNow] = useState(() => new Date());
 
+  // Always merge edits into the newest config; render-time closures can be a save behind
+  const configRef = useRef<AppConfig | null>(null);
+  configRef.current = config;
+
   const persistConfig = useCallback(async (next: AppConfig) => {
+    configRef.current = next;
     setConfig(next);
-    await dockBridge.saveConfig(next);
+    const saved = await dockBridge.saveConfig(next);
+    // Main may enrich the config (e.g. resolve exe names for running indicators); adopt it only
+    // if no newer local edit happened while the save was in flight
+    if (configRef.current === next) {
+      configRef.current = saved;
+      setConfig(saved);
+    }
   }, []);
+
+  const patchConfig = useCallback(
+    (patch: Partial<Omit<AppConfig, 'settings'>>) => {
+      const base = configRef.current;
+      if (!base) return;
+      void persistConfig({ ...base, ...patch });
+    },
+    [persistConfig]
+  );
 
   const updateSettings = useCallback(
     (patch: Partial<DockSettings>) => {
-      if (!config) return;
-      const next: AppConfig = {
-        ...config,
-        settings: { ...config.settings, ...patch }
-      };
-      void persistConfig(next);
+      const base = configRef.current;
+      if (!base) return;
+      void persistConfig({ ...base, settings: { ...base.settings, ...patch } });
     },
-    [config, persistConfig]
+    [persistConfig]
   );
 
   // Initial config load + live Tray / Settings sync for both Dock & Top Island
@@ -68,6 +85,17 @@ export function App() {
     return dockBridge.onConfigUpdated((updated) => {
       setConfig(updated);
     });
+  }, []);
+
+  // A file dropped anywhere outside the dock's own drop zone must not be opened by Chromium
+  useEffect(() => {
+    const block = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('dragover', block);
+    window.addEventListener('drop', block);
+    return () => {
+      window.removeEventListener('dragover', block);
+      window.removeEventListener('drop', block);
+    };
   }, []);
 
   // Theme & RTL attribute sync
@@ -130,14 +158,23 @@ export function App() {
     setMedia(m);
   }, []);
 
+  // Only poll where music is actually on screen: the island when it is shown, the dock when the
+  // inline player or the media panel is visible
+  const musicPosition = config?.settings.musicPosition;
+  const needsMedia =
+    VIEW_MODE === 'island'
+      ? musicPosition === 'top'
+      : musicPosition === 'taskbar' || activePanel === 'media';
+
   useEffect(() => {
+    if (!needsMedia) return;
     void refreshMedia();
     const intervalMs = VIEW_MODE === 'island' ? 1500 : 2500;
     const id = setInterval(() => {
       void refreshMedia();
     }, intervalMs);
     return () => clearInterval(id);
-  }, [refreshMedia]);
+  }, [needsMedia, refreshMedia]);
 
   // Running windows polling
   const refreshWindows = useCallback(async () => {
@@ -159,6 +196,7 @@ export function App() {
   if (VIEW_MODE === 'island') {
     return (
       <DynamicIsland
+        lang={config?.settings.language ?? 'en'}
         media={media}
         expanded={islandExpanded}
         onToggleExpand={(open) => {
@@ -194,7 +232,7 @@ export function App() {
             lang={settings.language}
             pinnedApps={config.pinnedApps}
             runningWindows={runningWindows}
-            onSavePinnedApps={(pinnedApps) => void persistConfig({ ...config, pinnedApps })}
+            onSavePinnedApps={(pinnedApps) => patchConfig({ pinnedApps })}
             onRefreshWindows={() => void refreshWindows()}
           />
         )}
@@ -220,7 +258,7 @@ export function App() {
           <CalendarPopover
             lang={settings.language}
             events={config.calendarEvents}
-            onSaveEvents={(calendarEvents) => void persistConfig({ ...config, calendarEvents })}
+            onSaveEvents={(calendarEvents) => patchConfig({ calendarEvents })}
           />
         )}
 
@@ -254,7 +292,7 @@ export function App() {
         kbdLang={kbdLang}
         now={now}
         onTogglePanel={handleTogglePanel}
-        onSavePinnedApps={(pinnedApps) => void persistConfig({ ...config, pinnedApps })}
+        onSavePinnedApps={(pinnedApps) => patchConfig({ pinnedApps })}
         onRefreshMedia={() => void refreshMedia()}
         onRefreshWindows={() => void refreshWindows()}
         onSwitchKbdLang={() => {

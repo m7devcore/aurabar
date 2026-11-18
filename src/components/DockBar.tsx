@@ -132,6 +132,7 @@ export function DockBar({
   const [liveDrag, setLiveDrag] = useState<LiveDragPlan | null>(null);
   const [justDropped, setJustDropped] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [folderNameDraft, setFolderNameDraft] = useState<string | null>(null);
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
@@ -150,6 +151,20 @@ export function DockBar({
   const activeFolderObj = openFolder
     ? pinnedApps.find((p) => p.id === openFolder.id && p.kind === 'group') ?? null
     : null;
+
+  useEffect(() => {
+    setFolderNameDraft(null);
+  }, [openFolder?.id]);
+
+  const commitFolderName = () => {
+    if (!activeFolderObj || folderNameDraft === null) return;
+    const nextName = folderNameDraft.trim() || activeFolderObj.name;
+    setFolderNameDraft(null);
+    if (nextName === activeFolderObj.name) return;
+    onSavePinnedApps(
+      pinnedApps.map((p) => (p.id === activeFolderObj.id ? { ...p, name: nextName } : p))
+    );
+  };
 
   // Live sync tray Volume + Wi-Fi/Network state cleanly
   useEffect(() => {
@@ -285,6 +300,8 @@ export function DockBar({
         setCtxMenu(null);
       }
       if (openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
+        // Blur first so an in-progress folder rename commits before the input unmounts
+        (document.activeElement as HTMLElement | null)?.blur?.();
         setOpenFolder(null);
       }
       if (ccFlyout && !target.closest('.control-center-flyout') && !target.closest('.cc-trigger-btn')) {
@@ -1021,19 +1038,21 @@ export function DockBar({
         >
           <input
             className="folder-title-input"
-            value={activeFolderObj.name}
+            dir="auto"
+            value={folderNameDraft ?? activeFolderObj.name}
             onPointerDown={(e) => e.stopPropagation()}
-            onChange={(e) => {
-              const nextName = e.target.value;
-              onSavePinnedApps(
-                pinnedApps.map((p) => (p.id === activeFolderObj.id ? { ...p, name: nextName } : p))
-              );
-            }}
+            onChange={(e) => setFolderNameDraft(e.target.value)}
             onFocus={() => void dockBridge.setPopoverOpen(true)}
+            onBlur={() => {
+              commitFolderName();
+              // Focusing the input pinned the window interactive; release it so the transparent
+              // canvas around the dock goes back to click-through
+              if (!activePanel) void dockBridge.setPopoverOpen(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
             }}
-            title="Click to rename folder"
+            title={settings.language === 'ar' ? 'اضغط لإعادة التسمية' : 'Click to rename folder'}
           />
 
           <div className="folder-apps-grid">
