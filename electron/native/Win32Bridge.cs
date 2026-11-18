@@ -114,6 +114,9 @@ namespace AuraBarNative {
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
@@ -130,6 +133,12 @@ namespace AuraBarNative {
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageName(IntPtr hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetApplicationUserModelId(IntPtr hProcess, ref uint applicationUserModelIdLength, StringBuilder applicationUserModelId);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
@@ -193,6 +202,7 @@ namespace AuraBarNative {
     private const uint GW_HWNDPREV = 3;
     private const uint GW_OWNER = 4;
     private const int DWMWA_CLOAKED = 14;
+    private const uint PROCESS_TERMINATE = 0x0001;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     private static IntPtr lastExternalForeground = IntPtr.Zero;
@@ -204,6 +214,8 @@ namespace AuraBarNative {
     private static long nextSeenSeq = 1;
     private static readonly Dictionary<long, long> firstSeenMap = new Dictionary<long, long>();
     private static readonly Dictionary<uint, ProcMeta> procCache = new Dictionary<uint, ProcMeta>();
+    private static readonly Dictionary<string, int> subsystemCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, string> descCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private static bool taskbarHiddenByUs = false;
     private static int savedScreenLeft = 0;
     private static int savedScreenRight = 1920;
@@ -349,13 +361,10 @@ namespace AuraBarNative {
             if (!IsAuraBarWindow(pid, fg) && IsTaskbarWindow(fg)) {
               if (fg != lastExternalForeground) {
                 lastExternalForeground = fg;
-                if (dockHwnd != IntPtr.Zero) {
-                  SetWindowPos(dockHwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0013 | 0x4000);
-                }
-                if (islandHwnd != IntPtr.Zero) {
-                  SetWindowPos(islandHwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0013 | 0x4000);
-                }
               }
+            } else if (lastExternalForeground != IntPtr.Zero &&
+                       (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
+              lastExternalForeground = IntPtr.Zero;
             }
           }
         } catch { }
@@ -453,35 +462,30 @@ namespace AuraBarNative {
     }
 
     private static void ForceFocus(IntPtr hWnd) {
+      AllowSetForegroundWindow(-1);
       if (IsIconic(hWnd)) {
         ShowWindowAsync(hWnd, 9); // SW_RESTORE
       }
-      AllowSetForegroundWindow(-1);
-      BringWindowToTop(hWnd);
-      if (SetForegroundWindow(hWnd)) return;
-
-      // Fallback without Alt-key menu freeze
-      IntPtr fg = GetForegroundWindow();
-      uint dummy;
-      uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
-      uint targetThread = GetWindowThreadProcessId(hWnd, out dummy);
-      uint curThread = GetCurrentThreadId();
-
-      if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, true);
-      if (targetThread != 0 && targetThread != curThread) AttachThreadInput(curThread, targetThread, true);
-
+      SwitchToThisWindow(hWnd, true);
       BringWindowToTop(hWnd);
       SetForegroundWindow(hWnd);
-
-      if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, false);
-      if (targetThread != 0 && targetThread != curThread) AttachThreadInput(curThread, targetThread, false);
     }
 
     private static string ToggleWindow(long hwndVal) {
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
-      if (!IsIconic(hWnd) && hWnd == lastExternalForeground) {
+
+      IntPtr fg = GetForegroundWindow();
+      bool dockHasFocus = fg == IntPtr.Zero || fg == dockHwnd || fg == islandHwnd;
+      bool isTargetActive =
+        !IsIconic(hWnd) &&
+        (fg == hWnd || (dockHasFocus && hWnd == lastExternalForeground));
+
+      if (isTargetActive) {
         ShowWindowAsync(hWnd, 6); // SW_MINIMIZE
+        if (lastExternalForeground == hWnd) {
+          lastExternalForeground = IntPtr.Zero;
+        }
         return "minimized";
       } else {
         ForceFocus(hWnd);
@@ -494,23 +498,51 @@ namespace AuraBarNative {
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
       bool sent = PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+      if (sent && lastExternalForeground == hWnd) {
+        lastExternalForeground = IntPtr.Zero;
+      }
       return sent ? "ok" : "false";
     }
 
     private static int GetPESubsystem(string exePath) {
+      int cached;
+      if (subsystemCache.TryGetValue(exePath, out cached)) return cached;
+      int result = 0;
       try {
         using (FileStream fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         using (BinaryReader br = new BinaryReader(fs)) {
-          if (fs.Length < 0x100) return 0;
-          fs.Position = 0x3C;
-          int peOffset = br.ReadInt32();
-          if (peOffset < 0 || peOffset + 94 > fs.Length) return 0;
-          fs.Position = peOffset + 24 + 68;
-          return br.ReadUInt16();
+          if (fs.Length >= 0x100) {
+            fs.Position = 0x3C;
+            int peOffset = br.ReadInt32();
+            if (peOffset >= 0 && peOffset + 94 <= fs.Length) {
+              fs.Position = peOffset + 24 + 68;
+              result = br.ReadUInt16();
+            }
+          }
         }
       } catch {
-        return 0;
+        result = 0;
       }
+      if (subsystemCache.Count > 250) subsystemCache.Clear();
+      subsystemCache[exePath] = result;
+      return result;
+    }
+
+    private static string GetExeDisplayName(string exePath, string fallbackName) {
+      string cached;
+      if (descCache.TryGetValue(exePath, out cached)) return cached;
+      string displayName = fallbackName;
+      try {
+        FileVersionInfo fvi = FileVersionInfo.GetVersionInfo(exePath);
+        if (!string.IsNullOrWhiteSpace(fvi.FileDescription)) {
+          displayName = fvi.FileDescription.Trim();
+        } else if (!string.IsNullOrWhiteSpace(fvi.ProductName)) {
+          displayName = fvi.ProductName.Trim();
+        }
+      } catch { }
+      if (descCache.Count > 250) descCache.Clear();
+      descCache[exePath] = displayName;
+      return displayName;
     }
 
     private static bool IsExcludedBackgroundExe(string procName, string exePath) {
@@ -563,15 +595,7 @@ namespace AuraBarNative {
           if (byExe.ContainsKey(meta.exePath)) continue;
           if (GetPESubsystem(meta.exePath) != 2) continue;
 
-          string displayName = meta.name;
-          try {
-            FileVersionInfo fvi = FileVersionInfo.GetVersionInfo(meta.exePath);
-            if (!string.IsNullOrWhiteSpace(fvi.FileDescription)) {
-              displayName = fvi.FileDescription.Trim();
-            } else if (!string.IsNullOrWhiteSpace(fvi.ProductName)) {
-              displayName = fvi.ProductName.Trim();
-            }
-          } catch { }
+          string displayName = GetExeDisplayName(meta.exePath, meta.name);
 
           byExe[meta.exePath] = string.Format(
             "{{\"pid\":{0},\"processName\":\"{1}\",\"displayName\":\"{2}\",\"executablePath\":\"{3}\"}}",
@@ -592,49 +616,147 @@ namespace AuraBarNative {
       return "[" + string.Join(",", arr) + "]";
     }
 
-    private static string QuitProcessApp(int pid) {
-      if (pid <= 4 || IsAuraBarWindow((uint)pid, IntPtr.Zero)) return "false";
-      ProcMeta targetMeta = GetProcMeta((uint)pid);
-      if (!string.IsNullOrEmpty(targetMeta.exePath) &&
-          targetMeta.exePath.StartsWith("C:\\Windows\\", StringComparison.OrdinalIgnoreCase)) {
-        return "false";
+    private static HashSet<uint> CollectMatchingPids(int seedPid, out ProcMeta targetMeta) {
+      targetMeta = GetProcMeta((uint)seedPid);
+      HashSet<uint> pids = new HashSet<uint>();
+      if (seedPid > 4 && !IsAuraBarWindow((uint)seedPid, IntPtr.Zero)) {
+        pids.Add((uint)seedPid);
       }
 
-      List<Process> matching = new List<Process>();
+      string targetExe = targetMeta.exePath;
       Process[] procs = Process.GetProcesses();
       for (int i = 0; i < procs.Length; i++) {
         Process p = procs[i];
         try {
-          bool hit = p.Id == pid;
-          if (!hit && !string.IsNullOrEmpty(targetMeta.exePath)) {
-            ProcMeta pm = GetProcMeta((uint)p.Id);
-            hit = string.Equals(pm.exePath, targetMeta.exePath, StringComparison.OrdinalIgnoreCase);
-          }
-          if (hit && !IsAuraBarWindow((uint)p.Id, IntPtr.Zero)) {
-            matching.Add(p);
-          } else {
-            p.Dispose();
+          uint pid = (uint)p.Id;
+          if (pid <= 4 || IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+          if (!string.IsNullOrEmpty(targetExe)) {
+            ProcMeta pm = GetProcMeta(pid);
+            if (string.Equals(pm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
+              pids.Add(pid);
+            }
           }
         } catch {
+        } finally {
           p.Dispose();
         }
       }
+      return pids;
+    }
 
-      if (matching.Count == 0) return "false";
-
-      for (int i = 0; i < matching.Count; i++) {
-        try { matching[i].CloseMainWindow(); } catch { }
-      }
-      Thread.Sleep(220);
-      for (int i = 0; i < matching.Count; i++) {
+    private static string TryGetAumid(uint pid) {
+      try {
+        IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (int)pid);
+        if (hProc == IntPtr.Zero) return "";
         try {
-          if (!matching[i].HasExited) matching[i].Kill();
-        } catch {
+          uint len = 256;
+          StringBuilder sb = new StringBuilder((int)len);
+          int rc = GetApplicationUserModelId(hProc, ref len, sb);
+          if (rc == 0) return sb.ToString();
         } finally {
-          matching[i].Dispose();
+          CloseHandle(hProc);
+        }
+      } catch { }
+      return "";
+    }
+
+    private static string OpenAppFromPid(int pid) {
+      if (pid <= 4) return "false";
+      ProcMeta targetMeta;
+      HashSet<uint> pids = CollectMatchingPids(pid, out targetMeta);
+
+      // 1) Look for an already-taskbar-visible window across all processes of this app
+      IntPtr visibleWin = IntPtr.Zero;
+      IntPtr hiddenRealWin = IntPtr.Zero;
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+        uint wPid;
+        GetWindowThreadProcessId(hWnd, out wPid);
+        if (!pids.Contains(wPid)) return true;
+
+        if (IsTaskbarWindow(hWnd)) {
+          visibleWin = hWnd;
+          return false;
+        }
+
+        if (hiddenRealWin == IntPtr.Zero && IsWindow(hWnd) && !IsCloaked(hWnd)) {
+          int len = GetWindowTextLength(hWnd);
+          RECT rc;
+          if (len > 0 && GetWindowRect(hWnd, out rc)) {
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            if (w >= 160 && h >= 100) {
+              StringBuilder cls = new StringBuilder(64);
+              GetClassName(hWnd, cls, cls.Capacity);
+              string c = cls.ToString();
+              if (!c.Contains("Tooltip") && c != "MSCTFIME UI" && c != "IME") {
+                hiddenRealWin = hWnd;
+              }
+            }
+          }
+        }
+        return true;
+      }, IntPtr.Zero);
+
+      IntPtr toOpen = visibleWin != IntPtr.Zero ? visibleWin : hiddenRealWin;
+      if (toOpen != IntPtr.Zero) {
+        if (!IsWindowVisible(toOpen)) {
+          ShowWindowAsync(toOpen, 5); // SW_SHOW
+        }
+        ForceFocus(toOpen);
+        lastExternalForeground = toOpen;
+        return "focused";
+      }
+
+      // 2) Packaged Microsoft Store / UWP / MSIX app -> return shell:AppsFolder AUMID
+      foreach (uint id in pids) {
+        string aumid = TryGetAumid(id);
+        if (!string.IsNullOrEmpty(aumid)) {
+          return "aumid:" + aumid;
         }
       }
-      return "ok";
+
+      // 3) Fallback to exe path launch in main process
+      if (!string.IsNullOrEmpty(targetMeta.exePath)) {
+        return "exe:" + targetMeta.exePath;
+      }
+      return "false";
+    }
+
+    private static string KillAppDeep(int pid) {
+      if (pid <= 4 || IsAuraBarWindow((uint)pid, IntPtr.Zero)) return "none";
+      ProcMeta targetMeta;
+      HashSet<uint> pids = CollectMatchingPids(pid, out targetMeta);
+      if (!string.IsNullOrEmpty(targetMeta.exePath) &&
+          targetMeta.exePath.StartsWith("C:\\Windows\\", StringComparison.OrdinalIgnoreCase)) {
+        string baseName = Path.GetFileName(targetMeta.exePath).ToLowerInvariant();
+        if (baseName == "explorer.exe" || baseName == "dwm.exe" || baseName == "svchost.exe" ||
+            baseName == "csrss.exe" || baseName == "winlogon.exe" || baseName == "lsass.exe" ||
+            baseName == "services.exe" || baseName == "smss.exe") {
+          return "none";
+        }
+      }
+
+      List<string> pidStrings = new List<string>();
+      foreach (uint id in pids) {
+        pidStrings.Add(id.ToString());
+        // Direct Win32 TerminateProcess + .NET Kill
+        try {
+          IntPtr hProc = OpenProcess(PROCESS_TERMINATE, false, (int)id);
+          if (hProc != IntPtr.Zero) {
+            try { TerminateProcess(hProc, 1); } finally { CloseHandle(hProc); }
+          }
+        } catch { }
+        try {
+          using (Process p = Process.GetProcessById((int)id)) {
+            if (!p.HasExited) p.Kill();
+          }
+        } catch { }
+      }
+      return pidStrings.Count > 0 ? "pids:" + string.Join(",", pidStrings.ToArray()) : "none";
+    }
+
+    private static string QuitProcessApp(int pid) {
+      return KillAppDeep(pid);
     }
 
     private static void TapKey(byte vk) {
@@ -843,6 +965,12 @@ namespace AuraBarNative {
           } else if (line.StartsWith("CLOSE_WIN ")) {
             long hv = long.Parse(line.Substring(10).Trim());
             Console.WriteLine(CloseWindowByHwnd(hv));
+          } else if (line.StartsWith("OPEN_APP ")) {
+            int pidVal = int.Parse(line.Substring(9).Trim());
+            Console.WriteLine(OpenAppFromPid(pidVal));
+          } else if (line.StartsWith("KILL_APP ")) {
+            int pidVal = int.Parse(line.Substring(9).Trim());
+            Console.WriteLine(KillAppDeep(pidVal));
           } else if (line.StartsWith("QUIT_APP ")) {
             int pidVal = int.Parse(line.Substring(9).Trim());
             Console.WriteLine(QuitProcessApp(pidVal));

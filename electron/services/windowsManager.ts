@@ -14,6 +14,7 @@ import type {
 import { win32Daemon } from './win32Daemon';
 
 const iconCache = new Map<string, string>();
+const winIconCache = new Map<string, string>();
 
 function resolveKnownSystemPath(target: string): string | null {
   const lower = target.trim().toLowerCase();
@@ -255,9 +256,14 @@ export async function listRunningWindows(): Promise<RunningWindow[]> {
       parsed.map(async (w) => {
         let iconDataUrl = w.executablePath ? await getIconDataUrl(w.executablePath) : undefined;
         if (!iconDataUrl && w.hwnd) {
-          const winIcon = await win32Daemon.send(`WINICON ${w.hwnd}`);
-          if (winIcon.startsWith('data:image/png;base64,')) {
-            iconDataUrl = winIcon;
+          if (winIconCache.has(w.hwnd)) {
+            iconDataUrl = winIconCache.get(w.hwnd) || undefined;
+          } else {
+            const winIcon = await win32Daemon.send(`WINICON ${w.hwnd}`);
+            const valid = winIcon.startsWith('data:image/png;base64,') ? winIcon : '';
+            if (winIconCache.size > 200) winIconCache.clear();
+            winIconCache.set(w.hwnd, valid);
+            iconDataUrl = valid || undefined;
           }
         }
         return { ...w, iconDataUrl };
@@ -306,10 +312,75 @@ export async function closeWindowByHwnd(hwnd: string): Promise<boolean> {
   return res === 'ok';
 }
 
-export async function quitAppByPid(pid: number): Promise<boolean> {
+export async function openAppByPid(pid: number, executablePath?: string): Promise<boolean> {
+  if (Number.isInteger(pid) && pid > 4) {
+    const res = await win32Daemon.send(`OPEN_APP ${pid}`);
+    if (res === 'focused') return true;
+    if (res.startsWith('aumid:')) {
+      const aumid = res.slice(6).trim();
+      if (aumid) {
+        const child = spawn('explorer.exe', [`shell:AppsFolder\\${aumid}`], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        child.unref();
+        return true;
+      }
+    }
+    const candidateExe = res.startsWith('exe:') ? res.slice(4).trim() : executablePath;
+    if (candidateExe) {
+      // Handle tray helper binaries whose interactive UI lives in the parent binary (e.g. LGHUB)
+      if (/\\lghub_system_tray\.exe$/i.test(candidateExe)) {
+        const parentUi = path.resolve(path.dirname(candidateExe), '..', 'lghub.exe');
+        if (fs.existsSync(parentUi)) return launchTarget(parentUi);
+      }
+      return launchTarget(candidateExe);
+    }
+  }
+  return executablePath ? launchTarget(executablePath) : false;
+}
+
+function runTaskkillDetached(args: string[]): void {
+  try {
+    execFile('taskkill.exe', args, { timeout: 1500, windowsHide: true }, () => undefined);
+  } catch {
+    // Best-effort process tree sweep
+  }
+}
+
+export async function quitAppByPid(pid: number, executablePath?: string): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 4) return false;
-  const res = await win32Daemon.send(`QUIT_APP ${pid}`);
-  return res === 'ok';
+  const res = await win32Daemon.send(`KILL_APP ${pid}`);
+  const pidList: string[] = res.startsWith('pids:')
+    ? res
+        .slice(5)
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s))
+    : [String(pid)];
+
+  if (pidList.length > 0) {
+    const pidArgs: string[] = ['/F', '/T'];
+    for (const id of pidList) {
+      pidArgs.push('/PID', id);
+    }
+    runTaskkillDetached(pidArgs);
+  }
+
+  // Background image sweep only for non-system user executables
+  if (
+    executablePath &&
+    !executablePath.toLowerCase().startsWith('c:\\windows\\') &&
+    !/^(cmd|powershell|pwsh|conhost|explorer|node|python)\.exe$/i.test(path.basename(executablePath))
+  ) {
+    const img = path.basename(executablePath);
+    if (img.toLowerCase().endsWith('.exe')) {
+      runTaskkillDetached(['/F', '/T', '/IM', img]);
+    }
+  }
+
+  return res.startsWith('pids:') || pidList.length > 0;
 }
 
 export async function launchTarget(target: string): Promise<boolean> {

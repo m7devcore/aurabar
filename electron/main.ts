@@ -27,6 +27,7 @@ import {
   listBackgroundApps,
   listInstalledApps,
   listRunningWindows,
+  openAppByPid,
   pickExecutableOrFolder,
   quitAppByPid,
   resolveExeName,
@@ -265,7 +266,7 @@ function createWindows(): void {
       isPopoverOpen = false;
       dockWindow?.webContents.send('aurabar:blurred');
     }
-    ensureOnTop(dockWindow);
+    dockWindow?.setAlwaysOnTop(true, 'screen-saver');
   });
 
   islandWindow = new BrowserWindow({
@@ -305,7 +306,7 @@ function createWindows(): void {
       isIslandExpanded = false;
       islandWindow?.webContents.send('aurabar:island-blurred');
     }
-    ensureOnTop(islandWindow);
+    islandWindow?.setAlwaysOnTop(true, 'screen-saver');
   });
 
   void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
@@ -529,8 +530,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:focus-window', (_e, pid: number, hwnd?: string) =>
     focusWindowByPid(pid, hwnd)
   );
+  ipcMain.handle('aurabar:open-app', (_e, pid: number, executablePath?: string) =>
+    openAppByPid(pid, executablePath)
+  );
   ipcMain.handle('aurabar:close-window', (_e, hwnd: string) => closeWindowByHwnd(hwnd));
-  ipcMain.handle('aurabar:quit-process', (_e, pid: number) => quitAppByPid(pid));
+  ipcMain.handle('aurabar:quit-process', (_e, pid: number, executablePath?: string) =>
+    quitAppByPid(pid, executablePath)
+  );
   ipcMain.handle('aurabar:launch-target', (_e, target: string) => launchTarget(target));
   ipcMain.handle('aurabar:pick-app-file', () => pickExecutableOrFolder(dockWindow));
   ipcMain.handle('aurabar:get-media-info', () => getCurrentMedia());

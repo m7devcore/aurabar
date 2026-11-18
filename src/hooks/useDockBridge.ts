@@ -50,6 +50,7 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
   getPathForFile: () => '',
   importTaskbarApps: async () => [],
   focusWindow: async () => true,
+  openApp: async () => true,
   closeWindow: async () => true,
   quitProcess: async () => true,
   launchTarget: async (target) => {

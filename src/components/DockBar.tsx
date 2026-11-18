@@ -177,7 +177,7 @@ export function DockBar({
       if (alive) setBackgroundApps(list);
     };
     void pollBg();
-    const id = setInterval(() => void pollBg(), 2200);
+    const id = setInterval(() => void pollBg(), 3500);
     return () => {
       alive = false;
       clearInterval(id);
@@ -1291,7 +1291,7 @@ export function DockBar({
                   onClick={() => {
                     setCtxMenu(null);
                     setOverflowTray(null);
-                    void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+                    void dockBridge.openApp(win.pid, win.executablePath).then(() => {
                       setTimeout(onRefreshWindows, 120);
                     });
                   }}
@@ -1332,7 +1332,12 @@ export function DockBar({
                   onClick={() => {
                     setCtxMenu(null);
                     setOverflowTray(null);
-                    void dockBridge.launchTarget(bg.executablePath);
+                    void dockBridge.openApp(bg.pid, bg.executablePath).then(() => {
+                      setTimeout(() => {
+                        onRefreshWindows();
+                        void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                      }, 220);
+                    });
                   }}
                   onContextMenu={(e) =>
                     openContextMenu(
@@ -1388,7 +1393,7 @@ export function DockBar({
                   const targetWin = ctxMenu.running!;
                   setCtxMenu(null);
                   setOverflowTray(null);
-                  void dockBridge.focusWindow(targetWin.pid, targetWin.hwnd).then(() => {
+                  void dockBridge.openApp(targetWin.pid, targetWin.executablePath).then(() => {
                     setTimeout(onRefreshWindows, 120);
                   });
                 }}
@@ -1424,7 +1429,7 @@ export function DockBar({
               )}
               {ctxMenu.running.hwnd && (
                 <button
-                  className="taskbar-ctx-item danger"
+                  className="taskbar-ctx-item"
                   onClick={() => {
                     const hwnd = ctxMenu.running!.hwnd!;
                     setCtxMenu(null);
@@ -1432,14 +1437,32 @@ export function DockBar({
                       setTimeout(() => {
                         onRefreshWindows();
                         void dockBridge.getBackgroundApps().then(setBackgroundApps);
-                      }, 180);
+                      }, 120);
+                      setTimeout(() => {
+                        onRefreshWindows();
+                        void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                      }, 460);
                     });
                   }}
                 >
                   <X size={14} />
-                  <span>{settings.language === 'ar' ? 'إغلاق' : 'Close window'}</span>
+                  <span>{settings.language === 'ar' ? 'إغلاق النافذة' : 'Close window'}</span>
                 </button>
               )}
+              <button
+                className="taskbar-ctx-item danger"
+                onClick={() => {
+                  const { pid, executablePath } = ctxMenu.running!;
+                  setCtxMenu(null);
+                  void dockBridge.quitProcess(pid, executablePath).then(() => {
+                    onRefreshWindows();
+                    void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                  });
+                }}
+              >
+                <X size={14} />
+                <span>{settings.language === 'ar' ? 'إغلاق نهائي (إنهاء المهمة)' : 'End task (Force close)'}</span>
+              </button>
             </>
           )}
 
@@ -1451,7 +1474,12 @@ export function DockBar({
                   const targetBg = ctxMenu.bg!;
                   setCtxMenu(null);
                   setOverflowTray(null);
-                  void dockBridge.launchTarget(targetBg.executablePath);
+                  void dockBridge.openApp(targetBg.pid, targetBg.executablePath).then(() => {
+                    setTimeout(() => {
+                      onRefreshWindows();
+                      void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                    }, 220);
+                  });
                 }}
               >
                 <ExternalLink size={14} style={{ color: 'var(--accent)' }} />
@@ -1472,18 +1500,16 @@ export function DockBar({
               <button
                 className="taskbar-ctx-item danger"
                 onClick={() => {
-                  const targetPid = ctxMenu.bg!.pid;
+                  const { pid, executablePath } = ctxMenu.bg!;
                   setCtxMenu(null);
-                  void dockBridge.quitProcess(targetPid).then(() => {
-                    setTimeout(() => {
-                      onRefreshWindows();
-                      void dockBridge.getBackgroundApps().then(setBackgroundApps);
-                    }, 180);
+                  void dockBridge.quitProcess(pid, executablePath).then(() => {
+                    onRefreshWindows();
+                    void dockBridge.getBackgroundApps().then(setBackgroundApps);
                   });
                 }}
               >
                 <X size={14} />
-                <span>{settings.language === 'ar' ? 'إغلاق التطبيق' : 'Close app'}</span>
+                <span>{settings.language === 'ar' ? 'إغلاق نهائي (إنهاء المهمة)' : 'End task (Close app)'}</span>
               </button>
             </>
           )}
@@ -1795,7 +1821,7 @@ export function DockBar({
                       setCcFlyout(null);
                       if (matchedWin && !e.shiftKey) {
                         void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
-                          setTimeout(onRefreshWindows, 120);
+                          setTimeout(onRefreshWindows, 80);
                         });
                       } else {
                         void dockBridge.launchTarget(app.target);
@@ -1867,7 +1893,7 @@ export function DockBar({
                           setOpenFolder(null);
                           setTooltip(null);
                           void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
-                            setTimeout(onRefreshWindows, 120);
+                            setTimeout(onRefreshWindows, 80);
                           });
                         }}
                       >
