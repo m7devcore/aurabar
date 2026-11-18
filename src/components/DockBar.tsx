@@ -904,7 +904,7 @@ export function DockBar({
           ref={folderPopoverRef}
           className="folder-popover"
           style={{
-            left: Math.max(144, Math.min(window.innerWidth - 144, openFolder.x)),
+            left: Math.round(Math.max(12, Math.min(window.innerWidth - 280, openFolder.x - 134))),
             ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
           }}
           onClick={(e) => e.stopPropagation()}
@@ -990,7 +990,7 @@ export function DockBar({
           ref={ccFlyoutRef}
           className="control-center-flyout"
           style={{
-            left: Math.max(172, Math.min(window.innerWidth - 172, ccFlyout.x)),
+            left: Math.round(Math.max(12, Math.min(window.innerWidth - 332, ccFlyout.x - 160))),
             ...(settings.position === 'bottom' ? { bottom: 60 } : { top: 60 })
           }}
           onClick={(e) => e.stopPropagation()}
