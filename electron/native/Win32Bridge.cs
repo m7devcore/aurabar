@@ -18,6 +18,21 @@ namespace AuraBarNative {
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct POINT {
+      public int X, Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WINDOWPLACEMENT {
+      public int length;
+      public int flags;
+      public int showCmd;
+      public POINT ptMinPosition;
+      public POINT ptMaxPosition;
+      public RECT rcNormalPosition;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct APPBARDATA {
       public int cbSize;
       public IntPtr hWnd;
@@ -114,7 +129,7 @@ namespace AuraBarNative {
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
     [DllImport("user32.dll")]
-    private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+    private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -213,6 +228,7 @@ namespace AuraBarNative {
     private static int parentElectronPid = 0;
     private static long nextSeenSeq = 1;
     private static readonly Dictionary<long, long> firstSeenMap = new Dictionary<long, long>();
+    private static readonly HashSet<long> maximizedHwnds = new HashSet<long>();
     private static readonly Dictionary<uint, ProcMeta> procCache = new Dictionary<uint, ProcMeta>();
     private static readonly Dictionary<string, int> subsystemCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, string> descCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -451,7 +467,10 @@ namespace AuraBarNative {
       foreach (long k in firstSeenMap.Keys) {
         if (!aliveHwnds.Contains(k)) stale.Add(k);
       }
-      for (int i = 0; i < stale.Count; i++) firstSeenMap.Remove(stale[i]);
+      for (int i = 0; i < stale.Count; i++) {
+        firstSeenMap.Remove(stale[i]);
+        maximizedHwnds.Remove(stale[i]);
+      }
 
       entries.Sort(delegate(WinEntry a, WinEntry b) { return a.seq.CompareTo(b.seq); });
       if (entries.Count > 24) entries.RemoveRange(24, entries.Count - 24);
@@ -462,13 +481,54 @@ namespace AuraBarNative {
     }
 
     private static void ForceFocus(IntPtr hWnd) {
-      AllowSetForegroundWindow(-1);
+      long hwndKey = hWnd.ToInt64();
+      // Preserve exact prior state: ONLY restore if genuinely minimized (never touch non-minimized bounds)
       if (IsIconic(hWnd)) {
-        ShowWindowAsync(hWnd, 9); // SW_RESTORE
+        WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+        wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+        bool wasMax = maximizedHwnds.Contains(hwndKey);
+        if (GetWindowPlacement(hWnd, ref wp)) {
+          if ((wp.flags & 0x0002) != 0 || wp.showCmd == 3) {
+            wasMax = true;
+          }
+        }
+        ShowWindowAsync(hWnd, wasMax ? 3 : 9); // SW_SHOWMAXIMIZED : SW_RESTORE (exact snapped/normal rect)
+        maximizedHwnds.Remove(hwndKey);
       }
-      SwitchToThisWindow(hWnd, true);
+
+      AllowSetForegroundWindow(-1);
+      if (GetForegroundWindow() == hWnd) return;
+
       BringWindowToTop(hWnd);
-      SetForegroundWindow(hWnd);
+      if (SetForegroundWindow(hWnd)) return;
+
+      // Attach only to current foreground thread (typically our own responsive dockWindow) to unlock SetForegroundWindow
+      IntPtr fg = GetForegroundWindow();
+      uint dummy;
+      uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
+      uint curThread = GetCurrentThreadId();
+      bool attachedFg = false;
+
+      if (fgThread != 0 && fgThread != curThread) {
+        attachedFg = AttachThreadInput(curThread, fgThread, true);
+      }
+      BringWindowToTop(hWnd);
+      bool focused = SetForegroundWindow(hWnd);
+      if (attachedFg) {
+        AttachThreadInput(curThread, fgThread, false);
+      }
+
+      if (!focused && GetForegroundWindow() != hWnd) {
+        uint targetThread = GetWindowThreadProcessId(hWnd, out dummy);
+        bool attachedTarget = targetThread != 0 && targetThread != curThread
+          ? AttachThreadInput(curThread, targetThread, true)
+          : false;
+        BringWindowToTop(hWnd);
+        SetForegroundWindow(hWnd);
+        if (attachedTarget) {
+          AttachThreadInput(curThread, targetThread, false);
+        }
+      }
     }
 
     private static string ToggleWindow(long hwndVal) {
@@ -482,6 +542,17 @@ namespace AuraBarNative {
         (fg == hWnd || (dockHasFocus && hWnd == lastExternalForeground));
 
       if (isTargetActive) {
+        if (IsZoomed(hWnd)) {
+          maximizedHwnds.Add(hwndVal);
+        } else {
+          WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+          wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+          if (GetWindowPlacement(hWnd, ref wp) && wp.showCmd == 3) {
+            maximizedHwnds.Add(hwndVal);
+          } else {
+            maximizedHwnds.Remove(hwndVal);
+          }
+        }
         ShowWindowAsync(hWnd, 6); // SW_MINIMIZE
         if (lastExternalForeground == hWnd) {
           lastExternalForeground = IntPtr.Zero;
