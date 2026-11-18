@@ -1141,7 +1141,7 @@ export function DockBar({
                   {media?.artist && (
                     <div
                       style={{
-                        fontSize: 10.5,
+                        fontSize: 11,
                         color: 'var(--text-muted)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -1304,6 +1304,7 @@ export function DockBar({
                       if (isGroup) {
                         const rect = e.currentTarget.getBoundingClientRect();
                         const centerX = rect.left + rect.width / 2;
+                        setVolumeFlyout(null);
                         if (openFolder?.id === app.id) {
                           setOpenFolder(null);
                         } else {
@@ -1313,6 +1314,7 @@ export function DockBar({
                         return;
                       }
                       setOpenFolder(null);
+                      setVolumeFlyout(null);
                       if (matchedWin && !e.shiftKey) {
                         void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
                           setTimeout(onRefreshWindows, 120);
@@ -1421,6 +1423,7 @@ export function DockBar({
         <div className="dock-right-tray">
           <button
             className="tray-chip tabular"
+            aria-label={`Switch Keyboard Language (${kbdLang})`}
             onClick={onSwitchKbdLang}
             title="Switch Keyboard Language"
           >
@@ -1429,6 +1432,7 @@ export function DockBar({
 
           <button
             className="tray-chip"
+            aria-label="Wi-Fi and Quick Settings"
             onClick={() => void dockBridge.systemAction('quicksettings')}
             title="Wi-Fi & Quick Settings"
           >
@@ -1437,6 +1441,8 @@ export function DockBar({
 
           <button
             className={`tray-chip vol-trigger-btn ${volumeFlyout ? 'active' : ''}`}
+            aria-label={dict.volume}
+            aria-expanded={Boolean(volumeFlyout)}
             onClick={(e) => {
               e.stopPropagation();
               setCtxMenu(null);
@@ -1466,6 +1472,7 @@ export function DockBar({
           {stats.batteryPercent !== null && (
             <button
               className="tray-chip tabular"
+              aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
               onClick={() => toggle('system')}
               title={`${dict.battery}: ${stats.batteryPercent}%`}
             >
@@ -1476,15 +1483,19 @@ export function DockBar({
 
           <button
             className={`tray-clock-btn tabular ${activePanel === 'calendar' ? 'active' : ''}`}
+            aria-label={dict.calendar}
+            aria-expanded={activePanel === 'calendar'}
             onClick={() => toggle('calendar')}
             title={dict.calendar}
           >
             <span style={{ fontSize: 12, fontWeight: 600 }}>{timeStr}</span>
-            <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{dateStr}</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{dateStr}</span>
           </button>
 
           <button
             className="app-icon-btn"
+            aria-label={dict.settings}
+            aria-expanded={activePanel === 'settings'}
             onClick={() => toggle('settings')}
             title={dict.settings}
             style={
@@ -1498,6 +1509,7 @@ export function DockBar({
 
           <button
             className="show-desktop-sliver"
+            aria-label="Show Desktop"
             onClick={() => void dockBridge.systemAction('desktop')}
             title="Show Desktop"
           />

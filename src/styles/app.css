@@ -120,7 +120,8 @@ body,
   margin: 0 auto;
   direction: ltr;
   background: var(--dock-bg);
-  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+  backdrop-filter: blur(28px) saturate(1.42);
   border: 1px solid var(--border-hairline);
   border-radius: 16px;
   box-shadow:
@@ -328,8 +329,8 @@ body,
 }
 
 .show-desktop-sliver {
-  width: 6px;
-  height: 28px;
+  width: 12px;
+  height: 30px;
   border-radius: 999px;
   border: none;
   background: transparent;
@@ -414,9 +415,9 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -589,7 +590,8 @@ body,
   padding: 12px;
   border-radius: 18px;
   background: var(--popover-bg);
-  backdrop-filter: blur(32px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+  backdrop-filter: blur(28px) saturate(1.42);
   border: 1px solid var(--border-strong);
   box-shadow:
     0 20px 44px rgba(0, 0, 0, 0.58),
@@ -658,19 +660,19 @@ body,
 
 .folder-app-eject {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 18px;
-  height: 18px;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   border: none;
   background: rgba(0, 0, 0, 0.52);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.35;
+  opacity: 0.45;
   cursor: pointer;
   z-index: 2;
   transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
@@ -695,7 +697,6 @@ body,
   height: 40px;
   border-radius: 12px;
   background: var(--popover-bg);
-  backdrop-filter: blur(16px);
   border: 1.5px solid var(--accent);
   box-shadow:
     0 12px 28px rgba(0, 0, 0, 0.58),
@@ -714,7 +715,8 @@ body,
   max-height: 416px;
   margin: 10px auto;
   background: var(--popover-bg);
-  backdrop-filter: blur(32px) saturate(185%);
+  -webkit-backdrop-filter: blur(30px) saturate(1.42);
+  backdrop-filter: blur(30px) saturate(1.42);
   border: 1px solid var(--border-strong);
   border-radius: 20px;
   box-shadow:
@@ -770,6 +772,20 @@ body,
   padding: 16px 18px;
   overflow-y: auto;
   flex: 1;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 10px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 10px),
+    transparent 100%
+  );
 }
 
 .popover-body::-webkit-scrollbar {
@@ -833,10 +849,14 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  width: 100%;
   padding: 10px 12px;
   border-radius: 11px;
   background: var(--chip-bg);
   border: 1px solid var(--border-hairline);
+  font-family: inherit;
+  color: inherit;
+  text-align: start;
   cursor: pointer;
   transition: background 0.14s ease;
 }
@@ -1089,7 +1109,8 @@ body,
   border-radius: 21px;
   padding: 0 11px 0 8px;
   background: var(--island-bg);
-  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+  backdrop-filter: blur(28px) saturate(1.42);
   color: var(--text-primary);
   border: 1px solid var(--border-hairline);
   box-shadow:
@@ -1208,13 +1229,13 @@ body,
 .island-source-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   margin-top: 4px;
 }
 
@@ -1500,7 +1521,8 @@ body,
   padding: 12px 14px;
   border-radius: 17px;
   background: var(--popover-bg);
-  backdrop-filter: blur(32px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(1.42);
+  backdrop-filter: blur(28px) saturate(1.42);
   border: 1px solid var(--border-strong);
   box-shadow:
     0 18px 42px rgba(0, 0, 0, 0.56),
@@ -1510,4 +1532,71 @@ body,
   flex-direction: column;
   gap: 8px;
   animation: popReveal 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Desktop Keyboard Focus & Accessibility States (Apple HIG Compliance) */
+button:focus-visible,
+input:focus-visible,
+[role='slider']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --dock-bg: #141824;
+    --popover-bg: #141824;
+    --island-bg: #141824;
+  }
+
+  [data-theme='platinum'] {
+    --dock-bg: #19181f;
+    --popover-bg: #19181f;
+    --island-bg: #19181f;
+  }
+
+  [data-theme='frost'] {
+    --dock-bg: #f1f5fb;
+    --popover-bg: #f4f7fc;
+    --island-bg: #f4f7fc;
+  }
+
+  .dock-bar,
+  .popover-card,
+  .folder-popover,
+  .volume-flyout,
+  .taskbar-ctx-menu,
+  .dynamic-island {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme='platinum'] {
+    --border-hairline: rgba(255, 255, 255, 0.42);
+    --border-strong: rgba(255, 255, 255, 0.72);
+    --text-muted: #dbe3f0;
+  }
+
+  [data-theme='frost'] {
+    --border-hairline: rgba(15, 23, 42, 0.34);
+    --border-strong: rgba(15, 23, 42, 0.65);
+    --text-muted: #1e293b;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .dock-apps-strip:not(.is-live-dragging) .dock-app-btn {
+    transform: none !important;
+  }
 }

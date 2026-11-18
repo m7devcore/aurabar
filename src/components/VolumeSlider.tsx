@@ -80,6 +80,8 @@ export function VolumeSlider({ compact = false }: Props) {
       <button
         type="button"
         className="vol-mute-btn"
+        aria-label={vol.muted ? 'Unmute volume' : 'Mute volume'}
+        aria-pressed={vol.muted}
         onClick={(e) => {
           e.stopPropagation();
           void dockBridge.toggleMute().then(setVol);
@@ -91,7 +93,31 @@ export function VolumeSlider({ compact = false }: Props) {
 
       <div
         ref={trackRef}
+        role="slider"
+        tabIndex={0}
+        aria-label="Master Volume"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={effectiveLevel}
+        aria-valuetext={`${effectiveLevel}%`}
+        title={`${effectiveLevel}%`}
         className="vol-track-hit"
+        onKeyDown={(e) => {
+          const step = e.key === 'PageUp' ? 10 : e.key === 'PageDown' ? -10 : 2;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+            e.preventDefault();
+            commitLevel((vol.muted ? 0 : vol.level) + step, true);
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'PageDown') {
+            e.preventDefault();
+            commitLevel((vol.muted ? 0 : vol.level) - Math.abs(step), true);
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            commitLevel(0, true);
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            commitLevel(100, true);
+          }
+        }}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           e.stopPropagation();

@@ -21,7 +21,13 @@ function ToggleSwitch({
   onToggle: () => void;
 }) {
   return (
-    <div className="toggle-row" onClick={onToggle} role="switch" aria-checked={checked}>
+    <button
+      type="button"
+      className="toggle-row"
+      onClick={onToggle}
+      role="switch"
+      aria-checked={checked}
+    >
       <div>
         <div className="toggle-title">{title}</div>
         <div className="toggle-desc">{desc}</div>
@@ -29,7 +35,7 @@ function ToggleSwitch({
       <div className={`switch-track ${checked ? 'on' : ''}`}>
         <div className="switch-thumb" />
       </div>
-    </div>
+    </button>
   );
 }
 

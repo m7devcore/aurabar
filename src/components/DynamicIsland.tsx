@@ -28,9 +28,23 @@ function formatTime(sec: number): string {
 
 function cleanSourceLabel(appId?: string): string | null {
   if (!appId) return null;
-  const base = appId.split('!')[0].replace(/\.exe$/i, '').trim();
-  if (!base) return null;
-  return base.length > 20 ? `${base.slice(0, 18)}…` : base;
+  // Format examples:
+  // "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" -> "Spotify"
+  // "Chrome" / "msedge.exe" / "Brave" -> "Chrome" / "Msedge" / "Brave"
+  const parts = appId.split('!');
+  if (parts.length > 1 && parts[1] && !/^app$/i.test(parts[1])) {
+    const tail = parts[1].replace(/\.exe$/i, '').trim();
+    if (tail) return tail.length > 20 ? `${tail.slice(0, 18)}…` : tail;
+  }
+  const head = parts[0]
+    .replace(/\.exe$/i, '')
+    .replace(/_[a-z0-9]{10,}$/i, '')
+    .split('.')
+    .pop()
+    ?.replace(/Music$/i, '')
+    .trim();
+  if (!head) return null;
+  return head.length > 20 ? `${head.slice(0, 18)}…` : head;
 }
 
 export function DynamicIsland({
@@ -150,6 +164,8 @@ export function DynamicIsland({
 
             <button
               className={`island-eq-btn ${isPlaying ? 'eq-playing' : ''}`}
+              aria-label={isPlaying ? 'Pause media' : 'Play media'}
+              aria-pressed={isPlaying}
               onClick={(e) => {
                 e.stopPropagation();
                 void sendCmd('playPause');
@@ -205,6 +221,7 @@ export function DynamicIsland({
 
               <button
                 className="island-mini-action"
+                aria-label="Collapse music player"
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleExpand(false);
@@ -228,6 +245,7 @@ export function DynamicIsland({
             <div className="row-between" style={{ justifyContent: 'center', gap: 18 }}>
               <button
                 className="island-ctrl-btn"
+                aria-label="Previous track"
                 onClick={() => void sendCmd('previous')}
                 title="Previous Track"
               >
@@ -236,6 +254,8 @@ export function DynamicIsland({
 
               <button
                 className="island-play-btn"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+                aria-pressed={isPlaying}
                 onClick={() => void sendCmd('playPause')}
                 title={isPlaying ? 'Pause' : 'Play'}
               >
@@ -248,6 +268,7 @@ export function DynamicIsland({
 
               <button
                 className="island-ctrl-btn"
+                aria-label="Next track"
                 onClick={() => void sendCmd('next')}
                 title="Next Track"
               >
