@@ -142,6 +142,7 @@ export function DockBar({
   const peekRef = useRef<HTMLDivElement | null>(null);
   const peekOpenTimerRef = useRef<number | null>(null);
   const peekCloseTimerRef = useRef<number | null>(null);
+  const pointerTrailRef = useRef<{ x: number; y: number; t: number }[]>([]);
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
@@ -250,6 +251,14 @@ export function DockBar({
     };
 
     reportHitRects();
+    // Overlays rise in with a transform; measure again once the animation has settled
+    const settleTimer = window.setTimeout(reportHitRects, 220);
+    const onAnimEnd = (e: AnimationEvent) => {
+      if ((e.target as HTMLElement).matches?.('.window-peek, .folder-popover, .control-center-flyout, .tray-overflow-popover, .taskbar-ctx-menu, .popover-card')) {
+        reportHitRects();
+      }
+    };
+    document.addEventListener('animationend', onAnimEnd);
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportHitRects) : null;
     if (ro) {
       if (dockBarRef.current) ro.observe(dockBarRef.current);
@@ -259,7 +268,11 @@ export function DockBar({
       if (ctxMenuRef.current) ro.observe(ctxMenuRef.current);
       if (peekRef.current) ro.observe(peekRef.current);
     }
-    return () => ro?.disconnect();
+    return () => {
+      ro?.disconnect();
+      window.clearTimeout(settleTimer);
+      document.removeEventListener('animationend', onAnimEnd);
+    };
   }, [
     activePanel,
     activeFolderObj?.id,
@@ -269,6 +282,7 @@ export function DockBar({
     backgroundApps.length,
     ctxMenu,
     peek?.key,
+    peek?.x,
     pinnedApps.length,
     runningWindows.length,
     settings.position,
@@ -745,19 +759,66 @@ export function DockBar({
     setPeek(null);
   }
 
+  // Is the pointer travelling from the dock toward the open preview? Moving diagonally up to a
+  // card crosses neighbouring icons, which must not steal the preview on the way.
+  const isAimingAtPeek = (): boolean => {
+    const el = peekRef.current;
+    const trail = pointerTrailRef.current;
+    if (!el || trail.length < 2) return false;
+    const last = trail[trail.length - 1];
+    const first = trail.find((p) => last.t - p.t <= 260) ?? trail[0];
+    const dy = last.y - first.y;
+    const towardPeek = settings.position === 'bottom' ? dy < -1 : dy > 1;
+    if (!towardPeek) return false;
+    const r = el.getBoundingClientRect();
+    // Project the motion onto the preview's edge and accept it if it lands on (or near) it
+    const edgeY = settings.position === 'bottom' ? r.bottom : r.top;
+    const dx = last.x - first.x;
+    const t = dy !== 0 ? (edgeY - last.y) / dy : 0;
+    const hitX = last.x + dx * Math.max(0, t);
+    return hitX >= r.left - 24 && hitX <= r.right + 24;
+  };
+
   const openPeek = (key: string, el: HTMLElement, immediate = false) => {
-    clearPeekTimers();
     if (dragCandidateRef.current?.active || ctxMenu || activePanel || openFolder || ccFlyout || overflowTray) {
+      clearPeekTimers();
       return;
     }
     const rect = el.getBoundingClientRect();
     const next = { key, x: rect.left + rect.width / 2 };
-    // Once a preview is showing, sliding to the next icon switches instantly, like Windows
-    if (immediate || peek) {
+    if (immediate) {
+      clearPeekTimers();
       setTooltip(null);
       setPeek(next);
       return;
     }
+    if (peek) {
+      if (peek.key === key) {
+        clearPeekTimers();
+        return;
+      }
+      // Resting on another icon switches to it after a short intent delay, like Windows. When
+      // the pointer is only passing over it on the way up to the cards, wait much longer: it
+      // will have left (cancelling this) or entered the preview long before.
+      const delay = isAimingAtPeek() ? 520 : 160;
+      // Still on the dock: the preview stays until the pointer leaves this icon too
+      clearPeekTimers();
+      const switchTo = () => {
+        // Still heading for the cards: look again shortly instead of switching under the pointer
+        if (isAimingAtPeek()) {
+          peekOpenTimerRef.current = window.setTimeout(switchTo, 120);
+          return;
+        }
+        peekOpenTimerRef.current = null;
+        if (peekCloseTimerRef.current) window.clearTimeout(peekCloseTimerRef.current);
+        peekCloseTimerRef.current = null;
+        setTooltip(null);
+        setPeek(next);
+      };
+      peekOpenTimerRef.current = window.setTimeout(switchTo, delay);
+      return;
+    }
+    clearPeekTimers();
     peekOpenTimerRef.current = window.setTimeout(() => {
       peekOpenTimerRef.current = null;
       setTooltip(null);
@@ -772,15 +833,31 @@ export function DockBar({
     peekCloseTimerRef.current = window.setTimeout(() => {
       peekCloseTimerRef.current = null;
       setPeek(null);
-    }, 260);
+    }, 380);
   };
 
+  // Pointer is on the preview: keep it, and drop any switch queued while crossing other icons
   const cancelPeekClose = () => {
-    if (peekCloseTimerRef.current) window.clearTimeout(peekCloseTimerRef.current);
-    peekCloseTimerRef.current = null;
+    clearPeekTimers();
   };
 
   useEffect(() => () => clearPeekTimers(), []);
+
+  // Recent pointer positions, only needed while a preview is open
+  useEffect(() => {
+    if (!peek) {
+      pointerTrailRef.current = [];
+      return;
+    }
+    const onMove = (e: MouseEvent) => {
+      const now = performance.now();
+      const trail = pointerTrailRef.current;
+      trail.push({ x: e.clientX, y: e.clientY, t: now });
+      while (trail.length > 2 && now - trail[0].t > 320) trail.shift();
+    };
+    window.addEventListener('mousemove', onMove, { passive: true });
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [Boolean(peek)]);
 
   const findWindowForGroup = (children?: PinnedApp[]): RunningWindow | undefined => {
     if (!children) return undefined;
