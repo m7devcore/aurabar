@@ -452,6 +452,7 @@ function createWindows(): void {
     }
   });
   dockWindow.on('hide', () => {
+    if (fullscreenSuspended || isQuitting) return;
     if (taskbarWasAutoHidden) {
       taskbarWasAutoHidden = false;
       lastTaskbarLayoutKey = '';
@@ -619,8 +620,13 @@ function reassertLayoutAfterFullscreen(): void {
     dockWindow.setBounds(computeDockBounds(settings), false);
     placeDockPhysical(settings);
   }
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    applyTopmost(islandWindow);
+    islandWindow.setBounds(computeIslandBounds(), false);
+  }
   setTimeout(() => {
     if (!fullscreenSuspended && !isQuitting && dockWindow && !dockWindow.isDestroyed()) {
+      dockWindow.setBounds(computeDockBounds(currentConfig.settings), false);
       placeDockPhysical(currentConfig.settings);
     }
   }, 450);
@@ -664,7 +670,7 @@ async function pollFullscreen(): Promise<void> {
         setFullscreenSuspended(true);
       } else if (reply === '0') {
         notFullscreenStreak += 1;
-        if (notFullscreenStreak >= 4) setFullscreenSuspended(false);
+        if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
       }
     } finally {
       fullscreenPolling = false;
@@ -686,7 +692,7 @@ async function pollFullscreen(): Promise<void> {
       setFullscreenSuspended(true);
     } else if (flags[0] === '0') {
       notFullscreenStreak += 1;
-      if (notFullscreenStreak >= 4) setFullscreenSuspended(false);
+      if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
     }
 
     for (let i = 0; i < secEntries.length; i++) {
@@ -697,7 +703,7 @@ async function pollFullscreen(): Promise<void> {
         setSecondaryFullscreenSuspended(entry, true);
       } else if (flag === '0') {
         entry.notFullscreenStreak += 1;
-        if (entry.notFullscreenStreak >= 4) setSecondaryFullscreenSuspended(entry, false);
+        if (entry.notFullscreenStreak >= 3) setSecondaryFullscreenSuspended(entry, false);
       }
     }
   } finally {
