@@ -212,7 +212,7 @@ function applyAllLayouts(settings: DockSettings): void {
         islandWindow.showInactive();
         ensureOnTop(islandWindow);
       }
-    } else if (islandWindow.isVisible()) {
+    } else if (islandWindow.isVisible() && !(fullscreenSuspended && islandFullscreenPeek)) {
       islandWindow.hide();
     }
   }
@@ -371,6 +371,7 @@ function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
 let fullscreenSuspended = false;
 let suspendedDockWasVisible = false;
 let suspendedIslandWasVisible = false;
+let islandFullscreenPeek = false;
 let fullscreenPollTimer: ReturnType<typeof setInterval> | null = null;
 let fullscreenPolling = false;
 let notFullscreenStreak = 0;
@@ -381,6 +382,7 @@ function setFullscreenSuspended(next: boolean): void {
   if (next) {
     suspendedDockWasVisible = dockWindow?.isVisible() ?? false;
     suspendedIslandWasVisible = islandWindow?.isVisible() ?? false;
+    islandFullscreenPeek = false;
     isPopoverOpen = false;
     dockInteractiveLock = false;
     dockInteractiveState = false;
@@ -391,6 +393,7 @@ function setFullscreenSuspended(next: boolean): void {
     dockWindow?.hide();
     islandWindow?.hide();
   } else {
+    islandFullscreenPeek = false;
     // The screen has just been through a mode/work-area change: lay everything out again from
     // fresh metrics *before* showing, and once more after it settles
     reassertLayoutAfterFullscreen();
@@ -406,6 +409,17 @@ function setFullscreenSuspended(next: boolean): void {
     ) {
       islandWindow.showInactive();
       ensureOnTop(islandWindow);
+    } else if (
+      currentConfig.settings.musicPosition !== 'top' &&
+      islandWindow &&
+      !islandWindow.isDestroyed() &&
+      islandWindow.isVisible()
+    ) {
+      isIslandExpanded = false;
+      islandInteractiveLock = false;
+      islandInteractiveState = false;
+      islandWindow.setIgnoreMouseEvents(true);
+      islandWindow.hide();
     }
   }
 }
@@ -632,13 +646,22 @@ function toggleDockVisibility(): void {
 
 function toggleIslandVisibility(): void {
   if (!islandWindow || islandWindow.isDestroyed()) return;
+  if (currentConfig.settings.musicPosition !== 'top' && !fullscreenSuspended) {
+    return;
+  }
   if (islandWindow.isVisible()) {
+    if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
+      islandFullscreenPeek = false;
+    }
     isIslandExpanded = false;
     islandInteractiveLock = false;
     islandInteractiveState = false;
     islandWindow.setIgnoreMouseEvents(true);
     islandWindow.hide();
   } else {
+    if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
+      islandFullscreenPeek = true;
+    }
     islandWindow.setAlwaysOnTop(true, 'screen-saver');
     islandWindow.setBounds(computeIslandBounds(), false);
     islandWindow.showInactive();
