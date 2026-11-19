@@ -630,6 +630,22 @@ function toggleDockVisibility(): void {
   rebuildTrayMenu();
 }
 
+function toggleIslandVisibility(): void {
+  if (!islandWindow || islandWindow.isDestroyed()) return;
+  if (islandWindow.isVisible()) {
+    isIslandExpanded = false;
+    islandInteractiveLock = false;
+    islandInteractiveState = false;
+    islandWindow.setIgnoreMouseEvents(true);
+    islandWindow.hide();
+  } else {
+    islandWindow.setAlwaysOnTop(true, 'screen-saver');
+    islandWindow.setBounds(computeIslandBounds(), false);
+    islandWindow.showInactive();
+    ensureOnTop(islandWindow);
+  }
+}
+
 function isPointInRects(x: number, y: number, rects: HitRect[]): boolean {
   for (let i = 0; i < rects.length; i++) {
     const r = rects[i];
@@ -895,6 +911,10 @@ if (!singleInstance) {
 
     globalShortcut.register('Alt+Space', () => {
       toggleDockVisibility();
+    });
+
+    globalShortcut.register('Alt+H', () => {
+      toggleIslandVisibility();
     });
 
     screen.on('display-metrics-changed', () => {
