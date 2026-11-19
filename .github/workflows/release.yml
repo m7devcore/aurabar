@@ -30,6 +30,15 @@ jobs:
 
       - run: npm run build
 
+      # electron-builder uploads the installer, blockmap and latest.yml in parallel and, when the
+      # release does not exist yet, they race to create it and some uploads are lost. Creating it
+      # first makes every upload just attach to it.
+      - name: Create release
+        shell: bash
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and publish installer
         run: npx electron-builder --win --publish always
         env:
