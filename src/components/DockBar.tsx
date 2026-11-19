@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { dockBridge } from '../hooks/useDockBridge';
 import { useMediaArtwork } from '../hooks/useMediaArtwork';
+import { useDockFit } from '../hooks/useDockFit';
 import { useLyricsPref } from '../hooks/useLyrics';
 import { InlineMusicText } from './InlineMusicText';
 import { t } from '../i18n';
@@ -46,10 +47,37 @@ import {
   WifiIcon
 } from './PremiumIcons';
 
+const RUNNING_ORDER_KEY = 'aurabar.runningOrder';
+
+// Where the user dropped each open, unpinned app: `anchors[key]` is how many pinned apps come
+// before it, `order` ranks apps that share the same anchor
+interface RunningLayout {
+  order: string[];
+  anchors: Record<string, number>;
+}
+
+function readRunningOrder(): RunningLayout {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(RUNNING_ORDER_KEY) ?? '{}');
+    const order = Array.isArray(raw?.order)
+      ? raw.order.filter((k: unknown): k is string => typeof k === 'string')
+      : [];
+    const anchors: Record<string, number> = {};
+    if (raw?.anchors && typeof raw.anchors === 'object') {
+      for (const [k, v] of Object.entries(raw.anchors)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0) anchors[k] = Math.floor(v);
+      }
+    }
+    return { order, anchors };
+  } catch {
+    return { order: [], anchors: {} };
+  }
+}
+
 interface CtxMenuState {
   x: number;
   anchorOffset?: number;
-  kind: 'pinned' | 'running' | 'bg';
+  kind: 'pinned' | 'running' | 'bg' | 'tray';
   pinned?: PinnedApp;
   pinnedIndex?: number;
   running?: RunningWindow;
@@ -146,6 +174,12 @@ export function DockBar({
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dockBarRef = useRef<HTMLDivElement | null>(null);
+  // Shrinks icons / tightens the music pill / scrolls the strip so a crowded dock never overlaps
+  useDockFit(dockBarRef, stripRef, [
+    settings.compactMode,
+    settings.musicPosition,
+    settings.showOpenWindowsInBar
+  ]);
   const folderPopoverRef = useRef<HTMLDivElement | null>(null);
   const ccFlyoutRef = useRef<HTMLDivElement | null>(null);
   const ccClusterRef = useRef<HTMLDivElement | null>(null);
@@ -154,6 +188,8 @@ export function DockBar({
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
+  const runDragRef = useRef(false);
+  const [runningLayout, setRunningLayout] = useState<RunningLayout>(readRunningOrder);
   const dragCandidateRef = useRef<PointerDragState | null>(null);
   const dragSnapshotRef = useRef<DragSlotSnapshot | null>(null);
   const liveDragRef = useRef<LiveDragPlan | null>(null);
@@ -624,7 +660,7 @@ export function DockBar({
 
   const applyWaveAtClientX = (clientX: number | null) => {
     const strip = stripRef.current;
-    if (!strip) return;
+    if (!strip || runDragRef.current) return;
     const buttons = strip.querySelectorAll<HTMLButtonElement>('.dock-app-btn');
     const dir = settings.position === 'top' ? 1 : -1;
 
@@ -655,6 +691,12 @@ export function DockBar({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     applyWaveAtClientX(null);
     setTooltip(null);
+  };
+
+  // Too many apps even at the smallest icon size: the strip scrolls, so the wheel moves it
+  const handleStripWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!dockBarRef.current?.hasAttribute('data-scroll')) return;
+    e.currentTarget.scrollLeft += e.deltaY + e.deltaX;
   };
 
   const showTooltipFor = (e: React.MouseEvent<HTMLElement>, label: string) => {
@@ -699,6 +741,16 @@ export function DockBar({
     setCcFlyout({ x: centerX });
   };
 
+  // Warm the background-apps list while the pointer is still travelling to the arrow, so the
+  // popover opens already filled instead of populating after the click
+  const lastBgFetchRef = useRef(0);
+  const prefetchBackgroundApps = () => {
+    const now = Date.now();
+    if (now - lastBgFetchRef.current < 2500) return;
+    lastBgFetchRef.current = now;
+    void dockBridge.getBackgroundApps().then(setBackgroundApps);
+  };
+
   const toggleOverflowTray = () => {
     closePeekNow();
     setCtxMenu(null);
@@ -711,7 +763,7 @@ export function DockBar({
       return;
     }
     onTogglePanel(null);
-    void dockBridge.getBackgroundApps().then(setBackgroundApps);
+    prefetchBackgroundApps();
     onRefreshWindows();
     const rect = overflowBtnRef.current?.getBoundingClientRect();
     const centerX = rect ? rect.left + rect.width / 2 : window.innerWidth - 320;
@@ -878,6 +930,131 @@ export function DockBar({
       barWindows.push(w);
     }
   }
+  // Order the user gave open, unpinned apps by dragging them; new ones keep arrival order
+  const orderOf = (w: RunningWindow) => {
+    const i = runningLayout.order.indexOf(w.processName.toLowerCase());
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  // Flex `order` of an unpinned app: pinned app i sits at (i+1)*1000, so an app dropped after p
+  // pinned apps lands just before pinned app p. Apps never moved stay after all pinned ones.
+  const runningSlotOrder = (w: RunningWindow) => {
+    const key = w.processName.toLowerCase();
+    const anchor = Math.min(runningLayout.anchors[key] ?? pinnedApps.length, pinnedApps.length);
+    return anchor * 1000 + 1 + Math.min(900, Math.max(0, runningLayout.order.indexOf(key)));
+  };
+  barWindows.sort((a, b) => {
+    const d = orderOf(a) - orderOf(b);
+    return d === 0 ? 0 : d < 0 ? -1 : 1;
+  });
+
+  // Drag an open, unpinned app anywhere along the strip, between pinned apps or other open ones.
+  // It only moves: dragging never pins it (right-click > Pin to taskbar does that).
+  const beginRunningDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    const strip = stripRef.current;
+    if (!strip) return;
+    const btn = e.currentTarget;
+    // Slots in on-screen order, because unpinned apps can sit between pinned ones
+    const items = Array.from(strip.querySelectorAll<HTMLElement>('[data-pinned-id], [data-run-key]'))
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return { el, center: r.left + r.width / 2, run: el.dataset.runKey ?? null };
+      })
+      .sort((x, y) => x.center - y.center);
+    const from = items.findIndex((it) => it.el === btn);
+    if (from === -1 || items.length < 2) return;
+    const centers = items.map((it) => it.center);
+    const step = Math.abs(from > 0 ? centers[from] - centers[from - 1] : centers[1] - centers[0]);
+    const startX = e.clientX;
+    let active = false;
+    let to = from;
+
+    const clearInline = () => {
+      for (const it of items) {
+        it.el.style.transform = '';
+        it.el.style.transition = '';
+        it.el.style.zIndex = '';
+      }
+      strip.classList.remove('is-run-dragging');
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (!active) {
+        if (Math.abs(dx) < 6) return;
+        active = true;
+        runDragRef.current = true;
+        closePeekNow();
+        setTooltip(null);
+        dockBridge.setDockInteractive(true);
+        strip.classList.add('is-run-dragging');
+      }
+      const limit = step * 0.4;
+      const minDx = centers[0] - centers[from] - limit;
+      const maxDx = centers[centers.length - 1] - centers[from] + limit;
+      const cdx = Math.max(minDx, Math.min(maxDx, dx));
+      btn.style.transition = 'none';
+      btn.style.zIndex = '8';
+      btn.style.transform = `translateX(${cdx}px) scale(1.08)`;
+
+      const dragCenter = centers[from] + cdx;
+      let best = 0;
+      for (let i = 1; i < centers.length; i += 1) {
+        if (Math.abs(centers[i] - dragCenter) < Math.abs(centers[best] - dragCenter)) best = i;
+      }
+      to = best;
+      items.forEach((it, i) => {
+        if (i === from) return;
+        let shift = 0;
+        if (from < to && i > from && i <= to) shift = -step;
+        else if (from > to && i >= to && i < from) shift = step;
+        it.el.style.transform = shift ? `translateX(${shift}px)` : '';
+      });
+    };
+
+    const finish = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      if (!active) return;
+      runDragRef.current = false;
+      suppressNextClickRef.current = true;
+      setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 80);
+      dockBridge.setDockInteractive(false);
+      // Drop the inline offsets and reorder in the same frame so nothing visibly snaps back
+      setJustDropped(true);
+      setTimeout(() => setJustDropped(false), 50);
+      clearInline();
+      if (to === from) return;
+      const next = items.slice();
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      const anchors = { ...runningLayout.anchors };
+      const runKeys: string[] = [];
+      let pinnedBefore = 0;
+      for (const it of next) {
+        if (it.run === null) {
+          pinnedBefore += 1;
+        } else {
+          anchors[it.run] = pinnedBefore;
+          runKeys.push(it.run);
+        }
+      }
+      const order = [...runKeys, ...runningLayout.order.filter((k) => !runKeys.includes(k))].slice(0, 60);
+      const layout: RunningLayout = { order, anchors };
+      setRunningLayout(layout);
+      try {
+        window.localStorage.setItem(RUNNING_ORDER_KEY, JSON.stringify(layout));
+      } catch {
+        // The order is a convenience only
+      }
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+  };
 
   const openContextMenu = (
     e: React.MouseEvent,
@@ -1601,6 +1778,18 @@ export function DockBar({
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {ctxMenu.kind === 'tray' && (
+            <button
+              className="taskbar-ctx-item"
+              onClick={() => {
+                setCtxMenu(null);
+                void dockBridge.systemAction('taskmgr');
+              }}
+            >
+              <Activity size={14} style={{ color: 'var(--accent)' }} />
+              <span>{settings.language === 'ar' ? 'مدير المهام' : 'Task Manager'}</span>
+            </button>
+          )}
           {ctxMenu.kind === 'running' && ctxMenu.running && (
             <>
               <button
@@ -1915,6 +2104,7 @@ export function DockBar({
               }
               onMouseMove={handleStripMouseMove}
               onMouseLeave={handleStripMouseLeave}
+              onWheel={handleStripWheel}
             >
               <button
                 className="dock-app-btn"
@@ -1976,7 +2166,8 @@ export function DockBar({
                         ? { background: 'var(--chip-hover)', borderColor: 'var(--border-hairline)' }
                         : {}),
                       ...(liveTransform ? { transform: liveTransform } : {}),
-                      ...(isBeingDragged ? { opacity: 0, pointerEvents: 'none' } : {})
+                      ...(isBeingDragged ? { opacity: 0, pointerEvents: 'none' } : {}),
+                      order: (index + 1) * 1000
                     }}
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
@@ -2068,7 +2259,6 @@ export function DockBar({
               {settings.showOpenWindowsInBar && barWindows.length > 0 && (
                 <>
                   {barWindows.map((win) => {
-                    const asPinned = winToPinned(win);
                     const procWindows = windowsForProcess(win.processName);
                     const procActive = procWindows.find((w) => w.isActive);
                     const peekKey = `proc:${win.processName.toLowerCase()}`;
@@ -2088,12 +2278,11 @@ export function DockBar({
                           ...(isExternalInsertGap
                             ? { transform: `translateX(${slotStep}px)` }
                             : {}),
-                          ...(isDraggedRunning ? { opacity: 0.28 } : {})
+                          ...(isDraggedRunning ? { opacity: 0.28 } : {}),
+                          order: runningSlotOrder(win)
                         }}
-                        onPointerDown={(e) => {
-                          if (e.button !== 0 || !asPinned) return;
-                          beginPointerDrag({ kind: 'running', win, item: asPinned }, e.clientX, e.clientY);
-                        }}
+                        data-run-key={win.processName.toLowerCase()}
+                        onPointerDown={beginRunningDrag}
                         onMouseEnter={(e) => openPeek(peekKey, e.currentTarget)}
                         onMouseLeave={schedulePeekClose}
                         onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: procActive ?? win })}
@@ -2151,12 +2340,14 @@ export function DockBar({
               e.stopPropagation();
               toggleOverflowTray();
             }}
-            onMouseEnter={(e) =>
+            onContextMenu={(e) => openContextMenu(e, { kind: 'tray' })}
+            onMouseEnter={(e) => {
+              prefetchBackgroundApps();
               showTooltipFor(
                 e,
                 settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'
-              )
-            }
+              );
+            }}
             title={settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'}
           >
             <ChevronUp

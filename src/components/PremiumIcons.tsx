@@ -26,7 +26,7 @@ export function SearchIcon() {
 
 export function GlobeLangIcon() {
   return (
-    <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
+    <svg width="11" height="11" viewBox="0 0 20 20" fill="none">
       <circle cx="10" cy="10" r="7.2" stroke="currentColor" strokeWidth="1.55" strokeOpacity="0.82" />
       <ellipse cx="10" cy="10" rx="3.4" ry="7.2" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.72" />
       <path d="M3.2 10H16.8" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.72" />

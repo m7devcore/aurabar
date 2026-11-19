@@ -294,7 +294,26 @@ export async function focusWindowByPid(_pid: number, hwnd?: string): Promise<boo
   return false;
 }
 
-export async function listBackgroundApps(): Promise<BackgroundApp[]> {
+// Hover prefetch and the click that follows ask within a second or two; share one scan
+let bgInFlight: Promise<BackgroundApp[]> | null = null;
+let bgCache: { at: number; apps: BackgroundApp[] } | null = null;
+const BG_TTL_MS = 1200;
+
+export function listBackgroundApps(): Promise<BackgroundApp[]> {
+  if (bgCache && Date.now() - bgCache.at < BG_TTL_MS) return Promise.resolve(bgCache.apps);
+  if (bgInFlight) return bgInFlight;
+  bgInFlight = scanBackgroundApps()
+    .then((apps) => {
+      bgCache = { at: Date.now(), apps };
+      return apps;
+    })
+    .finally(() => {
+      bgInFlight = null;
+    });
+  return bgInFlight;
+}
+
+async function scanBackgroundApps(): Promise<BackgroundApp[]> {
   const raw = await win32Daemon.send('LIST_BG');
   if (!raw || !raw.startsWith('[')) return [];
   try {
