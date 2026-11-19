@@ -215,28 +215,22 @@ function placeSecondaryDockPhysical(
   settings: DockSettings
 ): void {
   if (entry.win.isDestroyed()) return;
-  const curDisplay = screen.getDisplayMatching(entry.win.getBounds());
-  if (curDisplay.id !== display.id) {
-    const dipBounds = computeDockBoundsForDisplay(settings, display);
+  const dipBounds = computeDockBoundsForDisplay(settings, display);
+  const cur = entry.win.getBounds();
+  if (
+    Math.abs(cur.x - dipBounds.x) > 1 ||
+    Math.abs(cur.y - dipBounds.y) > 1 ||
+    Math.abs(cur.width - dipBounds.width) > 1 ||
+    Math.abs(cur.height - dipBounds.height) > 1
+  ) {
     entry.win.setBounds(dipBounds, false);
-  }
-  const scale = display.scaleFactor || 1;
-  const canvasPhysH = Math.round(DOCK_CANVAS_HEIGHT * scale);
-  const reservePhys = settings.replaceWindowsTaskbar && !dockManuallyHidden ? 1 : 0;
-  const h = getHwndNumber(entry.win);
-  if (h !== '0') {
-    void win32Daemon.send(`PLACE_DOCK_MON ${h} ${settings.position} ${canvasPhysH} ${reservePhys}`);
   }
 }
 
-function createSecondaryDock(display: Electron.Display, _settings: DockSettings): SecondaryDockEntry {
-  // Spawn clearly inside the target display with a distinct initial size so Windows assigns that
-  // monitor's native DPI context before ready-to-show applies the full dock bounds.
+function createSecondaryDock(display: Electron.Display, settings: DockSettings): SecondaryDockEntry {
+  const bounds = computeDockBoundsForDisplay(settings, display);
   const win = new BrowserWindow({
-    x: display.bounds.x + 24,
-    y: display.bounds.y + 24,
-    width: Math.min(480, display.bounds.width),
-    height: 160,
+    ...bounds,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -277,7 +271,9 @@ function createSecondaryDock(display: Electron.Display, _settings: DockSettings)
     if (win.isDestroyed()) return;
     entry.ready = true;
     const freshDisplay = screen.getAllDisplays().find((d) => d.id === display.id) ?? display;
-    placeSecondaryDockPhysical(entry, freshDisplay, currentConfig.settings);
+    const targetBounds = computeDockBoundsForDisplay(currentConfig.settings, freshDisplay);
+    win.setBounds(targetBounds, false);
+    win.setBounds(targetBounds, false);
     syncExtraHwndsToBridge();
     if (!dockManuallyHidden && !entry.fullscreenSuspended) {
       win.showInactive();
