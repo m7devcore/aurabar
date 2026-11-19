@@ -280,16 +280,20 @@ export async function listRunningWindows(): Promise<RunningWindow[]> {
   }
 }
 
+// 'failed' / 'false' mean the window could not be brought forward (or is gone), so the caller may
+// open the app instead. A timeout (empty reply) is not a failure: the toggle may well have happened.
+function toggleSucceeded(reply: string): boolean {
+  return reply === '' || reply === 'focused' || reply === 'minimized';
+}
+
 export async function focusWindowByPid(_pid: number, hwnd?: string): Promise<boolean> {
   if (hwnd && /^\d+$/.test(hwnd)) {
-    const res = await win32Daemon.send(`TOGGLE ${hwnd}`);
-    return res === 'focused' || res === 'minimized';
+    return toggleSucceeded(await win32Daemon.send(`TOGGLE ${hwnd}`));
   }
   const windows = await listRunningWindows();
   const match = windows.find((w) => w.pid === _pid);
   if (match?.hwnd) {
-    const res = await win32Daemon.send(`TOGGLE ${match.hwnd}`);
-    return res === 'focused' || res === 'minimized';
+    return toggleSucceeded(await win32Daemon.send(`TOGGLE ${match.hwnd}`));
   }
   return false;
 }

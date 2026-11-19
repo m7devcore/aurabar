@@ -4,6 +4,33 @@ import path from 'node:path';
 
 const COMMAND_TIMEOUT_MS = 3500;
 
+// Things the user just did (a click on a taskbar icon, a volume key...) must not wait behind
+// background refreshes such as window lists, thumbnails and icons that are already queued
+const URGENT_COMMANDS = new Set([
+  'TOGGLE',
+  'CLOSE_WIN',
+  'OPEN_APP',
+  'QUIT_APP',
+  'KILL_APP',
+  'START',
+  'QUICK',
+  'DESKTOP',
+  'VOL_SET',
+  'VOL_UP',
+  'VOL_DOWN',
+  'VOL_MUTE',
+  'MEDIA_PLAYPAUSE',
+  'MEDIA_NEXT',
+  'MEDIA_PREV',
+  'KBD_SWITCH'
+]);
+
+interface QueuedCommand {
+  command: string;
+  urgent: boolean;
+  resolve: (value: string) => void;
+}
+
 class Win32Daemon {
   private proc: ChildProcessByStdio<Writable, Readable, null> | null = null;
   private buffer = '';
@@ -11,7 +38,8 @@ class Win32Daemon {
   // arrives after its command timed out is dropped instead of being handed to the next caller.
   private pending = new Map<number, (value: string) => void>();
   private nextId = 1;
-  private commandChain: Promise<void> = Promise.resolve();
+  private queue: QueuedCommand[] = [];
+  private busy = false;
 
   start(): void {
     if (this.proc && !this.proc.killed) return;
@@ -99,41 +127,63 @@ class Win32Daemon {
   }
 
   send(command: string): Promise<string> {
-    const run = () =>
-      new Promise<string>((resolve) => {
-        if (!this.proc || this.proc.killed) {
-          this.start();
-        }
-        const proc = this.proc;
-        if (!proc) {
-          resolve('');
-          return;
-        }
-        const id = this.nextId++;
-        const timer = setTimeout(() => {
-          this.pending.delete(id);
-          resolve('');
-        }, COMMAND_TIMEOUT_MS);
+    return new Promise<string>((resolve) => {
+      const urgent = URGENT_COMMANDS.has(command.split(' ', 1)[0]);
+      const job: QueuedCommand = { command, urgent, resolve };
+      if (urgent) {
+        // After other urgent jobs (keeps their order), before everything background
+        let at = 0;
+        while (at < this.queue.length && this.queue[at].urgent) at += 1;
+        this.queue.splice(at, 0, job);
+      } else {
+        this.queue.push(job);
+      }
+      this.pump();
+    });
+  }
 
-        this.pending.set(id, (val: string) => {
-          clearTimeout(timer);
-          resolve(val);
-        });
-        try {
-          proc.stdin.write(`#${id} ${command}\n`);
-        } catch {
-          this.pending.delete(id);
-          clearTimeout(timer);
-          resolve('');
-        }
+  private pump(): void {
+    if (this.busy) return;
+    const job = this.queue.shift();
+    if (!job) return;
+    this.busy = true;
+    this.execute(job.command)
+      .then(job.resolve)
+      .finally(() => {
+        this.busy = false;
+        this.pump();
       });
+  }
 
-    const next = this.commandChain.then(run, run);
-    this.commandChain = next.then(
-      () => undefined,
-      () => undefined
-    );
-    return next;
+  private execute(command: string): Promise<string> {
+    return new Promise<string>((resolve) => {
+      if (!this.proc || this.proc.killed) {
+        this.start();
+      }
+      const proc = this.proc;
+      if (!proc) {
+        resolve('');
+        return;
+      }
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve('');
+      }, COMMAND_TIMEOUT_MS);
+
+      this.pending.set(id, (val: string) => {
+        clearTimeout(timer);
+        resolve(val);
+      });
+      try {
+        proc.stdin.write(`#${id} ${command}
+`);
+      } catch {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        resolve('');
+      }
+    });
   }
 }
 

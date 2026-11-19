@@ -2217,8 +2217,11 @@ export function DockBar({
                       }
                       closePeekNow();
                       if (matchedWin && !e.shiftKey) {
-                        void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
+                        void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then((ok) => {
                           setTimeout(onRefreshWindows, 80);
+                          // Could not bring the window forward: open the app the normal way, which
+                          // surfaces single-instance apps instead of leaving the click dead
+                          if (!ok) void dockBridge.launchTarget(app.target);
                         });
                       } else {
                         void dockBridge.launchTarget(app.target);

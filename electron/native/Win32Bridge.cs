@@ -128,6 +128,25 @@ namespace AuraBarNative {
     [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
+    // What Alt+Tab uses: restores and activates even windows our process is not allowed to
+    // drive with the regular calls (elevated apps such as Task Manager, or a foreground lock)
+    [DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendMessageTimeoutRaw(
+      IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(
+      IntPtr tokenHandle, int tokenInfoClass, out int tokenInfo, int tokenInfoLength, out int returnLength);
+
     [DllImport("user32.dll")]
     private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
@@ -223,6 +242,11 @@ namespace AuraBarNative {
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOPMOST = 0x00000008;
     private const uint WM_CLOSE = 0x0010;
+    private const uint WM_SYSCOMMAND = 0x0112;
+    private const int SC_MINIMIZE = 0xF020;
+    private const int SC_RESTORE = 0xF120;
+    private const int SC_CLOSE = 0xF060;
+    private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint GW_HWNDPREV = 3;
     private const uint GW_OWNER = 4;
     private const int DWMWA_CLOAKED = 14;
@@ -410,7 +434,8 @@ namespace AuraBarNative {
           if (fg != IntPtr.Zero) {
             uint pid;
             GetWindowThreadProcessId(fg, out pid);
-            if (!IsAuraBarWindow(pid, fg) && IsTaskbarWindow(fg)) {
+            bool isAura = IsAuraBarWindow(pid, fg);
+            if (!isAura && IsTaskbarWindow(fg)) {
               if (fg != lastExternalForeground) {
                 IntPtr leaving = lastExternalForeground;
                 lastExternalForeground = fg;
@@ -423,6 +448,10 @@ namespace AuraBarNative {
                 SnapshotThumb(fg);
                 lastFgSnapAt = Environment.TickCount;
               }
+            } else if (!isAura) {
+              // Focus went to the desktop, Start, a shell popup...: the old window is no longer
+              // "the active one", so clicking its icon must bring it forward, not minimize it
+              lastExternalForeground = IntPtr.Zero;
             } else if (lastExternalForeground != IntPtr.Zero &&
                        (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
               lastExternalForeground = IntPtr.Zero;
@@ -525,27 +554,134 @@ namespace AuraBarNative {
       return "[" + string.Join(",", jsonArr) + "]";
     }
 
-    private static void ForceFocus(IntPtr hWnd) {
-      long hwndKey = hWnd.ToInt64();
-      // Preserve exact prior state: ONLY restore if genuinely minimized (never touch non-minimized bounds)
-      if (IsIconic(hWnd)) {
-        WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
-        wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
-        bool wasMax = maximizedHwnds.Contains(hwndKey);
-        if (GetWindowPlacement(hWnd, ref wp)) {
-          if ((wp.flags & 0x0002) != 0 || wp.showCmd == 3) {
-            wasMax = true;
-          }
+    // Windows of elevated (admin) processes, such as Task Manager, cannot be driven with the
+    // regular window calls from a normal process. The answer is cached per process.
+    private static readonly Dictionary<uint, bool> protectedProcs = new Dictionary<uint, bool>();
+    private static int ownElevation = -1;
+
+    private static bool IsProcessElevated(IntPtr hProc, out bool known) {
+      known = false;
+      IntPtr token;
+      if (!OpenProcessToken(hProc, 0x0008, out token)) return false; // TOKEN_QUERY
+      try {
+        int elevated;
+        int len;
+        if (GetTokenInformation(token, 20, out elevated, 4, out len)) { // TokenElevation
+          known = true;
+          return elevated != 0;
         }
-        ShowWindowAsync(hWnd, wasMax ? 3 : 9); // SW_SHOWMAXIMIZED : SW_RESTORE (exact snapped/normal rect)
-        maximizedHwnds.Remove(hwndKey);
+      } finally {
+        CloseHandle(token);
+      }
+      return false;
+    }
+
+    private static bool IsProtectedWindow(IntPtr hWnd) {
+      uint pid;
+      GetWindowThreadProcessId(hWnd, out pid);
+      if (pid == 0) return false;
+      bool cached;
+      lock (protectedProcs) {
+        if (protectedProcs.TryGetValue(pid, out cached)) return cached;
       }
 
+      if (ownElevation < 0) {
+        bool ownKnown;
+        bool own = IsProcessElevated(Process.GetCurrentProcess().Handle, out ownKnown);
+        ownElevation = ownKnown && own ? 1 : 0;
+      }
+
+      bool isProtected = false;
+      IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (int)pid);
+      if (hProc == IntPtr.Zero) {
+        // Cannot even open it: it is more privileged than we are
+        isProtected = ownElevation == 0;
+      } else {
+        try {
+          bool known;
+          bool elevated = IsProcessElevated(hProc, out known);
+          if (known) {
+            isProtected = elevated && ownElevation == 0;
+          } else {
+            isProtected = ownElevation == 0;
+          }
+        } finally {
+          CloseHandle(hProc);
+        }
+      }
+      lock (protectedProcs) {
+        if (protectedProcs.Count > 256) protectedProcs.Clear();
+        protectedProcs[pid] = isProtected;
+      }
+      return isProtected;
+    }
+
+    private static bool IsForegroundTarget(IntPtr hWnd) {
+      IntPtr fg = GetForegroundWindow();
+      if (fg == hWnd) return true;
+      return fg != IntPtr.Zero && GetAncestor(fg, 3) == hWnd; // GA_ROOTOWNER
+    }
+
+    private delegate bool Condition();
+
+    // Polls a cheap condition for at most maxMs; returns as soon as it holds (usually at once)
+    private static bool WaitUntil(Condition cond, int maxMs) {
+      int waited = 0;
+      while (true) {
+        if (cond()) return true;
+        if (waited >= maxMs) return false;
+        Thread.Sleep(4);
+        waited += 4;
+      }
+    }
+
+    private static void RestoreIfMinimized(IntPtr hWnd) {
+      if (!IsIconic(hWnd)) return;
+      Condition restored = delegate() { return !IsIconic(hWnd); };
+      if (IsProtectedWindow(hWnd)) {
+        // Straight to the call that works for them; it restores and activates in one go
+        SwitchToThisWindow(hWnd, true);
+        if (WaitUntil(restored, 150)) return;
+      }
+      long hwndKey = hWnd.ToInt64();
+      // Preserve exact prior state: ONLY restore if genuinely minimized (never touch non-minimized bounds)
+      WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+      wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+      bool wasMax = maximizedHwnds.Contains(hwndKey);
+      if (GetWindowPlacement(hWnd, ref wp)) {
+        if ((wp.flags & 0x0002) != 0 || wp.showCmd == 3) {
+          wasMax = true;
+        }
+      }
+      ShowWindowAsync(hWnd, wasMax ? 3 : 9); // SW_SHOWMAXIMIZED : SW_RESTORE (exact snapped/normal rect)
+      maximizedHwnds.Remove(hwndKey);
+      if (WaitUntil(restored, 60)) return;
+
+      // Elevated windows silently ignore ShowWindowAsync; a WM_SYSCOMMAND still gets through
+      IntPtr res;
+      SendMessageTimeoutRaw(hWnd, WM_SYSCOMMAND, new IntPtr(SC_RESTORE), IntPtr.Zero, SMTO_ABORTIFHUNG, 200, out res);
+      if (WaitUntil(restored, 40)) return;
+
+      SwitchToThisWindow(hWnd, true);
+      WaitUntil(restored, 150);
+    }
+
+    // Brings the window to the front and reports whether it really got there
+    private static bool ForceFocus(IntPtr hWnd) {
+      RestoreIfMinimized(hWnd);
+
       AllowSetForegroundWindow(-1);
-      if (GetForegroundWindow() == hWnd) return;
+      if (IsForegroundTarget(hWnd)) return true;
+
+      Condition isFront = delegate() { return IsForegroundTarget(hWnd); };
+
+      if (IsProtectedWindow(hWnd)) {
+        SwitchToThisWindow(hWnd, true);
+        if (WaitUntil(isFront, 150)) return true;
+      }
 
       BringWindowToTop(hWnd);
-      if (SetForegroundWindow(hWnd)) return;
+      if (SetForegroundWindow(hWnd) && WaitUntil(isFront, 16)) return true;
 
       // Attach only to current foreground thread (typically our own responsive dockWindow) to unlock SetForegroundWindow
       IntPtr fg = GetForegroundWindow();
@@ -558,22 +694,40 @@ namespace AuraBarNative {
         attachedFg = AttachThreadInput(curThread, fgThread, true);
       }
       BringWindowToTop(hWnd);
-      bool focused = SetForegroundWindow(hWnd);
+      SetForegroundWindow(hWnd);
       if (attachedFg) {
         AttachThreadInput(curThread, fgThread, false);
       }
+      if (WaitUntil(isFront, 16)) return true;
 
-      if (!focused && GetForegroundWindow() != hWnd) {
-        uint targetThread = GetWindowThreadProcessId(hWnd, out dummy);
-        bool attachedTarget = targetThread != 0 && targetThread != curThread
-          ? AttachThreadInput(curThread, targetThread, true)
-          : false;
-        BringWindowToTop(hWnd);
-        SetForegroundWindow(hWnd);
-        if (attachedTarget) {
-          AttachThreadInput(curThread, targetThread, false);
-        }
+      uint targetThread = GetWindowThreadProcessId(hWnd, out dummy);
+      bool attachedTarget = targetThread != 0 && targetThread != curThread
+        ? AttachThreadInput(curThread, targetThread, true)
+        : false;
+      BringWindowToTop(hWnd);
+      SetForegroundWindow(hWnd);
+      if (attachedTarget) {
+        AttachThreadInput(curThread, targetThread, false);
       }
+      if (WaitUntil(isFront, 16)) return true;
+
+      // Last resort, the same call Alt+Tab makes: works on elevated windows and past the
+      // foreground lock
+      SwitchToThisWindow(hWnd, true);
+      return WaitUntil(isFront, 150);
+    }
+
+    private static bool MinimizeWindow(IntPtr hWnd) {
+      Condition minimized = delegate() { return IsIconic(hWnd); };
+      IntPtr res;
+      if (IsProtectedWindow(hWnd)) {
+        SendMessageTimeoutRaw(hWnd, WM_SYSCOMMAND, new IntPtr(SC_MINIMIZE), IntPtr.Zero, SMTO_ABORTIFHUNG, 200, out res);
+        if (WaitUntil(minimized, 60)) return true;
+      }
+      ShowWindowAsync(hWnd, 6); // SW_MINIMIZE
+      if (WaitUntil(minimized, 40)) return true;
+      SendMessageTimeoutRaw(hWnd, WM_SYSCOMMAND, new IntPtr(SC_MINIMIZE), IntPtr.Zero, SMTO_ABORTIFHUNG, 200, out res);
+      return WaitUntil(minimized, 60);
     }
 
     private static string ToggleWindow(long hwndVal) {
@@ -584,7 +738,7 @@ namespace AuraBarNative {
       bool dockHasFocus = fg == IntPtr.Zero || fg == dockHwnd || fg == islandHwnd;
       bool isTargetActive =
         !IsIconic(hWnd) &&
-        (fg == hWnd || (dockHasFocus && hWnd == lastExternalForeground));
+        (IsForegroundTarget(hWnd) || (dockHasFocus && hWnd == lastExternalForeground));
 
       if (isTargetActive) {
         if (IsZoomed(hWnd)) {
@@ -599,22 +753,38 @@ namespace AuraBarNative {
           }
         }
         SnapshotThumbIfStale(hWnd, 1500);
-        ShowWindowAsync(hWnd, 6); // SW_MINIMIZE
-        if (lastExternalForeground == hWnd) {
-          lastExternalForeground = IntPtr.Zero;
+        if (MinimizeWindow(hWnd)) {
+          if (lastExternalForeground == hWnd) {
+            lastExternalForeground = IntPtr.Zero;
+          }
+          return "minimized";
         }
-        return "minimized";
+        // Could not minimize it (it is not ours to control): make sure it is at least in front
+        maximizedHwnds.Remove(hwndVal);
+        if (ForceFocus(hWnd)) {
+          lastExternalForeground = hWnd;
+          return "focused";
+        }
+        return "failed";
       } else {
-        ForceFocus(hWnd);
-        lastExternalForeground = hWnd;
-        return "focused";
+        if (ForceFocus(hWnd)) {
+          lastExternalForeground = hWnd;
+          return "focused";
+        }
+        return "failed";
       }
     }
 
     private static string CloseWindowByHwnd(long hwndVal) {
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
-      bool sent = PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+      bool sent = false;
+      if (IsProtectedWindow(hWnd)) {
+        // Elevated windows reject a posted WM_CLOSE; the system-menu close is let through
+        IntPtr res;
+        sent = SendMessageTimeoutRaw(hWnd, WM_SYSCOMMAND, new IntPtr(SC_CLOSE), IntPtr.Zero, SMTO_ABORTIFHUNG, 250, out res) != IntPtr.Zero;
+      }
+      if (!sent) sent = PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
       if (sent && lastExternalForeground == hWnd) {
         lastExternalForeground = IntPtr.Zero;
       }
@@ -819,9 +989,12 @@ namespace AuraBarNative {
         if (!IsWindowVisible(toOpen)) {
           ShowWindowAsync(toOpen, 5); // SW_SHOW
         }
-        ForceFocus(toOpen);
-        lastExternalForeground = toOpen;
-        return "focused";
+        // Only claim success when the window really came to the front; otherwise fall through
+        // to launching it, which surfaces single-instance apps the normal way
+        if (ForceFocus(toOpen)) {
+          lastExternalForeground = toOpen;
+          return "focused";
+        }
       }
 
       // 2) Packaged Microsoft Store / UWP / MSIX app -> return shell:AppsFolder AUMID
