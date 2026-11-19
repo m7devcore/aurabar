@@ -420,6 +420,7 @@ function setFullscreenSuspended(next: boolean): void {
       islandInteractiveState = false;
       islandWindow.setIgnoreMouseEvents(true);
       islandWindow.hide();
+      islandWindow.webContents.send('aurabar:island-visibility', false);
     }
   }
 }
@@ -658,6 +659,7 @@ function toggleIslandVisibility(): void {
     islandInteractiveState = false;
     islandWindow.setIgnoreMouseEvents(true);
     islandWindow.hide();
+    islandWindow.webContents.send('aurabar:island-visibility', false);
   } else {
     if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
       islandFullscreenPeek = true;
@@ -665,6 +667,7 @@ function toggleIslandVisibility(): void {
     islandWindow.setAlwaysOnTop(true, 'screen-saver');
     islandWindow.setBounds(computeIslandBounds(), false);
     islandWindow.showInactive();
+    islandWindow.webContents.send('aurabar:island-visibility', true);
     ensureOnTop(islandWindow);
   }
 }

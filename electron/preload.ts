@@ -66,6 +66,7 @@ export interface AuraBarApi {
   quitApp: () => Promise<void>;
   onDockBlurred: (cb: () => void) => () => void;
   onIslandBlurred: (cb: () => void) => () => void;
+  onIslandVisibility: (cb: (visible: boolean) => void) => () => void;
   onConfigUpdated: (cb: (cfg: AppConfig) => void) => () => void;
   getUpdateInfo: () => Promise<UpdateInfo>;
   checkForUpdates: () => Promise<void>;
@@ -121,6 +122,11 @@ const api: AuraBarApi = {
     const handler = () => cb();
     ipcRenderer.on('aurabar:island-blurred', handler);
     return () => ipcRenderer.removeListener('aurabar:island-blurred', handler);
+  },
+  onIslandVisibility: (cb) => {
+    const handler = (_e: Electron.IpcRendererEvent, visible: boolean) => cb(visible);
+    ipcRenderer.on('aurabar:island-visibility', handler);
+    return () => ipcRenderer.removeListener('aurabar:island-visibility', handler);
   },
   onConfigUpdated: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, cfg: AppConfig) => cb(cfg);

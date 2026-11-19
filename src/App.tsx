@@ -26,6 +26,7 @@ export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [islandExpanded, setIslandExpanded] = useState(false);
+  const [islandPeekVisible, setIslandPeekVisible] = useState(false);
   const [stats, setStats] = useState<SystemStats>({
     cpuPercent: 0,
     ramPercent: 0,
@@ -117,6 +118,7 @@ export function App() {
   useEffect(() => {
     const unsubBlur = dockBridge.onDockBlurred(() => setActivePanel(null));
     const unsubIslandBlur = dockBridge.onIslandBlurred(() => setIslandExpanded(false));
+    const unsubIslandVis = dockBridge.onIslandVisibility((visible) => setIslandPeekVisible(visible));
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (VIEW_MODE === 'island') {
@@ -132,6 +134,7 @@ export function App() {
     return () => {
       unsubBlur();
       unsubIslandBlur();
+      unsubIslandVis();
       window.removeEventListener('keydown', onKeyDown);
     };
   }, []);
@@ -172,7 +175,7 @@ export function App() {
   const musicPosition = config?.settings.musicPosition;
   const needsMedia =
     VIEW_MODE === 'island'
-      ? musicPosition === 'top'
+      ? musicPosition === 'top' || islandPeekVisible
       : musicPosition === 'taskbar' || activePanel === 'media';
 
   useEffect(() => {
