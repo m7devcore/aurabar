@@ -209,17 +209,9 @@ function placeSecondaryDockPhysical(
 ): void {
   if (entry.win.isDestroyed()) return;
   const dipBounds = computeDockBoundsForDisplay(settings, display);
+  // First setBounds moves the HWND onto the target monitor's DPI context; second applies exact DIP size for that monitor
   entry.win.setBounds(dipBounds, false);
-  const scale = display.scaleFactor || 1;
-  const canvasPhysH = Math.round(DOCK_CANVAS_HEIGHT * scale);
-  const reservePhys =
-    settings.replaceWindowsTaskbar && !dockManuallyHidden
-      ? Math.round(getReservedHeightPx(settings) * scale)
-      : 0;
-  const h = getHwndNumber(entry.win);
-  if (h !== '0') {
-    void win32Daemon.send(`PLACE_DOCK_MON ${h} ${settings.position} ${canvasPhysH} ${reservePhys}`);
-  }
+  entry.win.setBounds(dipBounds, false);
 }
 
 function createSecondaryDock(display: Electron.Display, settings: DockSettings): SecondaryDockEntry {
@@ -1259,13 +1251,27 @@ if (!singleInstance) {
       toggleIslandVisibility();
     });
 
+    const getTopologyKey = () =>
+      screen
+        .getAllDisplays()
+        .map((d) => `${d.id}:${d.bounds.x},${d.bounds.y},${d.bounds.width}x${d.bounds.height}@${d.scaleFactor}`)
+        .join('|');
+    let lastTopologyKey = getTopologyKey();
+
     const handleDisplayChange = () => {
+      const nextKey = getTopologyKey();
+      if (nextKey === lastTopologyKey) return;
+      lastTopologyKey = nextKey;
       if (currentConfig.settings.replaceWindowsTaskbar) {
         syncTaskbarReplacement(currentConfig.settings);
       }
       applyAllLayouts(currentConfig.settings);
     };
-    screen.on('display-metrics-changed', handleDisplayChange);
+    screen.on('display-metrics-changed', (_e, _disp, changed) => {
+      if (changed.includes('bounds') || changed.includes('scaleFactor') || changed.includes('rotation')) {
+        handleDisplayChange();
+      }
+    });
     screen.on('display-added', handleDisplayChange);
     screen.on('display-removed', handleDisplayChange);
   });

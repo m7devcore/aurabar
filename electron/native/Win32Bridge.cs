@@ -554,7 +554,6 @@ namespace AuraBarNative {
 
           EnforceWorkArea();
           EnforceDockPlacement();
-          EnforceExtraDockPlacements();
           KeepOnTopIfDemoted(dockHwnd);
           KeepOnTopIfDemoted(islandHwnd);
           List<IntPtr> extrasCopy = null;
@@ -787,52 +786,35 @@ namespace AuraBarNative {
       return IsFullscreenWindowOnMonitor(hWnd, dockMonitor);
     }
 
-    // Per-monitor Z-order fullscreen check: walks visible top-level windows on targetMonitor from
-    // top to bottom so a fullscreen game/video on Monitor 1 hides Monitor 1's dock without hiding Monitor 2's.
-    private static bool IsFullscreenOnMonitor(IntPtr targetMonitor, bool isPrimary) {
-      if (targetMonitor == IntPtr.Zero) return false;
-      int decision = 0; // 0 = undecided, 1 = fullscreen, -1 = normal window on top
-      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
-        if (!IsWindowVisible(hWnd) || IsIconic(hWnd) || IsCloaked(hWnd)) return true;
-        uint pid;
-        GetWindowThreadProcessId(hWnd, out pid);
-        if (IsAuraBarWindow(pid, hWnd)) return true;
-
-        StringBuilder cls = new StringBuilder(64);
-        GetClassName(hWnd, cls, cls.Capacity);
-        string clsName = cls.ToString();
-        if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
-            clsName == "Shell_SecondaryTrayWnd") {
-          return true;
-        }
-
-        IntPtr winMon = MonitorFromWindow(hWnd, 2);
-        if (winMon != targetMonitor) return true;
-
-        if (IsFullscreenWindowOnMonitor(hWnd, targetMonitor)) {
-          decision = 1;
-          return false;
-        }
-        if (IsTaskbarWindow(hWnd)) {
-          decision = -1;
-          return false;
-        }
-        return true;
-      }, IntPtr.Zero);
-
-      if (decision == 1) return true;
-      if (decision == -1) return false;
-      if (isPrimary) {
-        int state;
-        if (SHQueryUserNotificationState(out state) == 0 && (state == 3 || state == 4)) return true;
+    // Foreground-only per-monitor fullscreen check: never scans EnumWindows (which would false-trigger
+    // on permanent transparent overlays like NVIDIA Overlay), and only hides the dock on the monitor
+    // where the active fullscreen window lives.
+    private static IntPtr GetActiveFullscreenTarget() {
+      IntPtr fg = GetForegroundWindow();
+      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
+        return lastExternalForeground;
       }
-      return false;
+      uint pid;
+      GetWindowThreadProcessId(fg, out pid);
+      if (IsAuraBarWindow(pid, fg) || !IsTaskbarWindow(fg)) {
+        return lastExternalForeground != IntPtr.Zero ? lastExternalForeground : fg;
+      }
+      return fg;
     }
 
     private static string CheckFullscreenForHwnds(string csv) {
       if (string.IsNullOrWhiteSpace(csv)) return "";
       POINT origin = new POINT();
       IntPtr primaryMon = MonitorFromPoint(origin, 1);
+      IntPtr targetWin = GetActiveFullscreenTarget();
+      IntPtr targetWinMon = (targetWin != IntPtr.Zero && IsWindowVisible(targetWin) && !IsIconic(targetWin))
+        ? MonitorFromWindow(targetWin, 2)
+        : IntPtr.Zero;
+      bool targetIsFs = targetWinMon != IntPtr.Zero && IsFullscreenWindowOnMonitor(targetWin, targetWinMon);
+
+      int qState;
+      bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
+
       string[] parts = csv.Split(',');
       string[] results = new string[parts.Length];
       for (int i = 0; i < parts.Length; i++) {
@@ -843,8 +825,8 @@ namespace AuraBarNative {
         }
         IntPtr h = new IntPtr(hv);
         IntPtr mon = MonitorFromWindow(h, 2);
-        bool isPrim = (mon == primaryMon);
-        results[i] = IsFullscreenOnMonitor(mon, isPrim) ? "1" : "0";
+        bool isFs = (targetIsFs && mon == targetWinMon) || (mon == primaryMon && primaryD3dFs && targetWinMon == primaryMon);
+        results[i] = isFs ? "1" : "0";
       }
       return string.Join(",", results);
     }
@@ -1636,21 +1618,13 @@ namespace AuraBarNative {
       lock (extraHwndsLock) {
         extraDockRects[h] = tr;
       }
-      SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
-
-      if (reservePhys > 0) {
-        lock (extraHwndsLock) {
-          if (!savedSecWorkAreas.ContainsKey(mon)) {
-            savedSecWorkAreas[mon] = mi.rcWork;
-          }
-        }
-        RECT wa = new RECT {
-          left = mi.rcMonitor.left,
-          top = isTop ? mi.rcMonitor.top + reservePhys : mi.rcMonitor.top,
-          right = mi.rcMonitor.right,
-          bottom = isTop ? mi.rcMonitor.bottom : mi.rcMonitor.bottom - reservePhys
-        };
-        SystemParametersInfo(0x002F, 0, ref wa, 0);
+      RECT cur;
+      if (!GetWindowRect(h, out cur) ||
+          Math.Abs(cur.left - tr.left) > 1 ||
+          Math.Abs(cur.top - tr.top) > 1 ||
+          Math.Abs(cur.right - tr.right) > 1 ||
+          Math.Abs(cur.bottom - tr.bottom) > 1) {
+        SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
       }
     }
 
