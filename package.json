@@ -8,22 +8,77 @@
     "build:electron": "node scripts/build-electron.mjs",
     "build": "vite build && npm run build:electron",
     "start": "npm run build && node scripts/launch.mjs",
-    "preview:app": "node scripts/launch.mjs"
+    "preview:app": "node scripts/launch.mjs",
+    "pack": "npm run build && electron-builder --win --dir",
+    "dist": "npm run build && electron-builder --win --publish never"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "^5.3.0",
-    "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
-    "lucide-react": "^0.468.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.24.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
+  },
+  "author": "m7devcore",
+  "homepage": "https://github.com/m7devcore/aurabar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m7devcore/aurabar.git"
+  },
+  "license": "MIT",
+  "build": {
+    "appId": "com.m7devcore.aurabar",
+    "productName": "AuraBar",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "!**/*.map",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist-electron/native/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "AuraBar-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "m7devcore",
+        "repo": "aurabar",
+        "releaseType": "release"
+      }
+    ]
   }
 }

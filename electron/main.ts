@@ -11,6 +11,14 @@ import {
 import path from 'node:path';
 import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/mediaControl';
 import { getLyrics } from './services/lyrics';
+import {
+  checkForUpdates,
+  getUpdateStatus,
+  installUpdateNow,
+  isUpdaterAvailable,
+  startUpdater,
+  stopUpdater
+} from './services/updater';
 import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
 import { win32Daemon } from './services/win32Daemon';
@@ -395,6 +403,26 @@ async function backfillPinnedIcons(): Promise<void> {
   broadcastConfig(currentConfig);
 }
 
+function updateMenuItems(): Electron.MenuItemConstructorOptions[] {
+  if (!isUpdaterAvailable()) return [];
+  const status = getUpdateStatus();
+  const items: Electron.MenuItemConstructorOptions[] = [];
+  if (status.state === 'ready') {
+    items.push({
+      label: `Restart to update to v${status.version}`,
+      click: () => installUpdateNow()
+    });
+  } else if (status.state === 'downloading') {
+    items.push({ label: `Downloading update v${status.version}… ${status.percent}%`, enabled: false });
+  } else if (status.state === 'checking') {
+    items.push({ label: 'Checking for updates…', enabled: false });
+  } else {
+    items.push({ label: 'Check for updates', click: () => checkForUpdates(true) });
+  }
+  items.push({ label: `AuraBar v${app.getVersion()}`, enabled: false }, { type: 'separator' });
+  return items;
+}
+
 function setupTray(): void {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('AuraBar — Taskbar & Music Island');
@@ -436,6 +464,7 @@ function setupTray(): void {
           }
         },
         { type: 'separator' },
+        ...updateMenuItems(),
         {
           label: 'Quit AuraBar',
           click: () => app.quit()
@@ -658,6 +687,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:quit', () => app.quit());
 }
 
+// Same data folder whether run from source or installed, so an update never loses the config
+app.setPath(
+  'userData',
+  process.env.AURABAR_USER_DATA || path.join(app.getPath('appData'), 'aurabar')
+);
+app.setAppUserModelId('com.m7devcore.aurabar');
+
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) {
   app.quit();
@@ -680,6 +716,15 @@ if (!singleInstance) {
     registerIpcHandlers();
     createWindows();
     setupTray();
+    startUpdater(
+      () => rebuildTrayMenu(),
+      async () => {
+        if (!taskbarWasAutoHidden) return;
+        taskbarWasAutoHidden = false;
+        lastTaskbarLayoutKey = '';
+        await win32Daemon.send('TASKBAR_SHOW');
+      }
+    );
     setInterval(updateCursorHitTesting, 10);
 
     globalShortcut.register('Alt+Space', () => {
@@ -698,6 +743,7 @@ if (!singleInstance) {
     if (isQuitting) return;
     isQuitting = true;
     stopMediaWorker();
+    stopUpdater();
     dockWindow?.hide();
     islandWindow?.hide();
     if (taskbarWasAutoHidden) {

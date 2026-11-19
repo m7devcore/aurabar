@@ -15,7 +15,12 @@ class Win32Daemon {
 
   start(): void {
     if (this.proc && !this.proc.killed) return;
-    const scriptPath = path.join(__dirname, 'native', 'win32-daemon.ps1');
+    // In the installed app main.cjs lives inside app.asar, which PowerShell cannot read; the
+    // native files are unpacked beside it (see asarUnpack in package.json)
+    const nativeDir = path
+      .join(__dirname, 'native')
+      .replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    const scriptPath = path.join(nativeDir, 'win32-daemon.ps1');
     const proc = spawn(
       'powershell.exe',
       [

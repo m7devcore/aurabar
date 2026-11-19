@@ -2223,6 +2223,12 @@ input:focus-visible,
   .dock-apps-strip:not(.is-live-dragging) .dock-app-btn {
     transform: none !important;
   }
+
+  /* Icons sliding aside while one is dragged is direct feedback for the user's own gesture,
+     not decoration, so it keeps its short slide even when system animations are off */
+  .dock-apps-strip.is-live-dragging .dock-app-btn {
+    transition-duration: 0.2s, 0.12s, 0.12s !important;
+  }
 }
 
 /* Taskbar window previews: one compact card per open window of the hovered app */

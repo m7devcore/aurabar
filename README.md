@@ -14,7 +14,15 @@ An open-source, glassy smart taskbar replacement and top Music Dynamic Island fo
 - **Calendar & Local Reminders**: Interactive monthly calendar stored locally in `%APPDATA%\aurabar\aurabar-config.json`.
 - **Premium Glass Themes & RTL Support**: Choose between **Classy Obsidian**, **Platinum Gold**, and **Frost Light**, with English (`LTR`) and Arabic (`RTL`) UI support.
 
-## Getting Started
+## Install
+
+Download **`AuraBar-Setup-<version>.exe`** from the [latest release](https://github.com/m7devcore/aurabar/releases/latest) and run it. No Node.js needed; it installs for the current user only.
+
+The installer is not code-signed, so Windows SmartScreen may show "Unknown publisher": choose **More info → Run anyway**.
+
+**Updates are automatic.** The installed app checks GitHub Releases a few seconds after launch and every few hours. A new version downloads in the background, then a notification (and the tray menu) offers **Restart to update**. The tray menu also has **Check for updates**.
+
+## Getting Started (from source)
 
 ```bash
 npm install
@@ -23,6 +31,15 @@ npm start
 ```
 
 Or double-click **`Start-AuraBar.bat`** / **`Start-AuraBar-Silent.vbs`** on Windows after building.
+
+## Releasing a new version
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+The `Release` workflow builds the installer and publishes it as a GitHub Release; installed copies then update themselves. To test the installer locally, run `npm run dist` (output goes to `release/`).
 
 ## Development
 
