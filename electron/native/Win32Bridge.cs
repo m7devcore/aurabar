@@ -740,7 +740,8 @@ namespace AuraBarNative {
       bool covers = r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
                     r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
       bool hasCaption = (GetWindowLong(fg, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
-      if (covers && !hasCaption) return true;
+      // Chromium/Electron fullscreen windows keep WS_CAPTION in style but are NOT IsZoomed and cover the full monitor
+      if (covers && (!hasCaption || !IsZoomed(fg))) return true;
 
       // Exclusive full-screen Direct3D games and presentation mode
       int state;

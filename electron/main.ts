@@ -447,6 +447,10 @@ function reassertLayoutAfterFullscreen(): void {
 
 async function pollFullscreen(): Promise<void> {
   if (fullscreenPolling || isQuitting) return;
+  if (fullscreenSuspended && islandWindow && !islandWindow.isDestroyed() && islandWindow.isFocused()) {
+    notFullscreenStreak = 0;
+    return;
+  }
   fullscreenPolling = true;
   try {
     const reply = await win32Daemon.send('FULLSCREEN');
