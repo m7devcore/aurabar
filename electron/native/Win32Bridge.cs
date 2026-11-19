@@ -707,7 +707,15 @@ namespace AuraBarNative {
 
       uint pid;
       GetWindowThreadProcessId(fg, out pid);
-      if (IsAuraBarWindow(pid, fg)) return false;
+      if (IsAuraBarWindow(pid, fg)) {
+        // Clicking the Dynamic Island while in a game/video temporarily focuses AuraBar;
+        // judge fullscreen by the underlying external foreground window so the dock stays hidden.
+        fg = lastExternalForeground;
+        if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
+          int nState;
+          return SHQueryUserNotificationState(out nState) == 0 && (nState == 3 || nState == 4);
+        }
+      }
 
       StringBuilder cls = new StringBuilder(64);
       GetClassName(fg, cls, cls.Capacity);
