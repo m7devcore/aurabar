@@ -210,22 +210,15 @@ function placeSecondaryDockPhysical(
   if (entry.win.isDestroyed()) return;
   const dipBounds = computeDockBoundsForDisplay(settings, display);
   entry.win.setBounds(dipBounds, false);
-  const phys = screen.dipToScreenRect(entry.win, dipBounds);
+  const scale = display.scaleFactor || 1;
+  const canvasPhysH = Math.round(DOCK_CANVAS_HEIGHT * scale);
+  const reservePhys =
+    settings.replaceWindowsTaskbar && !dockManuallyHidden
+      ? Math.round(getReservedHeightPx(settings) * scale)
+      : 0;
   const h = getHwndNumber(entry.win);
   if (h !== '0') {
-    void win32Daemon.send(`PLACE_WIN ${h} ${phys.x} ${phys.y} ${phys.width} ${phys.height}`);
-  }
-  if (settings.replaceWindowsTaskbar && !dockManuallyHidden) {
-    const reserveDip = getReservedHeightPx(settings);
-    const mon = display.bounds;
-    const workDip =
-      settings.position === 'top'
-        ? { x: mon.x, y: mon.y + reserveDip, width: mon.width, height: Math.max(200, mon.height - reserveDip) }
-        : { x: mon.x, y: mon.y, width: mon.width, height: Math.max(200, mon.height - reserveDip) };
-    const physWork = screen.dipToScreenRect(entry.win, workDip);
-    void win32Daemon.send(
-      `SEC_WORKAREA ${physWork.x} ${physWork.y} ${physWork.x + physWork.width} ${physWork.y + physWork.height}`
-    );
+    void win32Daemon.send(`PLACE_DOCK_MON ${h} ${settings.position} ${canvasPhysH} ${reservePhys}`);
   }
 }
 

@@ -1618,6 +1618,42 @@ namespace AuraBarNative {
       }
     }
 
+    private static void PlaceDockOnOwnMonitor(IntPtr h, bool isTop, int canvasPhysH, int reservePhys) {
+      if (h == IntPtr.Zero || !IsWindow(h)) return;
+      IntPtr mon = MonitorFromWindow(h, 2);
+      if (mon == IntPtr.Zero) return;
+      MONITORINFO mi = new MONITORINFO();
+      mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+      if (!GetMonitorInfo(mon, ref mi)) return;
+
+      RECT area = reservePhys > 0 ? mi.rcMonitor : mi.rcWork;
+      int px = area.left;
+      int pw = area.right - area.left;
+      int ph = Math.Min(canvasPhysH, Math.Max(120, area.bottom - area.top));
+      int py = isTop ? area.top : (area.bottom - ph);
+
+      RECT tr = new RECT { left = px, top = py, right = px + pw, bottom = py + ph };
+      lock (extraHwndsLock) {
+        extraDockRects[h] = tr;
+      }
+      SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+
+      if (reservePhys > 0) {
+        lock (extraHwndsLock) {
+          if (!savedSecWorkAreas.ContainsKey(mon)) {
+            savedSecWorkAreas[mon] = mi.rcWork;
+          }
+        }
+        RECT wa = new RECT {
+          left = mi.rcMonitor.left,
+          top = isTop ? mi.rcMonitor.top + reservePhys : mi.rcMonitor.top,
+          right = mi.rcMonitor.right,
+          bottom = isTop ? mi.rcMonitor.bottom : mi.rcMonitor.bottom - reservePhys
+        };
+        SystemParametersInfo(0x002F, 0, ref wa, 0);
+      }
+    }
+
     private static void SetSecondaryWorkArea(int left, int top, int right, int bottom) {
       POINT pt = new POINT { X = (left + right) / 2, Y = (top + bottom) / 2 };
       IntPtr mon = MonitorFromPoint(pt, 2);
@@ -1779,6 +1815,14 @@ namespace AuraBarNative {
               }
               for (int i = 0; i < stale.Count; i++) extraDockRects.Remove(stale[i]);
             }
+            Reply("ok");
+          } else if (line.StartsWith("PLACE_DOCK_MON ")) {
+            string[] parts = line.Substring(15).Split(' ');
+            IntPtr h = new IntPtr(long.Parse(parts[0]));
+            bool isTop = parts[1] == "top";
+            int ph = int.Parse(parts[2]);
+            int reserve = int.Parse(parts[3]);
+            PlaceDockOnOwnMonitor(h, isTop, ph, reserve);
             Reply("ok");
           } else if (line.StartsWith("PLACE_WIN ")) {
             string[] parts = line.Substring(10).Split(' ');
