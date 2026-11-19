@@ -825,7 +825,9 @@ namespace AuraBarNative {
         }
         IntPtr h = new IntPtr(hv);
         IntPtr mon = MonitorFromWindow(h, 2);
-        bool isFs = (targetIsFs && mon == targetWinMon) || (mon == primaryMon && primaryD3dFs && targetWinMon == primaryMon);
+        bool isFs =
+          (targetIsFs && mon == targetWinMon) ||
+          (mon == primaryMon && primaryD3dFs && (targetWinMon == IntPtr.Zero || targetWinMon == primaryMon));
         results[i] = isFs ? "1" : "0";
       }
       return string.Join(",", results);

@@ -61,6 +61,7 @@ interface HitRect {
 interface SecondaryDockEntry {
   displayId: number;
   win: BrowserWindow;
+  ready: boolean;
   popoverOpen: boolean;
   interactiveState: boolean;
   interactiveLock: boolean;
@@ -186,13 +187,19 @@ function syncKeepOnTop(settings: DockSettings): void {
   }
 }
 
+let lastExtraHwndsKey = '';
+
 function syncExtraHwndsToBridge(): void {
   const hwnds: string[] = [];
   for (const entry of secondaryDocks.values()) {
+    if (!entry.ready || entry.win.isDestroyed()) continue;
     const h = getHwndNumber(entry.win);
     if (h !== '0') hwnds.push(h);
   }
-  void win32Daemon.send(hwnds.length > 0 ? `SET_EXTRA_HWNDS ${hwnds.join(',')}` : 'SET_EXTRA_HWNDS');
+  const key = hwnds.join(',');
+  if (key === lastExtraHwndsKey) return;
+  lastExtraHwndsKey = key;
+  void win32Daemon.send(hwnds.length > 0 ? `SET_EXTRA_HWNDS ${key}` : 'SET_EXTRA_HWNDS');
 }
 
 function findSecondaryEntryBySender(sender: Electron.WebContents): SecondaryDockEntry | null {
@@ -209,15 +216,25 @@ function placeSecondaryDockPhysical(
 ): void {
   if (entry.win.isDestroyed()) return;
   const dipBounds = computeDockBoundsForDisplay(settings, display);
-  // First setBounds moves the HWND onto the target monitor's DPI context; second applies exact DIP size for that monitor
-  entry.win.setBounds(dipBounds, false);
-  entry.win.setBounds(dipBounds, false);
+  const cur = entry.win.getBounds();
+  if (
+    Math.abs(cur.x - dipBounds.x) > 1 ||
+    Math.abs(cur.y - dipBounds.y) > 1 ||
+    Math.abs(cur.width - dipBounds.width) > 1 ||
+    Math.abs(cur.height - dipBounds.height) > 1
+  ) {
+    entry.win.setBounds(dipBounds, false);
+  }
 }
 
-function createSecondaryDock(display: Electron.Display, settings: DockSettings): SecondaryDockEntry {
-  const bounds = computeDockBoundsForDisplay(settings, display);
+function createSecondaryDock(display: Electron.Display, _settings: DockSettings): SecondaryDockEntry {
+  // Spawn clearly inside the target display with a distinct initial size so Windows assigns that
+  // monitor's native DPI context before ready-to-show applies the full dock bounds.
   const win = new BrowserWindow({
-    ...bounds,
+    x: display.bounds.x + 24,
+    y: display.bounds.y + 24,
+    width: Math.min(480, display.bounds.width),
+    height: 160,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -240,6 +257,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
   const entry: SecondaryDockEntry = {
     displayId: display.id,
     win,
+    ready: false,
     popoverOpen: false,
     interactiveState: false,
     interactiveLock: false,
@@ -255,6 +273,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
   loadView(win, 'secondary-dock');
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return;
+    entry.ready = true;
     const freshDisplay = screen.getAllDisplays().find((d) => d.id === display.id) ?? display;
     placeSecondaryDockPhysical(entry, freshDisplay, currentConfig.settings);
     syncExtraHwndsToBridge();
@@ -299,7 +318,7 @@ function syncSecondaryDocks(settings: DockSettings): void {
     if (!entry) {
       entry = createSecondaryDock(display, settings);
       secondaryDocks.set(display.id, entry);
-    } else if (!entry.win.isDestroyed()) {
+    } else if (entry.ready && !entry.win.isDestroyed()) {
       applyTopmost(entry.win);
       placeSecondaryDockPhysical(entry, display, settings);
       if (!dockManuallyHidden && !entry.fullscreenSuspended && !entry.win.isVisible()) {
@@ -1202,8 +1221,9 @@ if (!singleInstance) {
     // If the native bridge ever has to be restarted, Windows has already dropped the work area it
     // had reserved (it reverts when the process that set it dies): reserve and place again
     win32Daemon.onRestart(() => {
-      if (isQuitting) return;
+      if ( isQuitting) return;
       lastTaskbarLayoutKey = '';
+      lastExtraHwndsKey = '';
       void win32Daemon.send(
         `SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`
       );
