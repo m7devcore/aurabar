@@ -42,6 +42,8 @@ export interface Translations {
   launchAtStartupDesc: string;
   hideInFullscreen: string;
   hideInFullscreenDesc: string;
+  showOnAllDisplays: string;
+  showOnAllDisplaysDesc: string;
   updateReady: string;
   updateReadyDesc: string;
   restartNow: string;
@@ -114,6 +116,8 @@ const EN: Translations = {
   launchAtStartupDesc: 'Open AuraBar automatically when you sign in',
   hideInFullscreen: 'Hide in full screen',
   hideInFullscreenDesc: 'Tuck the bar and island away while a game or video is full screen',
+  showOnAllDisplays: 'Show on all monitors',
+  showOnAllDisplaysDesc: 'Display a streamlined bar with apps and clock on secondary monitors',
   updateReady: 'Update ready',
   updateReadyDesc: 'Version {v} is downloaded and ready to install',
   restartNow: 'Restart now',
@@ -186,6 +190,8 @@ const AR: Translations = {
   launchAtStartupDesc: 'فتح AuraBar تلقائياً عند تسجيل الدخول',
   hideInFullscreen: 'الإخفاء في ملء الشاشة',
   hideInFullscreenDesc: 'إخفاء الشريط والجزيرة أثناء لعبة أو فيديو بملء الشاشة',
+  showOnAllDisplays: 'إظهار على جميع الشاشات',
+  showOnAllDisplaysDesc: 'عرض شريط أنيق بالتطبيقات والساعة على الشاشات الإضافية',
   updateReady: 'التحديث جاهز',
   updateReadyDesc: 'النسخة {v} نزلت وجاهزة للتثبيت',
   restartNow: 'أعد التشغيل الآن',

@@ -58,10 +58,24 @@ interface HitRect {
   bottom: number;
 }
 
+interface SecondaryDockEntry {
+  displayId: number;
+  win: BrowserWindow;
+  popoverOpen: boolean;
+  interactiveState: boolean;
+  interactiveLock: boolean;
+  localHitRects: HitRect[];
+  lastInsideAt: number;
+  fullscreenSuspended: boolean;
+  notFullscreenStreak: number;
+}
+
 const DOCK_CANVAS_HEIGHT = 500;
 
 let dockWindow: BrowserWindow | null = null;
 let islandWindow: BrowserWindow | null = null;
+const secondaryDocks = new Map<number, SecondaryDockEntry>();
+let dockManuallyHidden = false;
 let tray: Tray | null = null;
 let currentConfig: AppConfig;
 let isPopoverOpen = false;
@@ -93,14 +107,17 @@ function createTrayIcon() {
   );
 }
 
-function computeDockBounds(settings: DockSettings) {
-  const display = screen.getPrimaryDisplay();
+function computeDockBoundsForDisplay(settings: DockSettings, display: Electron.Display) {
   const area = settings.replaceWindowsTaskbar ? display.bounds : display.workArea;
   const width = area.width;
   const height = DOCK_CANVAS_HEIGHT;
   const x = area.x;
   const y = settings.position === 'top' ? area.y : area.y + area.height - height;
   return { x, y, width, height };
+}
+
+function computeDockBounds(settings: DockSettings) {
+  return computeDockBoundsForDisplay(settings, screen.getPrimaryDisplay());
 }
 
 function computeIslandBounds() {
@@ -164,6 +181,152 @@ function syncKeepOnTop(settings: DockSettings): void {
   void win32Daemon.send(`KEEP_TOP ${settings.alwaysOnTop ? 1 : 0}`);
   applyTopmost(dockWindow);
   applyTopmost(islandWindow);
+  for (const entry of secondaryDocks.values()) {
+    applyTopmost(entry.win);
+  }
+}
+
+function syncExtraHwndsToBridge(): void {
+  const hwnds: string[] = [];
+  for (const entry of secondaryDocks.values()) {
+    const h = getHwndNumber(entry.win);
+    if (h !== '0') hwnds.push(h);
+  }
+  void win32Daemon.send(hwnds.length > 0 ? `SET_EXTRA_HWNDS ${hwnds.join(',')}` : 'SET_EXTRA_HWNDS');
+}
+
+function findSecondaryEntryBySender(sender: Electron.WebContents): SecondaryDockEntry | null {
+  for (const entry of secondaryDocks.values()) {
+    if (!entry.win.isDestroyed() && entry.win.webContents === sender) return entry;
+  }
+  return null;
+}
+
+function placeSecondaryDockPhysical(
+  entry: SecondaryDockEntry,
+  display: Electron.Display,
+  settings: DockSettings
+): void {
+  if (entry.win.isDestroyed()) return;
+  const dipBounds = computeDockBoundsForDisplay(settings, display);
+  entry.win.setBounds(dipBounds, false);
+  const phys = screen.dipToScreenRect(entry.win, dipBounds);
+  const h = getHwndNumber(entry.win);
+  if (h !== '0') {
+    void win32Daemon.send(`PLACE_WIN ${h} ${phys.x} ${phys.y} ${phys.width} ${phys.height}`);
+  }
+  if (settings.replaceWindowsTaskbar && !dockManuallyHidden) {
+    const reserveDip = getReservedHeightPx(settings);
+    const mon = display.bounds;
+    const workDip =
+      settings.position === 'top'
+        ? { x: mon.x, y: mon.y + reserveDip, width: mon.width, height: Math.max(200, mon.height - reserveDip) }
+        : { x: mon.x, y: mon.y, width: mon.width, height: Math.max(200, mon.height - reserveDip) };
+    const physWork = screen.dipToScreenRect(entry.win, workDip);
+    void win32Daemon.send(
+      `SEC_WORKAREA ${physWork.x} ${physWork.y} ${physWork.x + physWork.width} ${physWork.y + physWork.height}`
+    );
+  }
+}
+
+function createSecondaryDock(display: Electron.Display, settings: DockSettings): SecondaryDockEntry {
+  const bounds = computeDockBoundsForDisplay(settings, display);
+  const win = new BrowserWindow({
+    ...bounds,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    enableLargerThanScreen: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  const entry: SecondaryDockEntry = {
+    displayId: display.id,
+    win,
+    popoverOpen: false,
+    interactiveState: false,
+    interactiveLock: false,
+    localHitRects: [],
+    lastInsideAt: 0,
+    fullscreenSuspended: false,
+    notFullscreenStreak: 0
+  };
+  applyTopmost(win);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setIgnoreMouseEvents(true);
+  lockDownNavigation(win);
+  loadView(win, 'secondary-dock');
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return;
+    const freshDisplay = screen.getAllDisplays().find((d) => d.id === display.id) ?? display;
+    placeSecondaryDockPhysical(entry, freshDisplay, currentConfig.settings);
+    syncExtraHwndsToBridge();
+    if (!dockManuallyHidden && !entry.fullscreenSuspended) {
+      win.showInactive();
+      ensureOnTop(win);
+    }
+  });
+  win.on('blur', () => {
+    entry.interactiveLock = false;
+    if (entry.popoverOpen) {
+      entry.popoverOpen = false;
+      if (!win.isDestroyed()) win.webContents.send('aurabar:blurred');
+    }
+    applyTopmost(win);
+  });
+  win.on('closed', () => {
+    secondaryDocks.delete(display.id);
+    syncExtraHwndsToBridge();
+  });
+  return entry;
+}
+
+function syncSecondaryDocks(settings: DockSettings): void {
+  const primary = screen.getPrimaryDisplay();
+  const wanted = settings.showOnAllDisplays
+    ? screen.getAllDisplays().filter((d) => d.id !== primary.id)
+    : [];
+  const wantedIds = new Set(wanted.map((d) => d.id));
+
+  for (const [id, entry] of Array.from(secondaryDocks.entries())) {
+    if (!wantedIds.has(id) || entry.win.isDestroyed()) {
+      secondaryDocks.delete(id);
+      if (!entry.win.isDestroyed()) {
+        entry.win.destroy();
+      }
+    }
+  }
+
+  for (const display of wanted) {
+    let entry = secondaryDocks.get(display.id);
+    if (!entry) {
+      entry = createSecondaryDock(display, settings);
+      secondaryDocks.set(display.id, entry);
+    } else if (!entry.win.isDestroyed()) {
+      applyTopmost(entry.win);
+      placeSecondaryDockPhysical(entry, display, settings);
+      if (!dockManuallyHidden && !entry.fullscreenSuspended && !entry.win.isVisible()) {
+        entry.win.showInactive();
+        ensureOnTop(entry.win);
+      } else if (dockManuallyHidden && entry.win.isVisible()) {
+        entry.win.hide();
+      }
+    }
+  }
+
+  syncExtraHwndsToBridge();
 }
 
 function ensureOnTop(win: BrowserWindow | null): void {
@@ -216,9 +379,10 @@ function applyAllLayouts(settings: DockSettings): void {
       islandWindow.hide();
     }
   }
+  syncSecondaryDocks(settings);
 }
 
-function loadView(win: BrowserWindow, view: 'dock' | 'island'): void {
+function loadView(win: BrowserWindow, view: 'dock' | 'secondary-dock' | 'island'): void {
   const devUrl = process.env.AURABAR_DEV_URL;
   if (devUrl) {
     void win.loadURL(`${devUrl}?view=${view}`);
@@ -344,22 +508,33 @@ function createWindows(): void {
 
   syncKeepOnTop(currentConfig.settings);
   void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
+  syncSecondaryDocks(currentConfig.settings);
 }
 
 let rebuildTrayMenu: () => void = () => undefined;
 
 // The window that saved a config already has it; echoing it back would race with newer local
 // edits (e.g. typing a folder name) and briefly revert them
+function allOverlayWindows(): BrowserWindow[] {
+  const wins: BrowserWindow[] = [];
+  if (dockWindow && !dockWindow.isDestroyed()) wins.push(dockWindow);
+  if (islandWindow && !islandWindow.isDestroyed()) wins.push(islandWindow);
+  for (const entry of secondaryDocks.values()) {
+    if (!entry.win.isDestroyed()) wins.push(entry.win);
+  }
+  return wins;
+}
+
 function broadcastUpdateInfo(): void {
   const info = getUpdateInfo();
-  for (const win of [dockWindow, islandWindow]) {
-    if (win && !win.isDestroyed()) win.webContents.send('aurabar:update-info', info);
+  for (const win of allOverlayWindows()) {
+    win.webContents.send('aurabar:update-info', info);
   }
 }
 
 function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
-  for (const win of [dockWindow, islandWindow]) {
-    if (win && !win.isDestroyed() && win.webContents !== except) {
+  for (const win of allOverlayWindows()) {
+    if (win.webContents !== except) {
       win.webContents.send('aurabar:config-updated', cfg);
     }
   }
@@ -443,22 +618,79 @@ function reassertLayoutAfterFullscreen(): void {
   }, 450);
 }
 
+function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolean): void {
+  if (next === entry.fullscreenSuspended || entry.win.isDestroyed()) return;
+  entry.fullscreenSuspended = next;
+  if (next) {
+    entry.popoverOpen = false;
+    entry.interactiveLock = false;
+    entry.interactiveState = false;
+    entry.win.setIgnoreMouseEvents(true);
+    entry.win.hide();
+  } else if (!dockManuallyHidden) {
+    const display = screen.getAllDisplays().find((d) => d.id === entry.displayId);
+    if (display) {
+      placeSecondaryDockPhysical(entry, display, currentConfig.settings);
+    }
+    entry.win.showInactive();
+    ensureOnTop(entry.win);
+  }
+}
+
 async function pollFullscreen(): Promise<void> {
   if (fullscreenPolling || isQuitting) return;
-  if (fullscreenSuspended && islandWindow && !islandWindow.isDestroyed() && islandWindow.isFocused()) {
-    notFullscreenStreak = 0;
+  const primaryLockedByIsland =
+    fullscreenSuspended && Boolean(islandWindow && !islandWindow.isDestroyed() && islandWindow.isFocused());
+
+  const secEntries = Array.from(secondaryDocks.values()).filter((e) => !e.win.isDestroyed());
+  if (secEntries.length === 0) {
+    if (primaryLockedByIsland) {
+      notFullscreenStreak = 0;
+      return;
+    }
+    fullscreenPolling = true;
+    try {
+      const reply = await win32Daemon.send('FULLSCREEN');
+      if (reply === '1') {
+        notFullscreenStreak = 0;
+        setFullscreenSuspended(true);
+      } else if (reply === '0') {
+        notFullscreenStreak += 1;
+        if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+      }
+    } finally {
+      fullscreenPolling = false;
+    }
     return;
   }
+
   fullscreenPolling = true;
   try {
-    const reply = await win32Daemon.send('FULLSCREEN');
-    if (reply === '1') {
+    const primaryHwnd = getHwndNumber(dockWindow);
+    const hwnds = [primaryHwnd, ...secEntries.map((e) => getHwndNumber(e.win))];
+    const reply = await win32Daemon.send(`FULLSCREEN_OF ${hwnds.join(',')}`);
+    const flags = reply.split(',');
+
+    if (primaryLockedByIsland) {
+      notFullscreenStreak = 0;
+    } else if (flags[0] === '1') {
       notFullscreenStreak = 0;
       setFullscreenSuspended(true);
-    } else if (reply === '0') {
-      // Leaving needs three clean readings in a row, so Alt+Esc / Alt+Tab transitions do not flicker
+    } else if (flags[0] === '0') {
       notFullscreenStreak += 1;
       if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+    }
+
+    for (let i = 0; i < secEntries.length; i++) {
+      const entry = secEntries[i];
+      const flag = flags[i + 1];
+      if (flag === '1') {
+        entry.notFullscreenStreak = 0;
+        setSecondaryFullscreenSuspended(entry, true);
+      } else if (flag === '0') {
+        entry.notFullscreenStreak += 1;
+        if (entry.notFullscreenStreak >= 3) setSecondaryFullscreenSuspended(entry, false);
+      }
     }
   } finally {
     fullscreenPolling = false;
@@ -474,6 +706,10 @@ function syncFullscreenWatcher(): void {
     fullscreenPollTimer = null;
     notFullscreenStreak = 0;
     setFullscreenSuspended(false);
+    for (const entry of secondaryDocks.values()) {
+      entry.notFullscreenStreak = 0;
+      setSecondaryFullscreenSuspended(entry, false);
+    }
   }
 }
 
@@ -489,7 +725,14 @@ function applyLaunchAtStartup(enabled: boolean): void {
 }
 
 function layoutKeyOf(s: DockSettings): string {
-  return [s.replaceWindowsTaskbar, s.position, s.compactMode, s.musicPosition, s.alwaysOnTop].join('|');
+  return [
+    s.replaceWindowsTaskbar,
+    s.position,
+    s.compactMode,
+    s.musicPosition,
+    s.alwaysOnTop,
+    s.showOnAllDisplays
+  ].join('|');
 }
 
 function withResolvedExeNames(apps: PinnedApp[]): PinnedApp[] {
@@ -626,17 +869,28 @@ function setupTray(): void {
 function toggleDockVisibility(): void {
   if (!dockWindow || fullscreenSuspended) return;
   if (dockWindow.isVisible()) {
+    dockManuallyHidden = true;
     isPopoverOpen = false;
     dockInteractiveLock = false;
     dockInteractiveState = false;
     dockWindow.setIgnoreMouseEvents(true);
     dockWindow.hide();
+    for (const entry of secondaryDocks.values()) {
+      entry.popoverOpen = false;
+      entry.interactiveLock = false;
+      entry.interactiveState = false;
+      if (!entry.win.isDestroyed()) {
+        entry.win.setIgnoreMouseEvents(true);
+        entry.win.hide();
+      }
+    }
     if (taskbarWasAutoHidden) {
       taskbarWasAutoHidden = false;
       lastTaskbarLayoutKey = '';
       void setWindowsTaskbarReplacement(false);
     }
   } else {
+    dockManuallyHidden = false;
     if (currentConfig.settings.replaceWindowsTaskbar) {
       syncTaskbarReplacement(currentConfig.settings);
     }
@@ -720,6 +974,23 @@ function updateCursorHitTesting(): void {
       islandWindow.setIgnoreMouseEvents(true);
     }
   }
+
+  for (const entry of secondaryDocks.values()) {
+    if (entry.win.isDestroyed() || !entry.win.isVisible()) continue;
+    const b = entry.win.getBounds();
+    const inside = isPointInRects(pt.x - b.x, pt.y - b.y, entry.localHitRects);
+    const shouldBeInteractive = entry.popoverOpen || entry.interactiveLock || inside;
+    if (shouldBeInteractive) {
+      entry.lastInsideAt = nowMs;
+      if (!entry.interactiveState) {
+        entry.interactiveState = true;
+        entry.win.setIgnoreMouseEvents(false);
+      }
+    } else if (entry.interactiveState && nowMs - entry.lastInsideAt > 90) {
+      entry.interactiveState = false;
+      entry.win.setIgnoreMouseEvents(true);
+    }
+  }
 }
 
 function registerIpcHandlers(): void {
@@ -760,7 +1031,20 @@ function registerIpcHandlers(): void {
     return currentConfig;
   });
 
-  ipcMain.handle('aurabar:set-popover-open', (_e, open: boolean) => {
+  ipcMain.handle('aurabar:set-popover-open', (e, open: boolean) => {
+    const sec = findSecondaryEntryBySender(e.sender);
+    if (sec) {
+      sec.popoverOpen = open;
+      if (open) {
+        sec.interactiveState = true;
+        sec.win.setIgnoreMouseEvents(false);
+        ensureOnTop(sec.win);
+        sec.win.focus();
+      } else {
+        updateCursorHitTesting();
+      }
+      return;
+    }
     isPopoverOpen = open;
     if (open) {
       dockInteractiveState = true;
@@ -772,8 +1056,13 @@ function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.on('aurabar:set-dock-interactive', (_e, interactive: boolean) => {
-    dockInteractiveLock = interactive;
+  ipcMain.on('aurabar:set-dock-interactive', (e, interactive: boolean) => {
+    const sec = findSecondaryEntryBySender(e.sender);
+    if (sec) {
+      sec.interactiveLock = interactive;
+    } else {
+      dockInteractiveLock = interactive;
+    }
     updateCursorHitTesting();
   });
 
@@ -794,11 +1083,17 @@ function registerIpcHandlers(): void {
     updateCursorHitTesting();
   });
 
-  ipcMain.on('aurabar:set-hit-rects', (_e, view: 'dock' | 'island', rects: HitRect[]) => {
+  ipcMain.on('aurabar:set-hit-rects', (e, view: 'dock' | 'island', rects: HitRect[]) => {
+    const clean = Array.isArray(rects) ? rects : [];
     if (view === 'dock') {
-      dockLocalHitRects = Array.isArray(rects) ? rects : [];
+      const sec = findSecondaryEntryBySender(e.sender);
+      if (sec) {
+        sec.localHitRects = clean;
+      } else {
+        dockLocalHitRects = clean;
+      }
     } else {
-      islandLocalHitRects = Array.isArray(rects) ? rects : [];
+      islandLocalHitRects = clean;
     }
     updateCursorHitTesting();
   });
@@ -856,11 +1151,21 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:switch-keyboard-lang', () => switchKeyboardLayout());
   ipcMain.handle('aurabar:get-network-info', () => getNetworkInfo());
   ipcMain.handle('aurabar:hide-dock', () => {
+    dockManuallyHidden = true;
     isPopoverOpen = false;
     dockInteractiveLock = false;
     dockInteractiveState = false;
     dockWindow?.setIgnoreMouseEvents(true);
     dockWindow?.hide();
+    for (const entry of secondaryDocks.values()) {
+      entry.popoverOpen = false;
+      entry.interactiveLock = false;
+      entry.interactiveState = false;
+      if (!entry.win.isDestroyed()) {
+        entry.win.setIgnoreMouseEvents(true);
+        entry.win.hide();
+      }
+    }
     if (taskbarWasAutoHidden) {
       taskbarWasAutoHidden = false;
       lastTaskbarLayoutKey = '';
@@ -885,10 +1190,17 @@ if (!singleInstance) {
   win32Daemon.start();
 
   app.on('second-instance', () => {
+    dockManuallyHidden = false;
     if (dockWindow) {
       if (!dockWindow.isVisible() && !fullscreenSuspended) dockWindow.showInactive();
       ensureOnTop(dockWindow);
       dockWindow.focus();
+    }
+    for (const entry of secondaryDocks.values()) {
+      if (!entry.win.isDestroyed() && !entry.win.isVisible() && !entry.fullscreenSuspended) {
+        entry.win.showInactive();
+        ensureOnTop(entry.win);
+      }
     }
     if (islandWindow && currentConfig.settings.musicPosition === 'top') {
       if (!islandWindow.isVisible() && !fullscreenSuspended) islandWindow.showInactive();
@@ -934,6 +1246,15 @@ if (!singleInstance) {
       if (!fullscreenSuspended && dockWindow?.isVisible()) {
         placeDockPhysical(currentConfig.settings);
       }
+      if (secondaryDocks.size > 0) {
+        const displays = screen.getAllDisplays();
+        for (const entry of secondaryDocks.values()) {
+          if (!entry.fullscreenSuspended && !entry.win.isDestroyed() && entry.win.isVisible()) {
+            const disp = displays.find((d) => d.id === entry.displayId);
+            if (disp) placeSecondaryDockPhysical(entry, disp, currentConfig.settings);
+          }
+        }
+      }
     }, 4000);
     setInterval(updateCursorHitTesting, 10);
 
@@ -945,12 +1266,15 @@ if (!singleInstance) {
       toggleIslandVisibility();
     });
 
-    screen.on('display-metrics-changed', () => {
+    const handleDisplayChange = () => {
       if (currentConfig.settings.replaceWindowsTaskbar) {
         syncTaskbarReplacement(currentConfig.settings);
       }
       applyAllLayouts(currentConfig.settings);
-    });
+    };
+    screen.on('display-metrics-changed', handleDisplayChange);
+    screen.on('display-added', handleDisplayChange);
+    screen.on('display-removed', handleDisplayChange);
   });
 
   app.on('before-quit', (e) => {
@@ -960,6 +1284,9 @@ if (!singleInstance) {
     stopUpdater();
     dockWindow?.hide();
     islandWindow?.hide();
+    for (const entry of secondaryDocks.values()) {
+      if (!entry.win.isDestroyed()) entry.win.hide();
+    }
     if (taskbarWasAutoHidden) {
       e.preventDefault();
       taskbarWasAutoHidden = false;

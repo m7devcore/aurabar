@@ -216,6 +216,13 @@ export function SettingsPopover({
             desc={dict.hideInFullscreenDesc}
             onToggle={() => onUpdateSettings({ hideInFullscreen: !settings.hideInFullscreen })}
           />
+
+          <ToggleSwitch
+            checked={settings.showOnAllDisplays}
+            title={dict.showOnAllDisplays}
+            desc={dict.showOnAllDisplaysDesc}
+            onToggle={() => onUpdateSettings({ showOnAllDisplays: !settings.showOnAllDisplays })}
+          />
         </div>
       </div>
 

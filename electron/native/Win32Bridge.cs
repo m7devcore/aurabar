@@ -277,6 +277,10 @@ namespace AuraBarNative {
     private static IntPtr lastExternalForeground = IntPtr.Zero;
     private static IntPtr dockHwnd = IntPtr.Zero;
     private static IntPtr islandHwnd = IntPtr.Zero;
+    private static readonly object extraHwndsLock = new object();
+    private static readonly List<IntPtr> extraDockHwnds = new List<IntPtr>();
+    private static readonly Dictionary<IntPtr, RECT> extraDockRects = new Dictionary<IntPtr, RECT>();
+    private static readonly Dictionary<IntPtr, RECT> savedSecWorkAreas = new Dictionary<IntPtr, RECT>();
     private static RECT dockTargetRect = new RECT();
     private static bool hasDockTargetRect = false;
     private static int parentElectronPid = 0;
@@ -392,8 +396,18 @@ namespace AuraBarNative {
       return hr == 0 && cloaked != 0;
     }
 
+    private static bool IsExtraDockHwnd(IntPtr hWnd) {
+      if (hWnd == IntPtr.Zero) return false;
+      lock (extraHwndsLock) {
+        for (int i = 0; i < extraDockHwnds.Count; i++) {
+          if (extraDockHwnds[i] == hWnd) return true;
+        }
+      }
+      return false;
+    }
+
     private static bool IsAuraBarWindow(uint pid, IntPtr hWnd) {
-      if (hWnd != IntPtr.Zero && (hWnd == dockHwnd || hWnd == islandHwnd)) return true;
+      if (hWnd != IntPtr.Zero && (hWnd == dockHwnd || hWnd == islandHwnd || IsExtraDockHwnd(hWnd))) return true;
       if (parentElectronPid > 0 && pid == (uint)parentElectronPid) return true;
       return GetProcMeta(pid).isElectron;
     }
@@ -455,6 +469,35 @@ namespace AuraBarNative {
       );
     }
 
+    private static void EnforceExtraDockPlacements() {
+      List<KeyValuePair<IntPtr, RECT>> items = new List<KeyValuePair<IntPtr, RECT>>();
+      lock (extraHwndsLock) {
+        foreach (KeyValuePair<IntPtr, RECT> kv in extraDockRects) {
+          items.Add(kv);
+        }
+      }
+      for (int i = 0; i < items.Count; i++) {
+        IntPtr h = items[i].Key;
+        if (h == IntPtr.Zero || !IsWindow(h) || !IsWindowVisible(h)) continue;
+        RECT r;
+        if (!GetWindowRect(h, out r)) continue;
+        RECT t = items[i].Value;
+        if (Math.Abs(r.left - t.left) <= 1 && Math.Abs(r.top - t.top) <= 1 &&
+            Math.Abs(r.right - t.right) <= 1 && Math.Abs(r.bottom - t.bottom) <= 1) {
+          continue;
+        }
+        SetWindowPos(
+          h,
+          new IntPtr(-1),
+          t.left,
+          t.top,
+          t.right - t.left,
+          t.bottom - t.top,
+          keepOnTop ? 0x0010u : 0x0014u
+        );
+      }
+    }
+
     private static void KeepOnTopIfDemoted(IntPtr hWnd) {
       if (!keepOnTop) return;
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || !IsWindowVisible(hWnd)) return;
@@ -465,7 +508,7 @@ namespace AuraBarNative {
         IntPtr prev = GetWindow(hWnd, GW_HWNDPREV);
         int steps = 0;
         while (prev != IntPtr.Zero && steps < 6) {
-          if (prev != dockHwnd && prev != islandHwnd && IsWindowVisible(prev)) {
+          if (prev != dockHwnd && prev != islandHwnd && !IsExtraDockHwnd(prev) && IsWindowVisible(prev)) {
             uint pPid;
             GetWindowThreadProcessId(prev, out pPid);
             if (!IsAuraBarWindow(pPid, prev)) {
@@ -511,8 +554,18 @@ namespace AuraBarNative {
 
           EnforceWorkArea();
           EnforceDockPlacement();
+          EnforceExtraDockPlacements();
           KeepOnTopIfDemoted(dockHwnd);
           KeepOnTopIfDemoted(islandHwnd);
+          List<IntPtr> extrasCopy = null;
+          lock (extraHwndsLock) {
+            if (extraDockHwnds.Count > 0) extrasCopy = new List<IntPtr>(extraDockHwnds);
+          }
+          if (extrasCopy != null) {
+            for (int i = 0; i < extrasCopy.Count; i++) {
+              KeepOnTopIfDemoted(extrasCopy[i]);
+            }
+          }
 
           IntPtr fg = GetForegroundWindow();
           if (fg != IntPtr.Zero) {
@@ -700,8 +753,8 @@ namespace AuraBarNative {
       return isProtected;
     }
 
-    private static bool IsFullscreenWindow(IntPtr hWnd) {
-      if (hWnd == IntPtr.Zero || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
+    private static bool IsFullscreenWindowOnMonitor(IntPtr hWnd, IntPtr targetMonitor) {
+      if (hWnd == IntPtr.Zero || targetMonitor == IntPtr.Zero || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
 
       StringBuilder cls = new StringBuilder(64);
       GetClassName(hWnd, cls, cls.Capacity);
@@ -712,11 +765,7 @@ namespace AuraBarNative {
       }
 
       IntPtr monitor = MonitorFromWindow(hWnd, 2); // MONITOR_DEFAULTTONEAREST
-      POINT origin = new POINT();
-      IntPtr dockMonitor = dockHwnd != IntPtr.Zero
-        ? MonitorFromWindow(dockHwnd, 2)
-        : MonitorFromPoint(origin, 1); // MONITOR_DEFAULTTOPRIMARY
-      if (monitor == IntPtr.Zero || monitor != dockMonitor) return false;
+      if (monitor == IntPtr.Zero || monitor != targetMonitor) return false;
 
       MONITORINFO mi = new MONITORINFO();
       mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
@@ -728,6 +777,76 @@ namespace AuraBarNative {
       bool hasCaption = (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
       // Chromium/Electron fullscreen windows keep WS_CAPTION in style but are NOT IsZoomed and cover the full monitor
       return covers && (!hasCaption || !IsZoomed(hWnd));
+    }
+
+    private static bool IsFullscreenWindow(IntPtr hWnd) {
+      POINT origin = new POINT();
+      IntPtr dockMonitor = dockHwnd != IntPtr.Zero
+        ? MonitorFromWindow(dockHwnd, 2)
+        : MonitorFromPoint(origin, 1); // MONITOR_DEFAULTTOPRIMARY
+      return IsFullscreenWindowOnMonitor(hWnd, dockMonitor);
+    }
+
+    // Per-monitor Z-order fullscreen check: walks visible top-level windows on targetMonitor from
+    // top to bottom so a fullscreen game/video on Monitor 1 hides Monitor 1's dock without hiding Monitor 2's.
+    private static bool IsFullscreenOnMonitor(IntPtr targetMonitor, bool isPrimary) {
+      if (targetMonitor == IntPtr.Zero) return false;
+      int decision = 0; // 0 = undecided, 1 = fullscreen, -1 = normal window on top
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
+        if (!IsWindowVisible(hWnd) || IsIconic(hWnd) || IsCloaked(hWnd)) return true;
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        if (IsAuraBarWindow(pid, hWnd)) return true;
+
+        StringBuilder cls = new StringBuilder(64);
+        GetClassName(hWnd, cls, cls.Capacity);
+        string clsName = cls.ToString();
+        if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
+            clsName == "Shell_SecondaryTrayWnd") {
+          return true;
+        }
+
+        IntPtr winMon = MonitorFromWindow(hWnd, 2);
+        if (winMon != targetMonitor) return true;
+
+        if (IsFullscreenWindowOnMonitor(hWnd, targetMonitor)) {
+          decision = 1;
+          return false;
+        }
+        if (IsTaskbarWindow(hWnd)) {
+          decision = -1;
+          return false;
+        }
+        return true;
+      }, IntPtr.Zero);
+
+      if (decision == 1) return true;
+      if (decision == -1) return false;
+      if (isPrimary) {
+        int state;
+        if (SHQueryUserNotificationState(out state) == 0 && (state == 3 || state == 4)) return true;
+      }
+      return false;
+    }
+
+    private static string CheckFullscreenForHwnds(string csv) {
+      if (string.IsNullOrWhiteSpace(csv)) return "";
+      POINT origin = new POINT();
+      IntPtr primaryMon = MonitorFromPoint(origin, 1);
+      string[] parts = csv.Split(',');
+      string[] results = new string[parts.Length];
+      for (int i = 0; i < parts.Length; i++) {
+        long hv;
+        if (!long.TryParse(parts[i].Trim(), out hv) || hv == 0) {
+          results[i] = "0";
+          continue;
+        }
+        IntPtr h = new IntPtr(hv);
+        IntPtr mon = MonitorFromWindow(h, 2);
+        bool isPrim = (mon == primaryMon);
+        results[i] = IsFullscreenOnMonitor(mon, isPrim) ? "1" : "0";
+      }
+      return string.Join(",", results);
     }
 
     // True while the window in front is a full-screen app (game, video player, browser F11...)
@@ -1487,6 +1606,34 @@ namespace AuraBarNative {
         ShowWindowAsync(sec, 5);
         SetWindowPos(sec, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
       }
+      // Restore any secondary monitor work areas we reserved
+      List<RECT> toRestore = new List<RECT>();
+      lock (extraHwndsLock) {
+        foreach (RECT orig in savedSecWorkAreas.Values) toRestore.Add(orig);
+        savedSecWorkAreas.Clear();
+      }
+      for (int i = 0; i < toRestore.Count; i++) {
+        RECT r = toRestore[i];
+        SystemParametersInfo(0x002F, 0, ref r, 2);
+      }
+    }
+
+    private static void SetSecondaryWorkArea(int left, int top, int right, int bottom) {
+      POINT pt = new POINT { X = (left + right) / 2, Y = (top + bottom) / 2 };
+      IntPtr mon = MonitorFromPoint(pt, 2);
+      if (mon != IntPtr.Zero) {
+        MONITORINFO mi = new MONITORINFO();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        if (GetMonitorInfo(mon, ref mi)) {
+          lock (extraHwndsLock) {
+            if (!savedSecWorkAreas.ContainsKey(mon)) {
+              savedSecWorkAreas[mon] = mi.rcWork;
+            }
+          }
+        }
+      }
+      RECT rc = new RECT { left = left, top = top, right = right, bottom = bottom };
+      SystemParametersInfo(0x002F, 0, ref rc, 0);
     }
 
     // Echo the caller's "#<id>" tag so the Node side can match replies to requests
@@ -1543,6 +1690,8 @@ namespace AuraBarNative {
             Reply(QuitProcessApp(pidVal));
           } else if (line == "FULLSCREEN") {
             Reply(IsFullscreenForeground() ? "1" : "0");
+          } else if (line.StartsWith("FULLSCREEN_OF ")) {
+            Reply(CheckFullscreenForHwnds(line.Substring(14).Trim()));
           } else if (line == "KBD_LANG") {
             Reply(GetKbdLang());
           } else if (line == "KBD_SWITCH") {
@@ -1607,6 +1756,53 @@ namespace AuraBarNative {
                 keepOnTop ? 0x0010u : 0x0014u
               );
             }
+            Reply("ok");
+          } else if (line.StartsWith("SET_EXTRA_HWNDS")) {
+            string arg = line.Length > 15 ? line.Substring(15).Trim() : "";
+            lock (extraHwndsLock) {
+              extraDockHwnds.Clear();
+              HashSet<IntPtr> keep = new HashSet<IntPtr>();
+              if (!string.IsNullOrEmpty(arg)) {
+                string[] parts = arg.Split(',');
+                for (int i = 0; i < parts.Length; i++) {
+                  long hv;
+                  if (long.TryParse(parts[i].Trim(), out hv) && hv != 0) {
+                    IntPtr h = new IntPtr(hv);
+                    extraDockHwnds.Add(h);
+                    keep.Add(h);
+                  }
+                }
+              }
+              List<IntPtr> stale = new List<IntPtr>();
+              foreach (IntPtr k in extraDockRects.Keys) {
+                if (!keep.Contains(k)) stale.Add(k);
+              }
+              for (int i = 0; i < stale.Count; i++) extraDockRects.Remove(stale[i]);
+            }
+            Reply("ok");
+          } else if (line.StartsWith("PLACE_WIN ")) {
+            string[] parts = line.Substring(10).Split(' ');
+            IntPtr h = new IntPtr(long.Parse(parts[0]));
+            int px = int.Parse(parts[1]);
+            int py = int.Parse(parts[2]);
+            int pw = int.Parse(parts[3]);
+            int ph = int.Parse(parts[4]);
+            RECT tr = new RECT { left = px, top = py, right = px + pw, bottom = py + ph };
+            lock (extraHwndsLock) {
+              extraDockRects[h] = tr;
+            }
+            if (h != IntPtr.Zero && IsWindow(h)) {
+              SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+            }
+            Reply("ok");
+          } else if (line.StartsWith("SEC_WORKAREA ")) {
+            string[] parts = line.Substring(13).Split(' ');
+            SetSecondaryWorkArea(
+              int.Parse(parts[0]),
+              int.Parse(parts[1]),
+              int.Parse(parts[2]),
+              int.Parse(parts[3])
+            );
             Reply("ok");
           } else if (line.StartsWith("PLACE_DOCK ")) {
             string[] parts = line.Substring(11).Split(' ');

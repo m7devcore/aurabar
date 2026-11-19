@@ -19,8 +19,9 @@ import type {
   SystemStats
 } from './types';
 
-const VIEW_MODE =
-  new URLSearchParams(window.location.search).get('view') === 'island' ? 'island' : 'dock';
+const rawView = new URLSearchParams(window.location.search).get('view');
+const VIEW_MODE: 'island' | 'secondary-dock' | 'dock' =
+  rawView === 'island' ? 'island' : rawView === 'secondary-dock' ? 'secondary-dock' : 'dock';
 
 export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -146,7 +147,11 @@ export function App() {
 
   // System stats + clock + keyboard language tick
   useEffect(() => {
-    if (VIEW_MODE !== 'dock') return;
+    if (VIEW_MODE === 'island') return;
+    if (VIEW_MODE === 'secondary-dock') {
+      const id = setInterval(() => setNow(new Date()), 2000);
+      return () => clearInterval(id);
+    }
     const poll = async () => {
       const s = await dockBridge.getSystemStats();
       setStats(s);
@@ -176,7 +181,7 @@ export function App() {
   const needsMedia =
     VIEW_MODE === 'island'
       ? musicPosition === 'top' || islandPeekVisible
-      : musicPosition === 'taskbar' || activePanel === 'media';
+      : VIEW_MODE === 'dock' && (musicPosition === 'taskbar' || activePanel === 'media');
 
   useEffect(() => {
     if (!needsMedia) return;
@@ -195,7 +200,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (VIEW_MODE !== 'dock') return;
+    if (VIEW_MODE === 'island') return;
     void refreshWindows();
     const id = setInterval(() => {
       if (config?.settings.showOpenWindowsInBar || activePanel === 'apps') {
@@ -297,6 +302,7 @@ export function App() {
     >
       {settings.position === 'bottom' && popoverElement}
       <DockBar
+        isSecondary={VIEW_MODE === 'secondary-dock'}
         updateInfo={updateInfo}
         config={config}
         activePanel={activePanel}

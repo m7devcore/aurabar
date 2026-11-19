@@ -120,6 +120,7 @@ interface LiveDragPlan {
 }
 
 interface Props {
+  isSecondary?: boolean;
   updateInfo: UpdateInfo | null;
   config: AppConfig;
   activePanel: ActivePanel;
@@ -136,6 +137,7 @@ interface Props {
 }
 
 export function DockBar({
+  isSecondary = false,
   updateInfo,
   config,
   activePanel,
@@ -215,8 +217,9 @@ export function DockBar({
     );
   };
 
-  // Live sync tray Volume + Wi-Fi/Network state cleanly
+  // Live sync tray Volume + Wi-Fi/Network state cleanly (primary monitor only)
   useEffect(() => {
+    if (isSecondary) return;
     let alive = true;
     const pollTray = async () => {
       const [v, n] = await Promise.all([dockBridge.getVolume(), dockBridge.getNetworkInfo()]);
@@ -230,7 +233,7 @@ export function DockBar({
       alive = false;
       clearInterval(id);
     };
-  }, [ccFlyout]);
+  }, [ccFlyout, isSecondary]);
 
   // Poll background/tray running apps when the overflow chevron popover is open
   useEffect(() => {
@@ -2000,7 +2003,7 @@ export function DockBar({
 
       <div
         ref={dockBarRef}
-        className={`dock-bar ${settings.compactMode ? 'compact' : ''} ${
+        className={`dock-bar ${isSecondary ? 'secondary' : ''} ${settings.compactMode ? 'compact' : ''} ${
           dragOverExternal ? 'drag-over' : ''
         }`}
         onMouseLeave={handleStripMouseLeave}
@@ -2011,8 +2014,8 @@ export function DockBar({
         onDragLeave={() => setDragOverExternal(false)}
         onDrop={(e) => void handleExternalDrop(e)}
       >
-        {/* Left Inline Music Player when musicPosition === 'taskbar' */}
-        {settings.musicPosition === 'taskbar' && (
+        {/* Left Inline Music Player when musicPosition === 'taskbar' (primary monitor only) */}
+        {!isSecondary && settings.musicPosition === 'taskbar' && (
           <>
             <div
               className={`inline-music-pill ${activePanel === 'media' ? 'active' : ''} ${
@@ -2118,18 +2121,20 @@ export function DockBar({
                 <StartIcon />
               </button>
 
-              <button
-                className={`dock-app-btn ${activePanel === 'apps' ? 'active' : ''}`}
-                onClick={() => toggle('apps')}
-                onMouseEnter={(e) => showTooltipFor(e, dict.apps)}
-                style={
-                  activePanel === 'apps'
-                    ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)' }
-                    : undefined
-                }
-              >
-                <SearchIcon />
-              </button>
+              {!isSecondary && (
+                <button
+                  className={`dock-app-btn ${activePanel === 'apps' ? 'active' : ''}`}
+                  onClick={() => toggle('apps')}
+                  onMouseEnter={(e) => showTooltipFor(e, dict.apps)}
+                  style={
+                    activePanel === 'apps'
+                      ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)' }
+                      : undefined
+                  }
+                >
+                  <SearchIcon />
+                </button>
+              )}
 
               {pinnedApps.map((app, index) => {
                 const isGroup = app.kind === 'group';
@@ -2334,121 +2339,125 @@ export function DockBar({
 
         <div className="dock-divider" />
 
-        {/* Right Slot: Apple-grade Glass Control Tray */}
+        {/* Right Slot: Full Control Tray on primary monitor; clean Clock + Show Desktop on secondary */}
         <div className="dock-right-tray">
-          <button
-            ref={overflowBtnRef}
-            type="button"
-            className={`tray-overflow-btn ${overflowTray ? 'active' : ''}`}
-            aria-label={settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
-            aria-expanded={Boolean(overflowTray)}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleOverflowTray();
-            }}
-            onContextMenu={(e) => openContextMenu(e, { kind: 'tray' })}
-            onMouseEnter={(e) => {
-              prefetchBackgroundApps();
-              showTooltipFor(
-                e,
-                settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'
-              );
-            }}
-            title={settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'}
-          >
-            <ChevronUp
-              size={14}
-              strokeWidth={2}
-              className="tray-overflow-chevron"
-              style={
-                settings.position === 'top' && !overflowTray
-                  ? { transform: 'rotate(180deg)' }
-                  : settings.position === 'top' && overflowTray
-                    ? { transform: 'rotate(0deg)' }
-                    : undefined
-              }
-            />
-          </button>
+          {!isSecondary && (
+            <>
+              <button
+                ref={overflowBtnRef}
+                type="button"
+                className={`tray-overflow-btn ${overflowTray ? 'active' : ''}`}
+                aria-label={settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
+                aria-expanded={Boolean(overflowTray)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleOverflowTray();
+                }}
+                onContextMenu={(e) => openContextMenu(e, { kind: 'tray' })}
+                onMouseEnter={(e) => {
+                  prefetchBackgroundApps();
+                  showTooltipFor(
+                    e,
+                    settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'
+                  );
+                }}
+                title={settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'}
+              >
+                <ChevronUp
+                  size={14}
+                  strokeWidth={2}
+                  className="tray-overflow-chevron"
+                  style={
+                    settings.position === 'top' && !overflowTray
+                      ? { transform: 'rotate(180deg)' }
+                      : settings.position === 'top' && overflowTray
+                        ? { transform: 'rotate(0deg)' }
+                        : undefined
+                  }
+                />
+              </button>
 
-          <button
-            className="tray-lang-pill tabular"
-            aria-label={`Switch Keyboard Language (${kbdLang})`}
-            onClick={onSwitchKbdLang}
-            title="Switch Keyboard Language"
-          >
-            <GlobeLangIcon />
-            <span>{kbdLang}</span>
-          </button>
+              <button
+                className="tray-lang-pill tabular"
+                aria-label={`Switch Keyboard Language (${kbdLang})`}
+                onClick={onSwitchKbdLang}
+                title="Switch Keyboard Language"
+              >
+                <GlobeLangIcon />
+                <span>{kbdLang}</span>
+              </button>
 
-          <div
-            ref={ccClusterRef}
-            className={`tray-control-cluster ${ccFlyout ? 'open' : ''}`}
-          >
-            <button
-              className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
-              aria-label="Wi-Fi and Control Center"
-              aria-expanded={Boolean(ccFlyout)}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleControlCenter();
-              }}
-              title={
-                netInfo.connected
-                  ? `${netInfo.ssid ?? 'Connected'}${
-                      netInfo.signalPercent !== undefined ? ` (${netInfo.signalPercent}%)` : ''
-                    }`
-                  : 'Not Connected'
-              }
-            >
-              <WifiIcon
-                connected={netInfo.connected}
-                signalPercent={netInfo.signalPercent}
-                kind={netInfo.kind}
-              />
-              {netInfo.connected && <span className="tray-wifi-dot" />}
-            </button>
-
-            <span className="tray-cluster-sep" aria-hidden="true" />
-
-            <button
-              className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
-              aria-label={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
-              aria-expanded={Boolean(ccFlyout)}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleControlCenter();
-              }}
-              onWheel={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const delta = e.deltaY < 0 ? 4 : -4;
-                const nextLevel = Math.max(0, Math.min(100, (trayVol.muted ? 0 : trayVol.level) + delta));
-                setTrayVol({ level: nextLevel, muted: nextLevel === 0 });
-                void dockBridge.setVolume(nextLevel).then(setTrayVol);
-              }}
-              title={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
-            >
-              <VolumeIcon level={trayVol.level} muted={trayVol.muted} />
-              <span className="tray-vol-pct tabular">
-                {trayVol.muted ? '0%' : `${trayVol.level}%`}
-              </span>
-            </button>
-
-            {stats.batteryPercent !== null && (
-              <>
-                <span className="tray-cluster-sep" aria-hidden="true" />
+              <div
+                ref={ccClusterRef}
+                className={`tray-control-cluster ${ccFlyout ? 'open' : ''}`}
+              >
                 <button
-                  className={`tray-cluster-btn tabular ${activePanel === 'system' ? 'active' : ''}`}
-                  aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
-                  onClick={() => toggle('system')}
-                  title={`${dict.battery}: ${stats.batteryPercent}%`}
+                  className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
+                  aria-label="Wi-Fi and Control Center"
+                  aria-expanded={Boolean(ccFlyout)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleControlCenter();
+                  }}
+                  title={
+                    netInfo.connected
+                      ? `${netInfo.ssid ?? 'Connected'}${
+                          netInfo.signalPercent !== undefined ? ` (${netInfo.signalPercent}%)` : ''
+                        }`
+                      : 'Not Connected'
+                  }
                 >
-                  <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
-                  <span>{stats.batteryPercent}%</span>
+                  <WifiIcon
+                    connected={netInfo.connected}
+                    signalPercent={netInfo.signalPercent}
+                    kind={netInfo.kind}
+                  />
+                  {netInfo.connected && <span className="tray-wifi-dot" />}
                 </button>
-              </>
-            )}
-          </div>
+
+                <span className="tray-cluster-sep" aria-hidden="true" />
+
+                <button
+                  className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
+                  aria-label={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
+                  aria-expanded={Boolean(ccFlyout)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleControlCenter();
+                  }}
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const delta = e.deltaY < 0 ? 4 : -4;
+                    const nextLevel = Math.max(0, Math.min(100, (trayVol.muted ? 0 : trayVol.level) + delta));
+                    setTrayVol({ level: nextLevel, muted: nextLevel === 0 });
+                    void dockBridge.setVolume(nextLevel).then(setTrayVol);
+                  }}
+                  title={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
+                >
+                  <VolumeIcon level={trayVol.level} muted={trayVol.muted} />
+                  <span className="tray-vol-pct tabular">
+                    {trayVol.muted ? '0%' : `${trayVol.level}%`}
+                  </span>
+                </button>
+
+                {stats.batteryPercent !== null && (
+                  <>
+                    <span className="tray-cluster-sep" aria-hidden="true" />
+                    <button
+                      className={`tray-cluster-btn tabular ${activePanel === 'system' ? 'active' : ''}`}
+                      aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
+                      onClick={() => toggle('system')}
+                      title={`${dict.battery}: ${stats.batteryPercent}%`}
+                    >
+                      <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
+                      <span>{stats.batteryPercent}%</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
 
           <button
             className={`tray-clock-btn tabular ${activePanel === 'calendar' ? 'active' : ''}`}
@@ -2461,26 +2470,28 @@ export function DockBar({
             <span className="tray-clock-date">{dateStr}</span>
           </button>
 
-          <button
-            className="tray-settings-btn"
-            aria-label={dict.settings}
-            aria-expanded={activePanel === 'settings'}
-            onClick={() => toggle('settings')}
-            title={dict.settings}
-            style={
-              activePanel === 'settings'
-                ? { background: 'var(--surface-hover)', color: 'var(--text-primary)' }
-                : undefined
-            }
-          >
-            <SettingsIcon />
-            {(updateInfo?.state === 'ready' || updateInfo?.state === 'downloading') && (
-              <span
-                className={`update-dot ${updateInfo.state === 'downloading' ? 'busy' : ''}`}
-                aria-hidden="true"
-              />
-            )}
-          </button>
+          {!isSecondary && (
+            <button
+              className="tray-settings-btn"
+              aria-label={dict.settings}
+              aria-expanded={activePanel === 'settings'}
+              onClick={() => toggle('settings')}
+              title={dict.settings}
+              style={
+                activePanel === 'settings'
+                  ? { background: 'var(--surface-hover)', color: 'var(--text-primary)' }
+                  : undefined
+              }
+            >
+              <SettingsIcon />
+              {(updateInfo?.state === 'ready' || updateInfo?.state === 'downloading') && (
+                <span
+                  className={`update-dot ${updateInfo.state === 'downloading' ? 'busy' : ''}`}
+                  aria-hidden="true"
+                />
+              )}
+            </button>
+          )}
 
           <button
             className="show-desktop-sliver"

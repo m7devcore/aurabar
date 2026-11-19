@@ -113,6 +113,7 @@ export interface DockSettings {
   compactMode: boolean;
   launchAtStartup: boolean;
   hideInFullscreen: boolean;
+  showOnAllDisplays: boolean;
 }
 
 /** What the UI needs to know about app updates (installed build only). */

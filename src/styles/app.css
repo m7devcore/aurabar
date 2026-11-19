@@ -208,6 +208,10 @@ body,
   padding: 4px 10px;
 }
 
+.dock-bar.secondary {
+  min-width: 240px;
+}
+
 .dock-apps-strip {
   display: flex;
   align-items: center;
