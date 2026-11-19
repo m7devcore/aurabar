@@ -28,6 +28,7 @@ import type {
   AppConfig,
   BackgroundApp,
   MediaInfo,
+  UpdateInfo,
   NetworkInfo,
   PinnedApp,
   RunningWindow,
@@ -119,6 +120,7 @@ interface LiveDragPlan {
 }
 
 interface Props {
+  updateInfo: UpdateInfo | null;
   config: AppConfig;
   activePanel: ActivePanel;
   stats: SystemStats;
@@ -134,6 +136,7 @@ interface Props {
 }
 
 export function DockBar({
+  updateInfo,
   config,
   activePanel,
   stats,
@@ -2471,6 +2474,12 @@ export function DockBar({
             }
           >
             <SettingsIcon />
+            {(updateInfo?.state === 'ready' || updateInfo?.state === 'downloading') && (
+              <span
+                className={`update-dot ${updateInfo.state === 'downloading' ? 'busy' : ''}`}
+                aria-hidden="true"
+              />
+            )}
           </button>
 
           <button

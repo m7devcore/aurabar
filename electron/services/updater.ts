@@ -1,5 +1,6 @@
 import { app, Notification } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import type { UpdateInfo } from '../../src/types';
 
 // Updates come from the GitHub Releases of this repo (see "publish" in package.json). Only the
 // installed build can update itself; running from source (npm start / dev) does nothing.
@@ -35,6 +36,18 @@ function notify(title: string, body: string, onClick?: () => void): void {
 
 export function getUpdateStatus(): UpdateStatus {
   return status;
+}
+
+export function getUpdateInfo(): UpdateInfo {
+  const base = { available: app.isPackaged, currentVersion: app.getVersion() };
+  switch (status.state) {
+    case 'downloading':
+      return { ...base, state: 'downloading', version: status.version, percent: status.percent };
+    case 'ready':
+      return { ...base, state: 'ready', version: status.version };
+    default:
+      return { ...base, state: status.state };
+  }
 }
 
 export function isUpdaterAvailable(): boolean {

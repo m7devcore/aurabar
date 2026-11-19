@@ -14,6 +14,7 @@ import type {
   AppConfig,
   DockSettings,
   MediaInfo,
+  UpdateInfo,
   RunningWindow,
   SystemStats
 } from './types';
@@ -42,6 +43,7 @@ export function App() {
   const [ramHistory, setRamHistory] = useState<number[]>([0]);
   const [runningWindows, setRunningWindows] = useState<RunningWindow[]>([]);
   const [media, setMedia] = useState<MediaInfo | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [kbdLang, setKbdLang] = useState('EN');
   const [now, setNow] = useState(() => new Date());
 
@@ -82,9 +84,15 @@ export function App() {
   // Initial config load + live Tray / Settings sync for both Dock & Top Island
   useEffect(() => {
     void dockBridge.getConfig().then(setConfig);
-    return dockBridge.onConfigUpdated((updated) => {
+    void dockBridge.getUpdateInfo().then(setUpdateInfo);
+    const stopUpdateInfo = dockBridge.onUpdateInfo(setUpdateInfo);
+    const stopConfig = dockBridge.onConfigUpdated((updated) => {
       setConfig(updated);
     });
+    return () => {
+      stopUpdateInfo();
+      stopConfig();
+    };
   }, []);
 
   // A file dropped anywhere outside the dock's own drop zone must not be opened by Chromium
@@ -265,6 +273,7 @@ export function App() {
 
         {activePanel === 'settings' && (
           <SettingsPopover
+            updateInfo={updateInfo}
             settings={settings}
             onUpdateSettings={updateSettings}
             onOpenAppsManager={() => handleTogglePanel('apps')}
@@ -285,6 +294,7 @@ export function App() {
     >
       {settings.position === 'bottom' && popoverElement}
       <DockBar
+        updateInfo={updateInfo}
         config={config}
         activePanel={activePanel}
         stats={stats}

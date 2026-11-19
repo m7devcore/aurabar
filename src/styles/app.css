@@ -551,6 +551,78 @@ body,
   transition: background-color 0.14s ease, color 0.14s ease, transform 0.15s ease-out;
 }
 
+.tray-settings-btn {
+  position: relative;
+}
+
+/* An update is downloading or ready: a small dot on the gear that opens Settings */
+.update-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--dock-bg);
+}
+
+.update-dot.busy {
+  animation: updateDotPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes updateDotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.update-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+}
+
+.update-card.is-ready {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.update-card-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.update-card .btn {
+  flex-shrink: 0;
+}
+
+.update-progress {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 0.4s var(--ease-out);
+}
+
 .tray-settings-btn:hover {
   background: var(--surface-raised);
   color: var(--text-primary);

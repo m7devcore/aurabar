@@ -1,9 +1,10 @@
 import { EyeOff, Grid2x2, Power } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { t } from '../../i18n';
-import type { DockSettings, ThemeId } from '../../types';
+import type { DockSettings, ThemeId, UpdateInfo } from '../../types';
 
 interface Props {
+  updateInfo: UpdateInfo | null;
   settings: DockSettings;
   onUpdateSettings: (patch: Partial<DockSettings>) => void;
   onOpenAppsManager: () => void;
@@ -39,7 +40,64 @@ function ToggleSwitch({
   );
 }
 
-export function SettingsPopover({ settings, onUpdateSettings, onOpenAppsManager }: Props) {
+function UpdateCard({ info, dict }: { info: UpdateInfo; dict: ReturnType<typeof t> }) {
+  const ready = info.state === 'ready';
+  const downloading = info.state === 'downloading';
+  const busy = ready || downloading || info.state === 'checking';
+
+  let title = `${dict.versionLabel} v${info.currentVersion}`;
+  let desc: string | null = null;
+  if (ready) {
+    title = dict.updateReady;
+    desc = dict.updateReadyDesc.replace('{v}', info.version ?? '');
+  } else if (downloading) {
+    title = dict.updateDownloading;
+    desc = `v${info.version ?? ''} — ${info.percent ?? 0}%`;
+  } else if (info.state === 'checking') {
+    desc = dict.checkingUpdates;
+  } else if (info.state === 'upToDate') {
+    desc = dict.upToDate;
+  } else if (info.state === 'error') {
+    desc = dict.updateError;
+  }
+
+  return (
+    <div className={`update-card ${ready ? 'is-ready' : ''}`}>
+      <div className="update-card-text">
+        <div className="toggle-title">{title}</div>
+        {desc && <div className="toggle-desc">{desc}</div>}
+        {downloading && (
+          <div className="update-progress">
+            <div
+              className="update-progress-fill"
+              style={{ transform: `scaleX(${Math.max(0.02, (info.percent ?? 0) / 100)})` }}
+            />
+          </div>
+        )}
+      </div>
+      {ready ? (
+        <button className="btn btn-primary" onClick={() => void dockBridge.installUpdate()}>
+          {dict.restartNow}
+        </button>
+      ) : (
+        <button
+          className="btn"
+          disabled={busy}
+          onClick={() => void dockBridge.checkForUpdates()}
+        >
+          {dict.checkUpdates}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function SettingsPopover({
+  updateInfo,
+  settings,
+  onUpdateSettings,
+  onOpenAppsManager
+}: Props) {
   const dict = t(settings.language);
 
   const themes: { id: ThemeId; label: string }[] = [
@@ -50,6 +108,9 @@ export function SettingsPopover({ settings, onUpdateSettings, onOpenAppsManager 
 
   return (
     <div className="stack-md">
+      {/* 0. App updates (installed build only) */}
+      {updateInfo?.available && <UpdateCard info={updateInfo} dict={dict} />}
+
       {/* 1. Music Player Placement */}
       <div>
         <div className="settings-section-title">{dict.musicSection}</div>

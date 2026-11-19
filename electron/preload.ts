@@ -4,6 +4,7 @@ import type {
   BackgroundApp,
   InstalledApp,
   LyricsResult,
+  UpdateInfo,
   MediaInfo,
   NetworkInfo,
   PinnedApp,
@@ -66,6 +67,10 @@ export interface AuraBarApi {
   onDockBlurred: (cb: () => void) => () => void;
   onIslandBlurred: (cb: () => void) => () => void;
   onConfigUpdated: (cb: (cfg: AppConfig) => void) => () => void;
+  getUpdateInfo: () => Promise<UpdateInfo>;
+  checkForUpdates: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  onUpdateInfo: (cb: (info: UpdateInfo) => void) => () => void;
 }
 
 const api: AuraBarApi = {
@@ -121,6 +126,14 @@ const api: AuraBarApi = {
     const handler = (_e: Electron.IpcRendererEvent, cfg: AppConfig) => cb(cfg);
     ipcRenderer.on('aurabar:config-updated', handler);
     return () => ipcRenderer.removeListener('aurabar:config-updated', handler);
+  },
+  getUpdateInfo: () => ipcRenderer.invoke('aurabar:get-update-info'),
+  checkForUpdates: () => ipcRenderer.invoke('aurabar:check-updates'),
+  installUpdate: () => ipcRenderer.invoke('aurabar:install-update'),
+  onUpdateInfo: (cb) => {
+    const handler = (_e: Electron.IpcRendererEvent, info: UpdateInfo) => cb(info);
+    ipcRenderer.on('aurabar:update-info', handler);
+    return () => ipcRenderer.removeListener('aurabar:update-info', handler);
   }
 };
 

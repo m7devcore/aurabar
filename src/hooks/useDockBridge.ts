@@ -77,5 +77,9 @@ export const dockBridge: AuraBarApi = window.auraBar ?? {
   quitApp: async () => undefined,
   onDockBlurred: () => () => undefined,
   onIslandBlurred: () => () => undefined,
-  onConfigUpdated: () => () => undefined
+  onConfigUpdated: () => () => undefined,
+  getUpdateInfo: async () => ({ available: false, currentVersion: 'dev', state: 'idle' }),
+  checkForUpdates: async () => undefined,
+  installUpdate: async () => undefined,
+  onUpdateInfo: () => () => undefined
 };

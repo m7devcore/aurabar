@@ -115,6 +115,17 @@ export interface DockSettings {
   hideInFullscreen: boolean;
 }
 
+/** What the UI needs to know about app updates (installed build only). */
+export interface UpdateInfo {
+  /** False when running from source: there is nothing to update then */
+  available: boolean;
+  currentVersion: string;
+  state: 'idle' | 'checking' | 'downloading' | 'ready' | 'upToDate' | 'error';
+  /** Version being downloaded / ready to install */
+  version?: string;
+  percent?: number;
+}
+
 export interface AppConfig {
   settings: DockSettings;
   pinnedApps: PinnedApp[];

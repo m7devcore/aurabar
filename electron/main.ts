@@ -13,6 +13,7 @@ import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/m
 import { getLyrics } from './services/lyrics';
 import {
   checkForUpdates,
+  getUpdateInfo,
   getUpdateStatus,
   installUpdateNow,
   isUpdaterAvailable,
@@ -349,6 +350,13 @@ let rebuildTrayMenu: () => void = () => undefined;
 
 // The window that saved a config already has it; echoing it back would race with newer local
 // edits (e.g. typing a folder name) and briefly revert them
+function broadcastUpdateInfo(): void {
+  const info = getUpdateInfo();
+  for (const win of [dockWindow, islandWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('aurabar:update-info', info);
+  }
+}
+
 function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
   for (const win of [dockWindow, islandWindow]) {
     if (win && !win.isDestroyed() && win.webContents !== except) {
@@ -772,6 +780,9 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle('aurabar:launch-target', (_e, target: string) => launchTarget(target));
   ipcMain.handle('aurabar:pick-app-file', () => pickExecutableOrFolder(dockWindow));
+  ipcMain.handle('aurabar:get-update-info', () => getUpdateInfo());
+  ipcMain.handle('aurabar:check-updates', () => checkForUpdates(true));
+  ipcMain.handle('aurabar:install-update', () => installUpdateNow());
   ipcMain.handle('aurabar:get-media-info', () => getCurrentMedia());
   ipcMain.handle(
     'aurabar:get-lyrics',
@@ -862,7 +873,10 @@ if (!singleInstance) {
       applyAllLayouts(currentConfig.settings);
     });
     startUpdater(
-      () => rebuildTrayMenu(),
+      () => {
+        rebuildTrayMenu();
+        broadcastUpdateInfo();
+      },
       async () => {
         if (!taskbarWasAutoHidden) return;
         taskbarWasAutoHidden = false;

@@ -42,6 +42,15 @@ export interface Translations {
   launchAtStartupDesc: string;
   hideInFullscreen: string;
   hideInFullscreenDesc: string;
+  updateReady: string;
+  updateReadyDesc: string;
+  restartNow: string;
+  updateDownloading: string;
+  checkingUpdates: string;
+  upToDate: string;
+  checkUpdates: string;
+  updateError: string;
+  versionLabel: string;
   manageAppsBtn: string;
   hideDock: string;
   quitApp: string;
@@ -105,6 +114,15 @@ const EN: Translations = {
   launchAtStartupDesc: 'Open AuraBar automatically when you sign in',
   hideInFullscreen: 'Hide in full screen',
   hideInFullscreenDesc: 'Tuck the bar and island away while a game or video is full screen',
+  updateReady: 'Update ready',
+  updateReadyDesc: 'Version {v} is downloaded and ready to install',
+  restartNow: 'Restart now',
+  updateDownloading: 'Downloading update…',
+  checkingUpdates: 'Checking for updates…',
+  upToDate: "You're on the latest version",
+  checkUpdates: 'Check for updates',
+  updateError: "Couldn't check for updates. Try again later.",
+  versionLabel: 'AuraBar',
   manageAppsBtn: 'Manage Pinned Apps',
   hideDock: 'Hide (Alt+Space)',
   quitApp: 'Quit AuraBar',
@@ -168,6 +186,15 @@ const AR: Translations = {
   launchAtStartupDesc: 'فتح AuraBar تلقائياً عند تسجيل الدخول',
   hideInFullscreen: 'الإخفاء في ملء الشاشة',
   hideInFullscreenDesc: 'إخفاء الشريط والجزيرة أثناء لعبة أو فيديو بملء الشاشة',
+  updateReady: 'التحديث جاهز',
+  updateReadyDesc: 'النسخة {v} نزلت وجاهزة للتثبيت',
+  restartNow: 'أعد التشغيل الآن',
+  updateDownloading: 'جاري تنزيل التحديث…',
+  checkingUpdates: 'جاري البحث عن تحديث…',
+  upToDate: 'أنت على آخر نسخة',
+  checkUpdates: 'البحث عن تحديث',
+  updateError: 'تعذر البحث عن تحديث. جرّب لاحقاً.',
+  versionLabel: 'AuraBar',
   manageAppsBtn: 'إدارة التطبيقات المثبتة',
   hideDock: 'إخفاء (Alt+Space)',
   quitApp: 'إغلاق AuraBar',
