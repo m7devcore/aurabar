@@ -423,8 +423,8 @@ namespace AuraBarNative {
       RECT cur = new RECT();
       if (!SystemParametersInfo(0x0030, 0, ref cur, 0)) return; // SPI_GETWORKAREA
       RECT want = desiredWorkArea;
-      if (Math.Abs(cur.left - want.left) <= 1 && Math.Abs(cur.top - want.top) <= 1 &&
-          Math.Abs(cur.right - want.right) <= 1 && Math.Abs(cur.bottom - want.bottom) <= 1) {
+      if (Math.Abs(cur.left - want.left) <= 6 && Math.Abs(cur.top - want.top) <= 6 &&
+          Math.Abs(cur.right - want.right) <= 6 && Math.Abs(cur.bottom - want.bottom) <= 6) {
         return;
       }
       // A full-screen game/video legitimately has the whole screen; leave it alone
@@ -754,6 +754,11 @@ namespace AuraBarNative {
 
     private static bool IsFullscreenWindowOnMonitor(IntPtr hWnd, IntPtr targetMonitor) {
       if (hWnd == IntPtr.Zero || targetMonitor == IntPtr.Zero || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
+
+      int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
+      if ((ex & 0x00000020) != 0) return false; // WS_EX_TRANSPARENT (NVIDIA/Discord/Xbox overlays)
+      if ((ex & WS_EX_NOACTIVATE) != 0) return false;
+      if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0) return false;
 
       StringBuilder cls = new StringBuilder(64);
       GetClassName(hWnd, cls, cls.Capacity);
@@ -1622,10 +1627,10 @@ namespace AuraBarNative {
       }
       RECT cur;
       if (!GetWindowRect(h, out cur) ||
-          Math.Abs(cur.left - tr.left) > 1 ||
-          Math.Abs(cur.top - tr.top) > 1 ||
-          Math.Abs(cur.right - tr.right) > 1 ||
-          Math.Abs(cur.bottom - tr.bottom) > 1) {
+          Math.Abs(cur.left - tr.left) > 2 ||
+          Math.Abs(cur.top - tr.top) > 2 ||
+          Math.Abs(cur.right - tr.right) > 2 ||
+          Math.Abs(cur.bottom - tr.bottom) > 2) {
         SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
       }
     }

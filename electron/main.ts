@@ -215,15 +215,17 @@ function placeSecondaryDockPhysical(
   settings: DockSettings
 ): void {
   if (entry.win.isDestroyed()) return;
-  const dipBounds = computeDockBoundsForDisplay(settings, display);
-  const cur = entry.win.getBounds();
-  if (
-    Math.abs(cur.x - dipBounds.x) > 1 ||
-    Math.abs(cur.y - dipBounds.y) > 1 ||
-    Math.abs(cur.width - dipBounds.width) > 1 ||
-    Math.abs(cur.height - dipBounds.height) > 1
-  ) {
+  const curDisplay = screen.getDisplayMatching(entry.win.getBounds());
+  if (curDisplay.id !== display.id) {
+    const dipBounds = computeDockBoundsForDisplay(settings, display);
     entry.win.setBounds(dipBounds, false);
+  }
+  const scale = display.scaleFactor || 1;
+  const canvasPhysH = Math.round(DOCK_CANVAS_HEIGHT * scale);
+  const reservePhys = settings.replaceWindowsTaskbar && !dockManuallyHidden ? 1 : 0;
+  const h = getHwndNumber(entry.win);
+  if (h !== '0') {
+    void win32Daemon.send(`PLACE_DOCK_MON ${h} ${settings.position} ${canvasPhysH} ${reservePhys}`);
   }
 }
 
@@ -611,14 +613,20 @@ function reassertLayoutAfterFullscreen(): void {
   if (settings.replaceWindowsTaskbar && taskbarWasAutoHidden) {
     const d = screen.getPrimaryDisplay();
     const expectedHeight = d.bounds.height - getReservedHeightPx(settings);
-    if (Math.abs(d.workArea.height - expectedHeight) > 2) {
+    if (Math.abs(d.workArea.height - expectedHeight) > 8) {
       lastTaskbarLayoutKey = '';
       syncTaskbarReplacement(settings);
     }
   }
-  applyAllLayouts(settings);
+  if (dockWindow && !dockWindow.isDestroyed()) {
+    applyTopmost(dockWindow);
+    dockWindow.setBounds(computeDockBounds(settings), false);
+    placeDockPhysical(settings);
+  }
   setTimeout(() => {
-    if (!fullscreenSuspended && !isQuitting) applyAllLayouts(currentConfig.settings);
+    if (!fullscreenSuspended && !isQuitting && dockWindow && !dockWindow.isDestroyed()) {
+      placeDockPhysical(currentConfig.settings);
+    }
   }, 450);
 }
 
@@ -660,7 +668,7 @@ async function pollFullscreen(): Promise<void> {
         setFullscreenSuspended(true);
       } else if (reply === '0') {
         notFullscreenStreak += 1;
-        if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+        if (notFullscreenStreak >= 4) setFullscreenSuspended(false);
       }
     } finally {
       fullscreenPolling = false;
@@ -682,7 +690,7 @@ async function pollFullscreen(): Promise<void> {
       setFullscreenSuspended(true);
     } else if (flags[0] === '0') {
       notFullscreenStreak += 1;
-      if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+      if (notFullscreenStreak >= 4) setFullscreenSuspended(false);
     }
 
     for (let i = 0; i < secEntries.length; i++) {
@@ -693,7 +701,7 @@ async function pollFullscreen(): Promise<void> {
         setSecondaryFullscreenSuspended(entry, true);
       } else if (flag === '0') {
         entry.notFullscreenStreak += 1;
-        if (entry.notFullscreenStreak >= 3) setSecondaryFullscreenSuspended(entry, false);
+        if (entry.notFullscreenStreak >= 4) setSecondaryFullscreenSuspended(entry, false);
       }
     }
   } finally {
