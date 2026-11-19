@@ -416,9 +416,11 @@ namespace AuraBarNative {
       // A full-screen game/video legitimately has the whole screen; leave it alone
       if (IsFullscreenForeground()) return;
 
-      SystemParametersInfo(0x002F, 0, ref want, 2); // SPI_SETWORKAREA, SPIF_SENDCHANGE
+      SystemParametersInfo(0x002F, 0, ref want, 0); // SPI_SETWORKAREA without global broadcast storm
       EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
         if (!IsWindowVisible(hWnd) || !IsZoomed(hWnd)) return true;
+        // Never un-maximize/re-maximize borderless games or fullscreen players
+        if ((GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0) return true;
         RECT wr;
         if (!GetWindowRect(hWnd, out wr)) return true;
         // A maximized window overhangs its work area by the frame (about 8px); more than that
@@ -698,34 +700,18 @@ namespace AuraBarNative {
       return isProtected;
     }
 
-    // True while the window in front is a full-screen app (game, video player, browser F11...)
-    // on the monitor the dock lives on. Windows that merely cover the work area (maximized) do
-    // not count: they keep their title bar, full-screen apps do not.
-    private static bool IsFullscreenForeground() {
-      IntPtr fg = GetForegroundWindow();
-      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) return false;
-
-      uint pid;
-      GetWindowThreadProcessId(fg, out pid);
-      if (IsAuraBarWindow(pid, fg)) {
-        // Clicking the Dynamic Island while in a game/video temporarily focuses AuraBar;
-        // judge fullscreen by the underlying external foreground window so the dock stays hidden.
-        fg = lastExternalForeground;
-        if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
-          int nState;
-          return SHQueryUserNotificationState(out nState) == 0 && (nState == 3 || nState == 4);
-        }
-      }
+    private static bool IsFullscreenWindow(IntPtr hWnd) {
+      if (hWnd == IntPtr.Zero || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
 
       StringBuilder cls = new StringBuilder(64);
-      GetClassName(fg, cls, cls.Capacity);
+      GetClassName(hWnd, cls, cls.Capacity);
       string clsName = cls.ToString();
       if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
           clsName == "Shell_SecondaryTrayWnd") {
         return false;
       }
 
-      IntPtr monitor = MonitorFromWindow(fg, 2); // MONITOR_DEFAULTTONEAREST
+      IntPtr monitor = MonitorFromWindow(hWnd, 2); // MONITOR_DEFAULTTONEAREST
       POINT origin = new POINT();
       IntPtr dockMonitor = dockHwnd != IntPtr.Zero
         ? MonitorFromWindow(dockHwnd, 2)
@@ -735,13 +721,40 @@ namespace AuraBarNative {
       MONITORINFO mi = new MONITORINFO();
       mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
       RECT r;
-      if (!GetMonitorInfo(monitor, ref mi) || !GetWindowRect(fg, out r)) return false;
+      if (!GetMonitorInfo(monitor, ref mi) || !GetWindowRect(hWnd, out r)) return false;
 
       bool covers = r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
                     r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
-      bool hasCaption = (GetWindowLong(fg, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
+      bool hasCaption = (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
       // Chromium/Electron fullscreen windows keep WS_CAPTION in style but are NOT IsZoomed and cover the full monitor
-      if (covers && (!hasCaption || !IsZoomed(fg))) return true;
+      return covers && (!hasCaption || !IsZoomed(hWnd));
+    }
+
+    // True while the window in front is a full-screen app (game, video player, browser F11...)
+    // on the monitor the dock lives on. Windows that merely cover the work area (maximized) do
+    // not count: they keep their title bar, full-screen apps do not.
+    private static bool IsFullscreenForeground() {
+      IntPtr fg = GetForegroundWindow();
+      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
+        if (lastExternalForeground != IntPtr.Zero && IsFullscreenWindow(lastExternalForeground)) return true;
+        return false;
+      }
+
+      uint pid;
+      GetWindowThreadProcessId(fg, out pid);
+      if (IsAuraBarWindow(pid, fg)) {
+        // Clicking the Dynamic Island while in a game/video temporarily focuses AuraBar;
+        // judge fullscreen by the underlying external foreground window so the dock stays hidden.
+        if (IsFullscreenWindow(lastExternalForeground)) return true;
+        int nState;
+        return SHQueryUserNotificationState(out nState) == 0 && (nState == 3 || nState == 4);
+      }
+
+      if (IsFullscreenWindow(fg)) return true;
+
+      // Alt+Esc / cursor-unlock in games can focus Desktop or a tiny non-taskbar overlay while the
+      // fullscreen game itself remains visible and unminimized across the monitor: keep dock hidden.
+      if (!IsTaskbarWindow(fg) && IsFullscreenWindow(lastExternalForeground)) return true;
 
       // Exclusive full-screen Direct3D games and presentation mode
       int state;
@@ -1440,7 +1453,7 @@ namespace AuraBarNative {
       hasDesiredWorkArea = true;
       SystemParametersInfo(0x002F, 0, ref rc, 0);
       EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
-        if (IsWindowVisible(hWnd) && IsZoomed(hWnd)) {
+        if (IsWindowVisible(hWnd) && IsZoomed(hWnd) && (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) != 0) {
           ShowWindowAsync(hWnd, 9);
           Thread.Sleep(25);
           ShowWindowAsync(hWnd, 3);

@@ -438,11 +438,9 @@ function reassertLayoutAfterFullscreen(): void {
     }
   }
   applyAllLayouts(settings);
-  for (const delay of [300, 1200]) {
-    setTimeout(() => {
-      if (!fullscreenSuspended && !isQuitting) applyAllLayouts(currentConfig.settings);
-    }, delay);
-  }
+  setTimeout(() => {
+    if (!fullscreenSuspended && !isQuitting) applyAllLayouts(currentConfig.settings);
+  }, 450);
 }
 
 async function pollFullscreen(): Promise<void> {
@@ -458,9 +456,9 @@ async function pollFullscreen(): Promise<void> {
       notFullscreenStreak = 0;
       setFullscreenSuspended(true);
     } else if (reply === '0') {
-      // Leaving needs two clean readings in a row, so an Alt+Tab transition does not flicker
+      // Leaving needs three clean readings in a row, so Alt+Esc / Alt+Tab transitions do not flicker
       notFullscreenStreak += 1;
-      if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
+      if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
     }
   } finally {
     fullscreenPolling = false;
