@@ -22,7 +22,8 @@ const URGENT_COMMANDS = new Set([
   'MEDIA_PLAYPAUSE',
   'MEDIA_NEXT',
   'MEDIA_PREV',
-  'KBD_SWITCH'
+  'KBD_SWITCH',
+  'FULLSCREEN'
 ]);
 
 interface QueuedCommand {
@@ -41,8 +42,21 @@ class Win32Daemon {
   private queue: QueuedCommand[] = [];
   private busy = false;
 
+  private hasStarted = false;
+  private restartListener: (() => void) | null = null;
+
+  /**
+   * Called when the native process had to be started again after dying. Whatever it had set up
+   * (the reserved work area, window placement) was lost with it, so the app re-applies it.
+   */
+  onRestart(listener: () => void): void {
+    this.restartListener = listener;
+  }
+
   start(): void {
     if (this.proc && !this.proc.killed) return;
+    const isRestart = this.hasStarted;
+    this.hasStarted = true;
     // In the installed app main.cjs lives inside app.asar, which PowerShell cannot read; the
     // native files are unpacked beside it (see asarUnpack in package.json)
     const nativeDir = path
@@ -91,6 +105,12 @@ class Win32Daemon {
       this.buffer = '';
       this.rejectAllPending();
     });
+
+    // Queued behind whatever triggered this start; setImmediate keeps it out of send()'s stack
+    if (isRestart && this.restartListener) {
+      const listener = this.restartListener;
+      setImmediate(() => listener());
+    }
   }
 
   private handleLine(line: string): void {

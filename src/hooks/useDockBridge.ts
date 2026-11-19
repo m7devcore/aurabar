@@ -17,7 +17,8 @@ const FALLBACK_CONFIG: AppConfig = {
     alwaysOnTop: true,
     showOpenWindowsInBar: true,
     compactMode: false,
-    launchAtStartup: false
+    launchAtStartup: false,
+    hideInFullscreen: true
   },
   pinnedApps: [],
   calendarEvents: []

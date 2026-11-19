@@ -40,6 +40,8 @@ export interface Translations {
   alwaysOnTopDesc: string;
   launchAtStartup: string;
   launchAtStartupDesc: string;
+  hideInFullscreen: string;
+  hideInFullscreenDesc: string;
   manageAppsBtn: string;
   hideDock: string;
   quitApp: string;
@@ -101,6 +103,8 @@ const EN: Translations = {
   alwaysOnTopDesc: 'Keep taskbar and overlays above other open apps',
   launchAtStartup: 'Launch at Windows startup',
   launchAtStartupDesc: 'Open AuraBar automatically when you sign in',
+  hideInFullscreen: 'Hide in full screen',
+  hideInFullscreenDesc: 'Tuck the bar and island away while a game or video is full screen',
   manageAppsBtn: 'Manage Pinned Apps',
   hideDock: 'Hide (Alt+Space)',
   quitApp: 'Quit AuraBar',
@@ -162,6 +166,8 @@ const AR: Translations = {
   alwaysOnTopDesc: 'إبقاء الشريط والأيقونات فوق جميع النوافذ المفتوحة',
   launchAtStartup: 'التشغيل مع ويندوز',
   launchAtStartupDesc: 'فتح AuraBar تلقائياً عند تسجيل الدخول',
+  hideInFullscreen: 'الإخفاء في ملء الشاشة',
+  hideInFullscreenDesc: 'إخفاء الشريط والجزيرة أثناء لعبة أو فيديو بملء الشاشة',
   manageAppsBtn: 'إدارة التطبيقات المثبتة',
   hideDock: 'إخفاء (Alt+Space)',
   quitApp: 'إغلاق AuraBar',

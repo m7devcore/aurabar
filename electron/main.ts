@@ -207,7 +207,7 @@ function applyAllLayouts(settings: DockSettings): void {
     applyTopmost(islandWindow);
     islandWindow.setBounds(computeIslandBounds(), false);
     if (settings.musicPosition === 'top') {
-      if (!islandWindow.isVisible()) {
+      if (!islandWindow.isVisible() && !fullscreenSuspended) {
         islandWindow.showInactive();
         ensureOnTop(islandWindow);
       }
@@ -354,6 +354,101 @@ function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
     if (win && !win.isDestroyed() && win.webContents !== except) {
       win.webContents.send('aurabar:config-updated', cfg);
     }
+  }
+}
+
+// While a full-screen app (game, video, browser F11) is in front, the dock and island step aside:
+// they sit above everything, so they would otherwise be drawn over the game. What was visible
+// before is shown again afterwards, so a dock the user hid on purpose stays hidden.
+let fullscreenSuspended = false;
+let suspendedDockWasVisible = false;
+let suspendedIslandWasVisible = false;
+let fullscreenPollTimer: ReturnType<typeof setInterval> | null = null;
+let fullscreenPolling = false;
+let notFullscreenStreak = 0;
+
+function setFullscreenSuspended(next: boolean): void {
+  if (next === fullscreenSuspended) return;
+  fullscreenSuspended = next;
+  if (next) {
+    suspendedDockWasVisible = dockWindow?.isVisible() ?? false;
+    suspendedIslandWasVisible = islandWindow?.isVisible() ?? false;
+    isPopoverOpen = false;
+    dockInteractiveLock = false;
+    dockInteractiveState = false;
+    islandInteractiveLock = false;
+    islandInteractiveState = false;
+    dockWindow?.setIgnoreMouseEvents(true);
+    islandWindow?.setIgnoreMouseEvents(true);
+    dockWindow?.hide();
+    islandWindow?.hide();
+  } else {
+    // The screen has just been through a mode/work-area change: lay everything out again from
+    // fresh metrics *before* showing, and once more after it settles
+    reassertLayoutAfterFullscreen();
+    if (suspendedDockWasVisible && dockWindow && !dockWindow.isDestroyed()) {
+      dockWindow.showInactive();
+      ensureOnTop(dockWindow);
+    }
+    if (
+      suspendedIslandWasVisible &&
+      islandWindow &&
+      !islandWindow.isDestroyed() &&
+      currentConfig.settings.musicPosition === 'top'
+    ) {
+      islandWindow.showInactive();
+      ensureOnTop(islandWindow);
+    }
+  }
+}
+
+function reassertLayoutAfterFullscreen(): void {
+  const settings = currentConfig.settings;
+  // Windows can reset the reserved work area when a full-screen app exits; only touch it
+  // again when it really changed, since re-applying makes every window relayout
+  if (settings.replaceWindowsTaskbar && taskbarWasAutoHidden) {
+    const d = screen.getPrimaryDisplay();
+    const expectedHeight = d.bounds.height - getReservedHeightPx(settings);
+    if (Math.abs(d.workArea.height - expectedHeight) > 2) {
+      lastTaskbarLayoutKey = '';
+      syncTaskbarReplacement(settings);
+    }
+  }
+  applyAllLayouts(settings);
+  for (const delay of [300, 1200]) {
+    setTimeout(() => {
+      if (!fullscreenSuspended && !isQuitting) applyAllLayouts(currentConfig.settings);
+    }, delay);
+  }
+}
+
+async function pollFullscreen(): Promise<void> {
+  if (fullscreenPolling || isQuitting) return;
+  fullscreenPolling = true;
+  try {
+    const reply = await win32Daemon.send('FULLSCREEN');
+    if (reply === '1') {
+      notFullscreenStreak = 0;
+      setFullscreenSuspended(true);
+    } else if (reply === '0') {
+      // Leaving needs two clean readings in a row, so an Alt+Tab transition does not flicker
+      notFullscreenStreak += 1;
+      if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
+    }
+  } finally {
+    fullscreenPolling = false;
+  }
+}
+
+function syncFullscreenWatcher(): void {
+  const wanted = currentConfig.settings.hideInFullscreen;
+  if (wanted && !fullscreenPollTimer) {
+    fullscreenPollTimer = setInterval(() => void pollFullscreen(), 300);
+  } else if (!wanted) {
+    if (fullscreenPollTimer) clearInterval(fullscreenPollTimer);
+    fullscreenPollTimer = null;
+    notFullscreenStreak = 0;
+    setFullscreenSuspended(false);
   }
 }
 
@@ -504,7 +599,7 @@ function setupTray(): void {
 }
 
 function toggleDockVisibility(): void {
-  if (!dockWindow) return;
+  if (!dockWindow || fullscreenSuspended) return;
   if (dockWindow.isVisible()) {
     isPopoverOpen = false;
     dockInteractiveLock = false;
@@ -593,6 +688,9 @@ function registerIpcHandlers(): void {
       ...nextConfig,
       pinnedApps: withResolvedExeNames(nextConfig.pinnedApps)
     });
+    if (prevSettings.hideInFullscreen !== currentConfig.settings.hideInFullscreen) {
+      syncFullscreenWatcher();
+    }
     if (prevSettings.launchAtStartup !== currentConfig.settings.launchAtStartup) {
       applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
       rebuildTrayMenu();
@@ -733,12 +831,12 @@ if (!singleInstance) {
 
   app.on('second-instance', () => {
     if (dockWindow) {
-      if (!dockWindow.isVisible()) dockWindow.showInactive();
+      if (!dockWindow.isVisible() && !fullscreenSuspended) dockWindow.showInactive();
       ensureOnTop(dockWindow);
       dockWindow.focus();
     }
     if (islandWindow && currentConfig.settings.musicPosition === 'top') {
-      if (!islandWindow.isVisible()) islandWindow.showInactive();
+      if (!islandWindow.isVisible() && !fullscreenSuspended) islandWindow.showInactive();
       ensureOnTop(islandWindow);
     }
   });
@@ -748,6 +846,21 @@ if (!singleInstance) {
     createWindows();
     setupTray();
     applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
+    syncFullscreenWatcher();
+    // If the native bridge ever has to be restarted, Windows has already dropped the work area it
+    // had reserved (it reverts when the process that set it dies): reserve and place again
+    win32Daemon.onRestart(() => {
+      if (isQuitting) return;
+      lastTaskbarLayoutKey = '';
+      void win32Daemon.send(
+        `SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`
+      );
+      void win32Daemon.send(`KEEP_TOP ${currentConfig.settings.alwaysOnTop ? 1 : 0}`);
+      if (currentConfig.settings.replaceWindowsTaskbar) {
+        syncTaskbarReplacement(currentConfig.settings);
+      }
+      applyAllLayouts(currentConfig.settings);
+    });
     startUpdater(
       () => rebuildTrayMenu(),
       async () => {
@@ -757,6 +870,13 @@ if (!singleInstance) {
         await win32Daemon.send('TASKBAR_SHOW');
       }
     );
+    // Cheap safety net: re-send the dock's target rect from fresh display metrics, so a wrong
+    // reading taken during some display change can never stick
+    setInterval(() => {
+      if (!fullscreenSuspended && dockWindow?.isVisible()) {
+        placeDockPhysical(currentConfig.settings);
+      }
+    }, 4000);
     setInterval(updateCursorHitTesting, 10);
 
     globalShortcut.register('Alt+Space', () => {

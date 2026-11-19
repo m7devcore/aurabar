@@ -140,6 +140,26 @@ namespace AuraBarNative {
     [DllImport("user32.dll")]
     private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO {
+      public int cbSize;
+      public RECT rcMonitor;
+      public RECT rcWork;
+      public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("shell32.dll")]
+    private static extern int SHQueryUserNotificationState(out int pquns);
+
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
 
@@ -237,6 +257,7 @@ namespace AuraBarNative {
     }
 
     private const int GWL_EXSTYLE = -20;
+    private const int GWL_STYLE = -16;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_APPWINDOW = 0x00040000;
     private const int WS_EX_NOACTIVATE = 0x08000000;
@@ -280,6 +301,10 @@ namespace AuraBarNative {
     private const int THUMB_W = 400;
     private const int THUMB_H = 240;
     private static bool taskbarHiddenByUs = false;
+    // The work area we reserved for the dock; Windows resets it behind our back (a full-screen
+    // app exiting, a display change), which lets maximized windows slide under the dock
+    private static bool hasDesiredWorkArea = false;
+    private static RECT desiredWorkArea;
     private static int savedScreenLeft = 0;
     private static int savedScreenRight = 1920;
     private static int savedScreenBottom = 1080;
@@ -373,6 +398,61 @@ namespace AuraBarNative {
       return GetProcMeta(pid).isElectron;
     }
 
+    // The dock must sit exactly where PLACE_DOCK put it. Display changes (a full-screen app
+    // entering/leaving, resolution or work-area resets) can leave the window moved or resized by
+    // the system; this puts it back within one poll instead of leaving it floating above the
+    // bottom edge until the next restart.
+    // Puts the reserved work area back if Windows changed it, and re-fits maximized windows that
+    // now reach under the dock
+    private static void EnforceWorkArea() {
+      if (!taskbarHiddenByUs || !hasDesiredWorkArea) return;
+      RECT cur = new RECT();
+      if (!SystemParametersInfo(0x0030, 0, ref cur, 0)) return; // SPI_GETWORKAREA
+      RECT want = desiredWorkArea;
+      if (Math.Abs(cur.left - want.left) <= 1 && Math.Abs(cur.top - want.top) <= 1 &&
+          Math.Abs(cur.right - want.right) <= 1 && Math.Abs(cur.bottom - want.bottom) <= 1) {
+        return;
+      }
+      // A full-screen game/video legitimately has the whole screen; leave it alone
+      if (IsFullscreenForeground()) return;
+
+      SystemParametersInfo(0x002F, 0, ref want, 2); // SPI_SETWORKAREA, SPIF_SENDCHANGE
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
+        if (!IsWindowVisible(hWnd) || !IsZoomed(hWnd)) return true;
+        RECT wr;
+        if (!GetWindowRect(hWnd, out wr)) return true;
+        // A maximized window overhangs its work area by the frame (about 8px); more than that
+        // means it was sized for the old, larger work area
+        if (wr.bottom > want.bottom + 14 || wr.top < want.top - 14) {
+          ShowWindowAsync(hWnd, 9);
+          Thread.Sleep(25);
+          ShowWindowAsync(hWnd, 3);
+        }
+        return true;
+      }, IntPtr.Zero);
+    }
+
+    private static void EnforceDockPlacement() {
+      if (!hasDockTargetRect || dockHwnd == IntPtr.Zero) return;
+      if (!IsWindow(dockHwnd) || !IsWindowVisible(dockHwnd)) return;
+      RECT r;
+      if (!GetWindowRect(dockHwnd, out r)) return;
+      RECT t = dockTargetRect;
+      if (Math.Abs(r.left - t.left) <= 1 && Math.Abs(r.top - t.top) <= 1 &&
+          Math.Abs(r.right - t.right) <= 1 && Math.Abs(r.bottom - t.bottom) <= 1) {
+        return;
+      }
+      SetWindowPos(
+        dockHwnd,
+        new IntPtr(-1),
+        t.left,
+        t.top,
+        t.right - t.left,
+        t.bottom - t.top,
+        keepOnTop ? 0x0010u : 0x0014u
+      );
+    }
+
     private static void KeepOnTopIfDemoted(IntPtr hWnd) {
       if (!keepOnTop) return;
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || !IsWindowVisible(hWnd)) return;
@@ -427,6 +507,8 @@ namespace AuraBarNative {
             }
           }
 
+          EnforceWorkArea();
+          EnforceDockPlacement();
           KeepOnTopIfDemoted(dockHwnd);
           KeepOnTopIfDemoted(islandHwnd);
 
@@ -614,6 +696,48 @@ namespace AuraBarNative {
         protectedProcs[pid] = isProtected;
       }
       return isProtected;
+    }
+
+    // True while the window in front is a full-screen app (game, video player, browser F11...)
+    // on the monitor the dock lives on. Windows that merely cover the work area (maximized) do
+    // not count: they keep their title bar, full-screen apps do not.
+    private static bool IsFullscreenForeground() {
+      IntPtr fg = GetForegroundWindow();
+      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) return false;
+
+      uint pid;
+      GetWindowThreadProcessId(fg, out pid);
+      if (IsAuraBarWindow(pid, fg)) return false;
+
+      StringBuilder cls = new StringBuilder(64);
+      GetClassName(fg, cls, cls.Capacity);
+      string clsName = cls.ToString();
+      if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
+          clsName == "Shell_SecondaryTrayWnd") {
+        return false;
+      }
+
+      IntPtr monitor = MonitorFromWindow(fg, 2); // MONITOR_DEFAULTTONEAREST
+      POINT origin = new POINT();
+      IntPtr dockMonitor = dockHwnd != IntPtr.Zero
+        ? MonitorFromWindow(dockHwnd, 2)
+        : MonitorFromPoint(origin, 1); // MONITOR_DEFAULTTOPRIMARY
+      if (monitor == IntPtr.Zero || monitor != dockMonitor) return false;
+
+      MONITORINFO mi = new MONITORINFO();
+      mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+      RECT r;
+      if (!GetMonitorInfo(monitor, ref mi) || !GetWindowRect(fg, out r)) return false;
+
+      bool covers = r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
+                    r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+      bool hasCaption = (GetWindowLong(fg, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
+      if (covers && !hasCaption) return true;
+
+      // Exclusive full-screen Direct3D games and presentation mode
+      int state;
+      if (SHQueryUserNotificationState(out state) == 0 && (state == 3 || state == 4)) return true;
+      return false;
     }
 
     private static bool IsForegroundTarget(IntPtr hWnd) {
@@ -1303,6 +1427,8 @@ namespace AuraBarNative {
         ShowWindowAsync(sec, 0);
       }
       RECT rc = new RECT { left = left, top = top, right = right, bottom = bottom };
+      desiredWorkArea = rc;
+      hasDesiredWorkArea = true;
       SystemParametersInfo(0x002F, 0, ref rc, 0);
       EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
         if (IsWindowVisible(hWnd) && IsZoomed(hWnd)) {
@@ -1316,6 +1442,7 @@ namespace AuraBarNative {
 
     private static void RestoreWindowsTaskbar() {
       taskbarHiddenByUs = false;
+      hasDesiredWorkArea = false;
       IntPtr tray = FindWindow("Shell_TrayWnd", null);
       if (tray != IntPtr.Zero) {
         ShowWindowAsync(tray, 5);
@@ -1392,6 +1519,8 @@ namespace AuraBarNative {
           } else if (line.StartsWith("QUIT_APP ")) {
             int pidVal = int.Parse(line.Substring(9).Trim());
             Reply(QuitProcessApp(pidVal));
+          } else if (line == "FULLSCREEN") {
+            Reply(IsFullscreenForeground() ? "1" : "0");
           } else if (line == "KBD_LANG") {
             Reply(GetKbdLang());
           } else if (line == "KBD_SWITCH") {

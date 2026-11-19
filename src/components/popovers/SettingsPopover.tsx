@@ -148,6 +148,13 @@ export function SettingsPopover({ settings, onUpdateSettings, onOpenAppsManager 
             desc={dict.launchAtStartupDesc}
             onToggle={() => onUpdateSettings({ launchAtStartup: !settings.launchAtStartup })}
           />
+
+          <ToggleSwitch
+            checked={settings.hideInFullscreen}
+            title={dict.hideInFullscreen}
+            desc={dict.hideInFullscreenDesc}
+            onToggle={() => onUpdateSettings({ hideInFullscreen: !settings.hideInFullscreen })}
+          />
         </div>
       </div>
 

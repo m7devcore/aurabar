@@ -112,6 +112,7 @@ export interface DockSettings {
   showOpenWindowsInBar: boolean;
   compactMode: boolean;
   launchAtStartup: boolean;
+  hideInFullscreen: boolean;
 }
 
 export interface AppConfig {

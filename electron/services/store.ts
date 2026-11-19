@@ -13,7 +13,8 @@ const DEFAULT_CONFIG: AppConfig = {
     alwaysOnTop: true,
     showOpenWindowsInBar: true,
     compactMode: false,
-    launchAtStartup: false
+    launchAtStartup: false,
+    hideInFullscreen: true
   },
   pinnedApps: [
     {
@@ -91,7 +92,11 @@ export function loadConfig(): AppConfig {
         launchAtStartup:
           typeof rawSettings.launchAtStartup === 'boolean'
             ? rawSettings.launchAtStartup
-            : DEFAULT_CONFIG.settings.launchAtStartup
+            : DEFAULT_CONFIG.settings.launchAtStartup,
+        hideInFullscreen:
+          typeof rawSettings.hideInFullscreen === 'boolean'
+            ? rawSettings.hideInFullscreen
+            : DEFAULT_CONFIG.settings.hideInFullscreen
       },
       pinnedApps: Array.isArray(parsed.pinnedApps)
         ? parsed.pinnedApps
