@@ -1001,7 +1001,7 @@ namespace AuraBarNative {
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
 
       IntPtr fg = GetForegroundWindow();
-      bool dockHasFocus = fg == IntPtr.Zero || fg == dockHwnd || fg == islandHwnd;
+      bool dockHasFocus = fg == IntPtr.Zero || fg == dockHwnd || fg == islandHwnd || IsExtraDockHwnd(fg);
       bool isTargetActive =
         !IsIconic(hWnd) &&
         (IsForegroundTarget(hWnd) || (dockHasFocus && hWnd == lastExternalForeground));
