@@ -63,6 +63,9 @@ namespace AuraBarNative {
     private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
     [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
 
     [DllImport("user32.dll")]
@@ -537,19 +540,28 @@ namespace AuraBarNative {
       }
     }
 
+    private static void SetAllNativeTaskbarsVisible(bool show) {
+      string[] classes = new string[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" };
+      for (int i = 0; i < classes.Length; i++) {
+        IntPtr cur = IntPtr.Zero;
+        while ((cur = FindWindowEx(IntPtr.Zero, cur, classes[i], null)) != IntPtr.Zero) {
+          bool vis = IsWindowVisible(cur);
+          if (show) {
+            if (!vis) ShowWindowAsync(cur, 5);
+            SetWindowPos(cur, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
+          } else if (vis) {
+            ShowWindowAsync(cur, 0);
+          }
+        }
+      }
+    }
+
     private static void PollForegroundLoop() {
       long lastFgSnapAt = 0;
       while (true) {
         try {
           if (taskbarHiddenByUs) {
-            IntPtr tray = FindWindow("Shell_TrayWnd", null);
-            if (tray != IntPtr.Zero && IsWindowVisible(tray)) {
-              ShowWindowAsync(tray, 0);
-            }
-            IntPtr sec = FindWindow("Shell_SecondaryTrayWnd", null);
-            if (sec != IntPtr.Zero && IsWindowVisible(sec)) {
-              ShowWindowAsync(sec, 0);
-            }
+            SetAllNativeTaskbarsVisible(false);
           }
 
           EnforceWorkArea();
@@ -1550,12 +1562,8 @@ namespace AuraBarNative {
           savedScreenRight = trayRc.right;
           savedScreenBottom = trayRc.bottom;
         }
-        ShowWindowAsync(tray, 0);
       }
-      IntPtr sec = FindWindow("Shell_SecondaryTrayWnd", null);
-      if (sec != IntPtr.Zero) {
-        ShowWindowAsync(sec, 0);
-      }
+      SetAllNativeTaskbarsVisible(false);
       RECT rc = new RECT { left = left, top = top, right = right, bottom = bottom };
       desiredWorkArea = rc;
       hasDesiredWorkArea = true;
@@ -1590,11 +1598,7 @@ namespace AuraBarNative {
         };
         SystemParametersInfo(0x002F, 0, ref wa, 2);
       }
-      IntPtr sec = FindWindow("Shell_SecondaryTrayWnd", null);
-      if (sec != IntPtr.Zero) {
-        ShowWindowAsync(sec, 5);
-        SetWindowPos(sec, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
-      }
+      SetAllNativeTaskbarsVisible(true);
       // Restore any secondary monitor work areas we reserved
       List<RECT> toRestore = new List<RECT>();
       lock (extraHwndsLock) {
