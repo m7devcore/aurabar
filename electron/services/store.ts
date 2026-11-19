@@ -12,7 +12,8 @@ const DEFAULT_CONFIG: AppConfig = {
     language: 'en',
     alwaysOnTop: true,
     showOpenWindowsInBar: true,
-    compactMode: false
+    compactMode: false,
+    launchAtStartup: false
   },
   pinnedApps: [
     {
@@ -86,7 +87,11 @@ export function loadConfig(): AppConfig {
         compactMode:
           typeof rawSettings.compactMode === 'boolean'
             ? rawSettings.compactMode
-            : DEFAULT_CONFIG.settings.compactMode
+            : DEFAULT_CONFIG.settings.compactMode,
+        launchAtStartup:
+          typeof rawSettings.launchAtStartup === 'boolean'
+            ? rawSettings.launchAtStartup
+            : DEFAULT_CONFIG.settings.launchAtStartup
       },
       pinnedApps: Array.isArray(parsed.pinnedApps)
         ? parsed.pinnedApps

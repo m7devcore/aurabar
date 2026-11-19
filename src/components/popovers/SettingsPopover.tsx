@@ -141,6 +141,13 @@ export function SettingsPopover({ settings, onUpdateSettings, onOpenAppsManager 
             desc={dict.alwaysOnTopDesc}
             onToggle={() => onUpdateSettings({ alwaysOnTop: !settings.alwaysOnTop })}
           />
+
+          <ToggleSwitch
+            checked={settings.launchAtStartup}
+            title={dict.launchAtStartup}
+            desc={dict.launchAtStartupDesc}
+            onToggle={() => onUpdateSettings({ launchAtStartup: !settings.launchAtStartup })}
+          />
         </div>
       </div>
 

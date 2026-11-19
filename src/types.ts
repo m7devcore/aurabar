@@ -111,6 +111,7 @@ export interface DockSettings {
   alwaysOnTop: boolean;
   showOpenWindowsInBar: boolean;
   compactMode: boolean;
+  launchAtStartup: boolean;
 }
 
 export interface AppConfig {

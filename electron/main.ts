@@ -357,6 +357,17 @@ function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
   }
 }
 
+// Registers AuraBar to open when the user signs in. Only the installed build can: running from
+// source would register the bare electron.exe, which is not the app.
+function applyLaunchAtStartup(enabled: boolean): void {
+  if (!app.isPackaged) return;
+  try {
+    app.setLoginItemSettings({ openAtLogin: enabled });
+  } catch {
+    // Registry write refused (policy / antivirus): the toggle simply has no effect
+  }
+}
+
 function layoutKeyOf(s: DockSettings): string {
   return [s.replaceWindowsTaskbar, s.position, s.compactMode, s.musicPosition, s.alwaysOnTop].join('|');
 }
@@ -463,6 +474,22 @@ function setupTray(): void {
             rebuildTrayMenu();
           }
         },
+        ...(app.isPackaged
+          ? [
+              {
+                label: currentConfig.settings.launchAtStartup
+                  ? '✓ Launch at Windows startup'
+                  : 'Launch at Windows startup',
+                click: () => {
+                  currentConfig.settings.launchAtStartup = !currentConfig.settings.launchAtStartup;
+                  saveConfig(currentConfig);
+                  applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
+                  broadcastConfig(currentConfig);
+                  rebuildTrayMenu();
+                }
+              } as Electron.MenuItemConstructorOptions
+            ]
+          : []),
         { type: 'separator' },
         ...updateMenuItems(),
         {
@@ -566,6 +593,10 @@ function registerIpcHandlers(): void {
       ...nextConfig,
       pinnedApps: withResolvedExeNames(nextConfig.pinnedApps)
     });
+    if (prevSettings.launchAtStartup !== currentConfig.settings.launchAtStartup) {
+      applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
+      rebuildTrayMenu();
+    }
     // Pin edits and reminders save often; only touch window layout when it can have changed
     if (layoutKeyOf(prevSettings) !== layoutKeyOf(currentConfig.settings)) {
       if (prevSettings.alwaysOnTop !== currentConfig.settings.alwaysOnTop) {
@@ -716,6 +747,7 @@ if (!singleInstance) {
     registerIpcHandlers();
     createWindows();
     setupTray();
+    applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
     startUpdater(
       () => rebuildTrayMenu(),
       async () => {

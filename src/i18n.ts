@@ -38,6 +38,8 @@ export interface Translations {
   compactModeDesc: string;
   alwaysOnTop: string;
   alwaysOnTopDesc: string;
+  launchAtStartup: string;
+  launchAtStartupDesc: string;
   manageAppsBtn: string;
   hideDock: string;
   quitApp: string;
@@ -97,6 +99,8 @@ const EN: Translations = {
   compactModeDesc: 'Use a slimmer 44px bar height',
   alwaysOnTop: 'Always on Top',
   alwaysOnTopDesc: 'Keep taskbar and overlays above other open apps',
+  launchAtStartup: 'Launch at Windows startup',
+  launchAtStartupDesc: 'Open AuraBar automatically when you sign in',
   manageAppsBtn: 'Manage Pinned Apps',
   hideDock: 'Hide (Alt+Space)',
   quitApp: 'Quit AuraBar',
@@ -156,6 +160,8 @@ const AR: Translations = {
   compactModeDesc: 'تقليل ارتفاع الشريط إلى 44px لمظهر أنحف',
   alwaysOnTop: 'دائماً في المقدمة',
   alwaysOnTopDesc: 'إبقاء الشريط والأيقونات فوق جميع النوافذ المفتوحة',
+  launchAtStartup: 'التشغيل مع ويندوز',
+  launchAtStartupDesc: 'فتح AuraBar تلقائياً عند تسجيل الدخول',
   manageAppsBtn: 'إدارة التطبيقات المثبتة',
   hideDock: 'إخفاء (Alt+Space)',
   quitApp: 'إغلاق AuraBar',
