@@ -50,10 +50,14 @@ interface StartAppEntry {
 }
 
 let cachedStartApps: StartAppEntry[] | null = null;
+let cachedStartAppsAt = 0;
 let startAppsInFlight: Promise<StartAppEntry[]> | null = null;
+const INSTALLED_APPS_TTL_MS = 180_000;
 
 function getStartAppsList(): Promise<StartAppEntry[]> {
-  if (cachedStartApps) return Promise.resolve(cachedStartApps);
+  if (cachedStartApps && Date.now() - cachedStartAppsAt < INSTALLED_APPS_TTL_MS) {
+    return Promise.resolve(cachedStartApps);
+  }
   if (startAppsInFlight) return startAppsInFlight;
   startAppsInFlight = new Promise<StartAppEntry[]>((resolve) => {
     execFile(
@@ -74,6 +78,7 @@ function getStartAppsList(): Promise<StartAppEntry[]> {
           const parsed = JSON.parse(stdout.trim()) as StartAppEntry | StartAppEntry[];
           const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
           cachedStartApps = list.filter((x) => x && typeof x.Name === 'string' && typeof x.AppID === 'string');
+          cachedStartAppsAt = Date.now();
           resolve(cachedStartApps);
         } catch {
           resolve([]);
@@ -391,6 +396,7 @@ export function resolveExeName(target: string): string | undefined {
 }
 
 let cachedInstalledApps: InstalledApp[] | null = null;
+let cachedInstalledAppsAt = 0;
 
 function collectShortcutsRecursive(dir: string, out: { name: string; fullPath: string }[], depth = 0): void {
   if (depth > 3 || !fs.existsSync(dir)) return;
@@ -417,7 +423,9 @@ function collectShortcutsRecursive(dir: string, out: { name: string; fullPath: s
 }
 
 export async function listInstalledApps(): Promise<InstalledApp[]> {
-  if (cachedInstalledApps) return cachedInstalledApps;
+  if (cachedInstalledApps && Date.now() - cachedInstalledAppsAt < INSTALLED_APPS_TTL_MS) {
+    return cachedInstalledApps;
+  }
 
   const roots = [
     path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
@@ -460,6 +468,7 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
   }));
 
   cachedInstalledApps = apps;
+  cachedInstalledAppsAt = Date.now();
   return apps;
 }
 
@@ -860,6 +869,7 @@ export async function adjustSystemVolume(action: 'up' | 'down' | 'mute'): Promis
 
 let cachedNetInfo: NetworkInfo = { connected: false, kind: 'offline' };
 let lastNetFetch = 0;
+let noWifiBackoffUntil = 0;
 
 function hasActiveEthernetInterface(): boolean {
   const ifaces = os.networkInterfaces();
@@ -877,34 +887,52 @@ export function getNetworkInfo(): Promise<NetworkInfo> {
   if (now - lastNetFetch < 3500) {
     return Promise.resolve(cachedNetInfo);
   }
+  // Desktops without a Wi-Fi adapter shouldn't spawn netsh every 3.5s; check Ethernet cheaply in-process
+  if (now < noWifiBackoffUntil) {
+    lastNetFetch = now;
+    cachedNetInfo = hasActiveEthernetInterface()
+      ? { connected: true, kind: 'ethernet' }
+      : { connected: false, kind: 'offline' };
+    return Promise.resolve(cachedNetInfo);
+  }
   return new Promise((resolve) => {
-    execFile('netsh', ['wlan', 'show', 'interfaces'], { timeout: 1400 }, (err, stdout) => {
-      lastNetFetch = Date.now();
-      if (!err && stdout) {
-        const stateMatch = /^\s*State\s*:\s*(.+)$/im.exec(stdout);
-        const state = stateMatch?.[1]?.trim().toLowerCase() ?? '';
-        if (state === 'connected') {
-          const ssid = /^\s*SSID\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
-          const sigRaw = /^\s*Signal\s*:\s*(\d+)%/im.exec(stdout)?.[1];
-          const band = /^\s*Band\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
-          cachedNetInfo = {
-            connected: true,
-            kind: 'wifi',
-            ssid: ssid || 'Wi-Fi',
-            signalPercent: sigRaw ? Number(sigRaw) : undefined,
-            band: band || undefined
-          };
-          resolve(cachedNetInfo);
-          return;
+    execFile(
+      'netsh',
+      ['wlan', 'show', 'interfaces'],
+      { timeout: 1400, windowsHide: true },
+      (err, stdout) => {
+        lastNetFetch = Date.now();
+        if (!err && stdout) {
+          const stateMatch = /^\s*State\s*:\s*(.+)$/im.exec(stdout);
+          const state = stateMatch?.[1]?.trim().toLowerCase() ?? '';
+          if (state === 'connected') {
+            const ssid = /^\s*SSID\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
+            const sigRaw = /^\s*Signal\s*:\s*(\d+)%/im.exec(stdout)?.[1];
+            const band = /^\s*Band\s*:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
+            cachedNetInfo = {
+              connected: true,
+              kind: 'wifi',
+              ssid: ssid || 'Wi-Fi',
+              signalPercent: sigRaw ? Number(sigRaw) : undefined,
+              band: band || undefined
+            };
+            resolve(cachedNetInfo);
+            return;
+          }
+          if (/no wireless interface|wlansvc/i.test(stdout)) {
+            noWifiBackoffUntil = Date.now() + 30_000;
+          }
+        } else if (err) {
+          noWifiBackoffUntil = Date.now() + 30_000;
         }
+        if (hasActiveEthernetInterface()) {
+          cachedNetInfo = { connected: true, kind: 'ethernet' };
+        } else {
+          cachedNetInfo = { connected: false, kind: 'offline' };
+        }
+        resolve(cachedNetInfo);
       }
-      if (hasActiveEthernetInterface()) {
-        cachedNetInfo = { connected: true, kind: 'ethernet' };
-      } else {
-        cachedNetInfo = { connected: false, kind: 'offline' };
-      }
-      resolve(cachedNetInfo);
-    });
+    );
   });
 }
 
@@ -973,21 +1001,22 @@ export function restoreWindowsTaskbarSync(): void {
         public IntPtr lParam;
       }
       [DllImport("shell32.dll")] public static extern uint SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
-      [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+      [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string lpClassName, string lpWindowName);
       [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
       public static void Restore() {
-        var tray = FindWindow("Shell_TrayWnd", null);
-        if (tray != IntPtr.Zero) {
-          ShowWindow(tray, 5);
-          var abd = new APPBARDATA();
-          abd.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
-          abd.hWnd = tray;
-          abd.lParam = IntPtr.Zero;
-          SHAppBarMessage(10, ref abd);
-        }
-        var sec = FindWindow("Shell_SecondaryTrayWnd", null);
-        if (sec != IntPtr.Zero) {
-          ShowWindow(sec, 5);
+        string[] classes = new string[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" };
+        for (int i = 0; i < classes.Length; i++) {
+          IntPtr h = IntPtr.Zero;
+          while ((h = FindWindowEx(IntPtr.Zero, h, classes[i], null)) != IntPtr.Zero) {
+            ShowWindow(h, 5);
+            if (i == 0) {
+              var abd = new APPBARDATA();
+              abd.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+              abd.hWnd = h;
+              abd.lParam = IntPtr.Zero;
+              SHAppBarMessage(10, ref abd);
+            }
+          }
         }
       }
     }
@@ -997,7 +1026,8 @@ export function restoreWindowsTaskbarSync(): void {
   `;
   try {
     execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-      timeout: 6000
+      timeout: 6000,
+      windowsHide: true
     });
   } catch {
     // Best effort on exit

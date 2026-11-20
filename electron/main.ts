@@ -5,6 +5,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   screen,
   Tray
 } from 'electron';
@@ -1305,6 +1306,23 @@ if (!singleInstance) {
     });
     screen.on('display-added', handleDisplayChange);
     screen.on('display-removed', handleDisplayChange);
+
+    const reapplyAfterPowerEvent = () => {
+      if (isQuitting) return;
+      const run = () => {
+        if (isQuitting) return;
+        lastTaskbarLayoutKey = '';
+        if (currentConfig.settings.replaceWindowsTaskbar && !dockManuallyHidden) {
+          syncTaskbarReplacement(currentConfig.settings);
+        }
+        syncKeepOnTop(currentConfig.settings);
+        applyAllLayouts(currentConfig.settings);
+      };
+      run();
+      setTimeout(run, 650);
+    };
+    powerMonitor.on('resume', reapplyAfterPowerEvent);
+    powerMonitor.on('unlock-screen', reapplyAfterPowerEvent);
   });
 
   app.on('before-quit', (e) => {

@@ -1,6 +1,6 @@
 import os from 'node:os';
-import { execFile } from 'node:child_process';
 import type { SystemStats } from '../../src/types';
+import { win32Daemon } from './win32Daemon';
 
 let prevIdle = 0;
 let prevTotal = 0;
@@ -60,44 +60,28 @@ function pollSlowHardware(): void {
   hardwarePolling = true;
   lastHardwarePoll = now;
 
-  const psScript = `
-    $bat = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1 EstimatedChargeRemaining, BatteryStatus
-    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue | Select-Object -First 1 Size, FreeSpace
-    [PSCustomObject]@{
-      batPct = if ($bat) { $bat.EstimatedChargeRemaining } else { $null }
-      batStatus = if ($bat) { $bat.BatteryStatus } else { $null }
-      diskSize = if ($disk) { $disk.Size } else { $null }
-      diskFree = if ($disk) { $disk.FreeSpace } else { $null }
-    } | ConvertTo-Json -Compress
-  `;
-
-  execFile(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', psScript],
-    { timeout: 3500 },
-    (err, stdout) => {
-      hardwarePolling = false;
-      if (err || !stdout.trim()) return;
+  // Query native Win32Bridge (GetSystemPowerStatus + DriveInfo) instead of spawning powershell.exe every 15s
+  void win32Daemon
+    .send('HW_INFO')
+    .then((stdout) => {
+      if (!stdout || !stdout.startsWith('{')) return;
       try {
-        const data = JSON.parse(stdout.trim()) as {
+        const data = JSON.parse(stdout) as {
           batPct: number | null;
-          batStatus: number | null;
+          batCharging: boolean | null;
           diskSize: number | null;
           diskFree: number | null;
         };
         const diskTotalGb = data.diskSize ? +(data.diskSize / 1073741824).toFixed(1) : null;
-        const diskFreeGb = data.diskFree ? +(data.diskFree / 1073741824).toFixed(1) : null;
+        const diskFreeGb = data.diskFree !== null ? +(data.diskFree / 1073741824).toFixed(1) : null;
         const diskUsedPercent =
           data.diskSize && data.diskFree !== null
             ? Math.round(((data.diskSize - data.diskFree) / data.diskSize) * 100)
             : null;
-        // BatteryStatus 2 = AC / Charging, 6/7/8/9 = charging states
-        const batteryCharging =
-          data.batStatus !== null ? [2, 6, 7, 8, 9].includes(data.batStatus) : null;
 
         cachedHardware = {
-          batteryPercent: data.batPct,
-          batteryCharging,
+          batteryPercent: typeof data.batPct === 'number' ? data.batPct : null,
+          batteryCharging: typeof data.batCharging === 'boolean' ? data.batCharging : null,
           diskUsedPercent,
           diskFreeGb,
           diskTotalGb
@@ -105,8 +89,10 @@ function pollSlowHardware(): void {
       } catch {
         // Ignore transient parse failures
       }
-    }
-  );
+    })
+    .finally(() => {
+      hardwarePolling = false;
+    });
 }
 
 export function getSystemStats(): SystemStats {

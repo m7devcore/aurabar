@@ -6,9 +6,23 @@ import { win32Daemon } from './win32Daemon';
 // A single long-lived PowerShell host loads the WinRT media projection once and answers
 // "<id>" lines with "<id> <json>". Spawning a fresh PowerShell per poll (both the dock and the
 // island poll every 1.5-2.5s) cost a full process start + WinRT load each time.
-const MEDIA_WORKER_SCRIPT = `
+function buildMediaWorkerScript(parentPid: number): string {
+  return `
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$parentPid = ${parentPid}
+if ($parentPid -gt 4) {
+  $wd = [PowerShell]::Create()
+  $null = $wd.AddScript({
+    param($ppid)
+    try {
+      $p = [System.Diagnostics.Process]::GetProcessById($ppid)
+      $p.WaitForExit()
+    } catch {}
+    [Environment]::Exit(0)
+  }).AddArgument($parentPid)
+  $null = $wd.BeginInvoke()
+}
 Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
 function Await($WinRtTask, $ResultType) {
@@ -49,7 +63,9 @@ while ($true) {
   [Console]::Out.WriteLine("$id $out")
   [Console]::Out.Flush()
 }
+[Environment]::Exit(0)
 `;
+}
 
 const REQUEST_TIMEOUT_MS = 4000;
 const RESULT_TTL_MS = 600;
@@ -69,7 +85,7 @@ function ensureWorker(): ChildProcessByStdio<Writable, Readable, null> | null {
   if (worker && !worker.killed) return worker;
   if (Date.now() - lastSpawnFailedAt < RESPAWN_BACKOFF_MS) return null;
 
-  const encoded = Buffer.from(MEDIA_WORKER_SCRIPT, 'utf16le').toString('base64');
+  const encoded = Buffer.from(buildMediaWorkerScript(process.pid), 'utf16le').toString('base64');
   const spawnedAt = Date.now();
   const proc = spawn(
     'powershell.exe',

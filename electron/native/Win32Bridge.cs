@@ -215,6 +215,19 @@ namespace AuraBarNative {
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SYSTEM_POWER_STATUS {
+      public byte ACLineStatus;
+      public byte BatteryFlag;
+      public byte BatteryLifePercent;
+      public byte SystemStatusFlag;
+      public int BatteryLifeTime;
+      public int BatteryFullLifeTime;
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS lpSystemPowerStatus);
+
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
 
@@ -1427,6 +1440,38 @@ namespace AuraBarNative {
       return pidStrings.Count > 0 ? "pids:" + string.Join(",", pidStrings.ToArray()) : "none";
     }
 
+    private static string GetHardwareInfoJson() {
+      string batPct = "null";
+      string batCharging = "null";
+      try {
+        SYSTEM_POWER_STATUS sps;
+        if (GetSystemPowerStatus(out sps)) {
+          bool noBattery = (sps.BatteryFlag & 128) != 0 || sps.BatteryLifePercent == 255;
+          if (!noBattery) {
+            int pct = Math.Max(0, Math.Min(100, (int)sps.BatteryLifePercent));
+            bool charging = sps.ACLineStatus == 1 || (sps.BatteryFlag & 8) != 0;
+            batPct = pct.ToString();
+            batCharging = charging ? "true" : "false";
+          }
+        }
+      } catch { }
+
+      string diskSize = "null";
+      string diskFree = "null";
+      try {
+        string root = Path.GetPathRoot(Environment.SystemDirectory);
+        if (string.IsNullOrEmpty(root)) root = "C:\\";
+        DriveInfo di = new DriveInfo(root);
+        if (di.IsReady) {
+          diskSize = di.TotalSize.ToString();
+          diskFree = di.AvailableFreeSpace.ToString();
+        }
+      } catch { }
+
+      return "{\"batPct\":" + batPct + ",\"batCharging\":" + batCharging +
+             ",\"diskSize\":" + diskSize + ",\"diskFree\":" + diskFree + "}";
+    }
+
     private static string QuitProcessApp(int pid) {
       return KillAppDeep(pid);
     }
@@ -1861,6 +1906,8 @@ namespace AuraBarNative {
           } else if (line == "DESKTOP") {
             TapCombo(0x5B, 0x44);
             Reply("ok");
+          } else if (line == "HW_INFO") {
+            Reply(GetHardwareInfoJson());
           } else if (line == "VOL_GET") {
             Reply(GetVolumeJson());
           } else if (line.StartsWith("VOL_SET ")) {

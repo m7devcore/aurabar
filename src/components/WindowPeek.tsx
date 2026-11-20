@@ -88,6 +88,13 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
             tabIndex={0}
             title={win.title}
             onClick={() => onActivate(win)}
+            onMouseDown={(e) => {
+              if (e.button === 1 && win.hwnd) {
+                e.preventDefault();
+                e.stopPropagation();
+                onCloseWindow(win);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();

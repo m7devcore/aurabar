@@ -1078,7 +1078,8 @@ export function DockBar({
     setOpenFolder(null);
     if (!opts?.preserveOverflow) setOverflowTray(null);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const clampedX = Math.max(8, Math.min(window.innerWidth - 196, rect.left));
+    const anchorX = rect.width > 240 ? e.clientX : rect.left;
+    const clampedX = Math.max(8, Math.min(window.innerWidth - 196, anchorX));
     const anchorOffset = opts?.aboveTrigger
       ? settings.position === 'bottom'
         ? Math.min(350, Math.max(65, Math.round(window.innerHeight - rect.top + 6)))
@@ -1794,16 +1795,30 @@ export function DockBar({
           onClick={(e) => e.stopPropagation()}
         >
           {ctxMenu.kind === 'tray' && (
-            <button
-              className="taskbar-ctx-item"
-              onClick={() => {
-                setCtxMenu(null);
-                void dockBridge.systemAction('taskmgr');
-              }}
-            >
-              <Activity size={14} style={{ color: 'var(--accent)' }} />
-              <span>{settings.language === 'ar' ? 'مدير المهام' : 'Task Manager'}</span>
-            </button>
+            <>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('taskmgr');
+                }}
+              >
+                <Activity size={14} style={{ color: 'var(--accent)' }} />
+                <span>{settings.language === 'ar' ? 'مدير المهام' : 'Task Manager'}</span>
+              </button>
+              {!isSecondary && (
+                <button
+                  className="taskbar-ctx-item"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    toggle('settings');
+                  }}
+                >
+                  <SettingsIcon />
+                  <span>{settings.language === 'ar' ? 'إعدادات الشريط' : 'Taskbar settings'}</span>
+                </button>
+              )}
+            </>
           )}
           {ctxMenu.kind === 'running' && ctxMenu.running && (
             <>
@@ -2018,6 +2033,10 @@ export function DockBar({
           dragOverExternal ? 'drag-over' : ''
         }`}
         onMouseLeave={handleStripMouseLeave}
+        onContextMenu={(e) => {
+          if ((e.target as HTMLElement).closest('.dock-app-btn')) return;
+          openContextMenu(e, { kind: 'tray' });
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           setDragOverExternal(true);
@@ -2189,6 +2208,14 @@ export function DockBar({
                       order: (index + 1) * 1000
                     }}
                     onPointerDown={(e) => {
+                      if (e.button === 1 && !isGroup) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closePeekNow();
+                        setTooltip(null);
+                        void dockBridge.launchTarget(app.target);
+                        return;
+                      }
                       if (e.button !== 0) return;
                       beginPointerDrag({ kind: 'pinned', item: app }, e.clientX, e.clientY);
                     }}
@@ -2304,7 +2331,22 @@ export function DockBar({
                           order: runningSlotOrder(win)
                         }}
                         data-run-key={win.processName.toLowerCase()}
-                        onPointerDown={beginRunningDrag}
+                        onPointerDown={(e) => {
+                          if (e.button === 1) {
+                            const target = win.aumid
+                              ? `shell:AppsFolder\\${win.aumid}`
+                              : win.executablePath;
+                            if (target) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              closePeekNow();
+                              setTooltip(null);
+                              void dockBridge.launchTarget(target);
+                            }
+                            return;
+                          }
+                          beginRunningDrag(e);
+                        }}
                         onMouseEnter={(e) => openPeek(peekKey, e.currentTarget)}
                         onMouseLeave={schedulePeekClose}
                         onContextMenu={(e) => openContextMenu(e, { kind: 'running', running: procActive ?? win })}
@@ -2476,6 +2518,7 @@ export function DockBar({
             aria-label={dict.calendar}
             aria-expanded={activePanel === 'calendar'}
             onClick={() => toggle('calendar')}
+            onContextMenu={(e) => openContextMenu(e, { kind: 'tray' })}
             title={dict.calendar}
           >
             <span className="tray-clock-time">{timeStr}</span>
