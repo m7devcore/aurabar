@@ -306,6 +306,8 @@ namespace AuraBarNative {
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     private static IntPtr lastExternalForeground = IntPtr.Zero;
+    private static volatile bool startMenuOpen = false;
+    private static volatile int startMenuClosedByDockAt = 0;
     private static IntPtr dockHwnd = IntPtr.Zero;
     private static IntPtr islandHwnd = IntPtr.Zero;
     private static readonly object extraHwndsLock = new object();
@@ -632,6 +634,40 @@ namespace AuraBarNative {
       }
     }
 
+    private static bool IsStartMenuWindow(IntPtr hWnd, uint pid) {
+      if (hWnd == IntPtr.Zero || pid <= 4 || !IsWindowVisible(hWnd) || IsCloaked(hWnd)) return false;
+      string name = GetProcMeta(pid).name;
+      return name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("SearchApp", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToggleStartMenu() {
+      IntPtr fg = GetForegroundWindow();
+      if (fg != IntPtr.Zero) {
+        uint fgPid;
+        GetWindowThreadProcessId(fg, out fgPid);
+        if (IsStartMenuWindow(fg, fgPid)) {
+          startMenuOpen = false;
+          startMenuClosedByDockAt = 0;
+          TapKey(0x5B);
+          return "closed";
+        }
+      }
+      int closedAt = startMenuClosedByDockAt;
+      if (startMenuOpen || (closedAt != 0 && unchecked(Environment.TickCount - closedAt) < 550)) {
+        // Clicking the Start button on any AuraBar monitor just stole focus and closed Start Menu;
+        // do not send Win key again or Windows will bounce Start Menu right back open.
+        startMenuOpen = false;
+        startMenuClosedByDockAt = 0;
+        return "closed";
+      }
+      startMenuOpen = false;
+      startMenuClosedByDockAt = 0;
+      TapKey(0x5B);
+      return "opened";
+    }
+
     private static void PollForegroundLoop() {
       long lastFgSnapAt = 0;
       int parentCheckTick = 0;
@@ -671,6 +707,19 @@ namespace AuraBarNative {
             uint pid;
             GetWindowThreadProcessId(fg, out pid);
             bool isAura = IsAuraBarWindow(pid, fg);
+            bool isStart = !isAura && IsStartMenuWindow(fg, pid);
+            if (isStart) {
+              startMenuOpen = true;
+              startMenuClosedByDockAt = 0;
+            } else if (isAura) {
+              if (startMenuOpen) {
+                startMenuOpen = false;
+                startMenuClosedByDockAt = Environment.TickCount;
+              }
+            } else {
+              startMenuOpen = false;
+              startMenuClosedByDockAt = 0;
+            }
             if (!isAura && IsTaskbarWindow(fg)) {
               if (fg != lastExternalForeground) {
                 IntPtr leaving = lastExternalForeground;
@@ -1898,8 +1947,7 @@ namespace AuraBarNative {
             TapCombo(0x12, 0x10);
             Reply("ok");
           } else if (line == "START") {
-            TapKey(0x5B);
-            Reply("ok");
+            Reply(ToggleStartMenu());
           } else if (line == "QUICK") {
             TapCombo(0x5B, 0x41);
             Reply("ok");

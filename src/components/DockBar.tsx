@@ -85,6 +85,13 @@ interface CtxMenuState {
   bg?: BackgroundApp;
 }
 
+function ctxKeyOf(payload: Omit<CtxMenuState, 'x'>): string {
+  if (payload.kind === 'pinned') return `pinned:${payload.pinned?.id ?? ''}`;
+  if (payload.kind === 'running') return `running:${payload.running?.hwnd ?? payload.running?.pid ?? ''}`;
+  if (payload.kind === 'bg') return `bg:${payload.bg?.pid ?? ''}`;
+  return 'tray';
+}
+
 interface TooltipState {
   label: string;
   x: number;
@@ -191,6 +198,7 @@ export function DockBar({
   const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
   const overflowPopoverRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  const ctxJustClosedRef = useRef<{ key: string; at: number } | null>(null);
   const rafRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
   const runDragRef = useRef(false);
@@ -369,6 +377,9 @@ export function DockBar({
       const target = e.target as HTMLElement | null;
       if (!target) return;
       if (ctxMenu && !target.closest('.taskbar-ctx-menu')) {
+        if (e.button === 2) {
+          ctxJustClosedRef.current = { key: ctxKeyOf(ctxMenu), at: Date.now() };
+        }
         setCtxMenu(null);
       }
       if (peek && !target.closest('.window-peek') && !target.closest('.dock-app-btn')) {
@@ -1073,6 +1084,16 @@ export function DockBar({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+    const nextKey = ctxKeyOf(payload);
+    const closed = ctxJustClosedRef.current;
+    ctxJustClosedRef.current = null;
+    if (closed && Date.now() - closed.at < 450 && (closed.key === nextKey || nextKey === 'tray')) {
+      return;
+    }
+    if (ctxMenu && (ctxKeyOf(ctxMenu) === nextKey || nextKey === 'tray')) {
+      setCtxMenu(null);
+      return;
+    }
     closePeekNow();
     setTooltip(null);
     setOpenFolder(null);
@@ -1424,6 +1445,10 @@ export function DockBar({
             ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           <input
             className="folder-title-input"
@@ -1513,6 +1538,10 @@ export function DockBar({
             ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           <div className="cc-bento-grid">
             {/* Wi-Fi / Network Module — plain typographic layout, no colored circle badge */}
@@ -1675,6 +1704,10 @@ export function DockBar({
             ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           <div className="tray-overflow-header">
             <span className="tray-overflow-title">
@@ -1793,6 +1826,10 @@ export function DockBar({
               : { top: ctxMenu.anchorOffset ?? 65 })
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           {ctxMenu.kind === 'tray' && (
             <>
