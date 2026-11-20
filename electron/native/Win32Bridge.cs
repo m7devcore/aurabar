@@ -314,6 +314,7 @@ namespace AuraBarNative {
     private static readonly List<IntPtr> extraDockHwnds = new List<IntPtr>();
     private static readonly Dictionary<IntPtr, RECT> extraDockRects = new Dictionary<IntPtr, RECT>();
     private static readonly Dictionary<IntPtr, RECT> savedSecWorkAreas = new Dictionary<IntPtr, RECT>();
+    private static readonly Dictionary<IntPtr, RECT> desiredSecWorkAreas = new Dictionary<IntPtr, RECT>();
     private static RECT dockTargetRect = new RECT();
     private static bool hasDockTargetRect = false;
     private static int parentElectronPid = 0;
@@ -488,23 +489,12 @@ namespace AuraBarNative {
     // bottom edge until the next restart.
     // Puts the reserved work area back if Windows changed it, and re-fits maximized windows that
     // now reach under the dock
-    private static void EnforceWorkArea() {
-      if (!taskbarHiddenByUs || !hasDesiredWorkArea) return;
-      RECT cur = new RECT();
-      if (!SystemParametersInfo(0x0030, 0, ref cur, 0)) return; // SPI_GETWORKAREA
-      RECT want = desiredWorkArea;
-      if (Math.Abs(cur.left - want.left) <= 6 && Math.Abs(cur.top - want.top) <= 6 &&
-          Math.Abs(cur.right - want.right) <= 6 && Math.Abs(cur.bottom - want.bottom) <= 6) {
-        return;
-      }
-      // A full-screen game/video legitimately has the whole screen; leave it alone
-      if (IsFullscreenForeground()) return;
-
-      SystemParametersInfo(0x002F, 0, ref want, 0); // SPI_SETWORKAREA without global broadcast storm
+    private static void RefitMaximizedOnMonitor(IntPtr targetMon, RECT want) {
       EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
         if (!IsWindowVisible(hWnd) || !IsZoomed(hWnd)) return true;
         // Never un-maximize/re-maximize borderless games or fullscreen players
         if ((GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0) return true;
+        if (targetMon != IntPtr.Zero && MonitorFromWindow(hWnd, 2) != targetMon) return true;
         RECT wr;
         if (!GetWindowRect(hWnd, out wr)) return true;
         // A maximized window overhangs its work area by the frame (about 8px); more than that
@@ -516,6 +506,49 @@ namespace AuraBarNative {
         }
         return true;
       }, IntPtr.Zero);
+    }
+
+    private static void EnforceWorkArea() {
+      if (!taskbarHiddenByUs) return;
+
+      if (hasDesiredWorkArea) {
+        RECT cur = new RECT();
+        if (SystemParametersInfo(0x0030, 0, ref cur, 0)) {
+          RECT want = desiredWorkArea;
+          bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
+                         Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
+          if (drifted && !IsFullscreenForeground()) {
+            SystemParametersInfo(0x002F, 0, ref want, 0);
+            POINT origin = new POINT();
+            IntPtr primaryMon = MonitorFromPoint(origin, 1);
+            RefitMaximizedOnMonitor(primaryMon, want);
+          }
+        }
+      }
+
+      List<KeyValuePair<IntPtr, RECT>> secList = null;
+      lock (extraHwndsLock) {
+        if (desiredSecWorkAreas.Count > 0) {
+          secList = new List<KeyValuePair<IntPtr, RECT>>(desiredSecWorkAreas);
+        }
+      }
+      if (secList != null) {
+        IntPtr fsTarget = GetActiveFullscreenTarget();
+        for (int i = 0; i < secList.Count; i++) {
+          IntPtr mon = secList[i].Key;
+          RECT want = secList[i].Value;
+          MONITORINFO mi = new MONITORINFO();
+          mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (!GetMonitorInfo(mon, ref mi)) continue;
+          RECT cur = mi.rcWork;
+          bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
+                         Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
+          if (!drifted) continue;
+          if (fsTarget != IntPtr.Zero && IsFullscreenWindowOnMonitor(fsTarget, mon)) continue;
+          SystemParametersInfo(0x002F, 0, ref want, 0);
+          RefitMaximizedOnMonitor(mon, want);
+        }
+      }
     }
 
     private static void EnforceDockPlacement() {
@@ -1831,6 +1864,7 @@ namespace AuraBarNative {
       lock (extraHwndsLock) {
         foreach (RECT orig in savedSecWorkAreas.Values) toRestore.Add(orig);
         savedSecWorkAreas.Clear();
+        desiredSecWorkAreas.Clear();
       }
       for (int i = 0; i < toRestore.Count; i++) {
         RECT r = toRestore[i];
@@ -1863,6 +1897,58 @@ namespace AuraBarNative {
           Math.Abs(cur.right - tr.right) > 2 ||
           Math.Abs(cur.bottom - tr.bottom) > 2) {
         SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+      }
+    }
+
+    private static void ReserveSecondaryWorkAreaForHwnd(IntPtr h, bool isTop, int reservePhys) {
+      if (h == IntPtr.Zero || !IsWindow(h) || reservePhys <= 0) return;
+      IntPtr mon = MonitorFromWindow(h, 2);
+      if (mon == IntPtr.Zero) return;
+      MONITORINFO mi = new MONITORINFO();
+      mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+      if (!GetMonitorInfo(mon, ref mi)) return;
+
+      // Never overwrite the primary monitor's work area from this secondary helper
+      if ((mi.dwFlags & 1) != 0) return;
+
+      RECT want = mi.rcMonitor;
+      if (isTop) {
+        want.top = mi.rcMonitor.top + reservePhys;
+      } else {
+        want.bottom = mi.rcMonitor.bottom - reservePhys;
+      }
+
+      lock (extraHwndsLock) {
+        if (!savedSecWorkAreas.ContainsKey(mon)) {
+          savedSecWorkAreas[mon] = mi.rcWork;
+        }
+        desiredSecWorkAreas[mon] = want;
+      }
+
+      RECT cur = mi.rcWork;
+      bool changed = Math.Abs(cur.left - want.left) > 4 || Math.Abs(cur.top - want.top) > 4 ||
+                     Math.Abs(cur.right - want.right) > 4 || Math.Abs(cur.bottom - want.bottom) > 4;
+      if (changed) {
+        SystemParametersInfo(0x002F, 0, ref want, 0);
+      }
+      RefitMaximizedOnMonitor(mon, want);
+    }
+
+    private static void ReleaseSecondaryWorkAreaForHwnd(IntPtr h) {
+      if (h == IntPtr.Zero || !IsWindow(h)) return;
+      IntPtr mon = MonitorFromWindow(h, 2);
+      if (mon == IntPtr.Zero) return;
+      RECT orig;
+      bool had = false;
+      lock (extraHwndsLock) {
+        desiredSecWorkAreas.Remove(mon);
+        if (savedSecWorkAreas.TryGetValue(mon, out orig)) {
+          savedSecWorkAreas.Remove(mon);
+          had = true;
+        }
+      }
+      if (had) {
+        SystemParametersInfo(0x002F, 0, ref orig, 2);
       }
     }
 
@@ -2051,6 +2137,17 @@ namespace AuraBarNative {
             if (h != IntPtr.Zero && IsWindow(h)) {
               SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
             }
+            Reply("ok");
+          } else if (line.StartsWith("SEC_RESERVE ")) {
+            string[] parts = line.Substring(12).Split(' ');
+            IntPtr h = new IntPtr(long.Parse(parts[0]));
+            bool isTop = parts[1] == "top";
+            int reserve = int.Parse(parts[2]);
+            ReserveSecondaryWorkAreaForHwnd(h, isTop, reserve);
+            Reply("ok");
+          } else if (line.StartsWith("SEC_RELEASE ")) {
+            IntPtr h = new IntPtr(long.Parse(line.Substring(12).Trim()));
+            ReleaseSecondaryWorkAreaForHwnd(h);
             Reply("ok");
           } else if (line.StartsWith("SEC_WORKAREA ")) {
             string[] parts = line.Substring(13).Split(' ');

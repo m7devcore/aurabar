@@ -70,6 +70,7 @@ interface SecondaryDockEntry {
   lastInsideAt: number;
   fullscreenSuspended: boolean;
   notFullscreenStreak: number;
+  lastReserveKey: string;
 }
 
 const DOCK_CANVAS_HEIGHT = 500;
@@ -210,6 +211,28 @@ function findSecondaryEntryBySender(sender: Electron.WebContents): SecondaryDock
   return null;
 }
 
+function syncSecondaryWorkArea(
+  entry: SecondaryDockEntry,
+  display: Electron.Display,
+  settings: DockSettings
+): void {
+  if (!entry.ready || entry.win.isDestroyed()) return;
+  const hwnd = getHwndNumber(entry.win);
+  if (hwnd === '0') return;
+  if (!settings.replaceWindowsTaskbar || dockManuallyHidden) {
+    if (entry.lastReserveKey) {
+      entry.lastReserveKey = '';
+      void win32Daemon.send(`SEC_RELEASE ${hwnd}`);
+    }
+    return;
+  }
+  const reservePhys = Math.round(getReservedHeightPx(settings) * (display.scaleFactor || 1));
+  const key = `${settings.position}|${reservePhys}|${display.bounds.width}x${display.bounds.height}`;
+  if (entry.lastReserveKey === key) return;
+  entry.lastReserveKey = key;
+  void win32Daemon.send(`SEC_RESERVE ${hwnd} ${settings.position} ${reservePhys}`);
+}
+
 function placeSecondaryDockPhysical(
   entry: SecondaryDockEntry,
   display: Electron.Display,
@@ -261,7 +284,8 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     localHitRects: [],
     lastInsideAt: 0,
     fullscreenSuspended: false,
-    notFullscreenStreak: 0
+    notFullscreenStreak: 0,
+    lastReserveKey: ''
   };
   applyTopmost(win);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -276,6 +300,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     win.setBounds(targetBounds, false);
     win.setBounds(targetBounds, false);
     syncExtraHwndsToBridge();
+    syncSecondaryWorkArea(entry, freshDisplay, currentConfig.settings);
     if (!dockManuallyHidden && !entry.fullscreenSuspended) {
       win.showInactive();
       ensureOnTop(win);
@@ -307,6 +332,10 @@ function syncSecondaryDocks(settings: DockSettings): void {
     if (!wantedIds.has(id) || entry.win.isDestroyed()) {
       secondaryDocks.delete(id);
       if (!entry.win.isDestroyed()) {
+        if (entry.lastReserveKey) {
+          const hwnd = getHwndNumber(entry.win);
+          if (hwnd !== '0') void win32Daemon.send(`SEC_RELEASE ${hwnd}`);
+        }
         entry.win.destroy();
       }
     }
@@ -320,6 +349,7 @@ function syncSecondaryDocks(settings: DockSettings): void {
     } else if (entry.ready && !entry.win.isDestroyed()) {
       applyTopmost(entry.win);
       placeSecondaryDockPhysical(entry, display, settings);
+      syncSecondaryWorkArea(entry, display, settings);
       if (!dockManuallyHidden && !entry.fullscreenSuspended && !entry.win.isVisible()) {
         entry.win.showInactive();
         ensureOnTop(entry.win);
@@ -646,6 +676,8 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
     const display = screen.getAllDisplays().find((d) => d.id === entry.displayId);
     if (display) {
       placeSecondaryDockPhysical(entry, display, currentConfig.settings);
+      entry.lastReserveKey = '';
+      syncSecondaryWorkArea(entry, display, currentConfig.settings);
     }
     entry.win.showInactive();
     ensureOnTop(entry.win);
@@ -1233,9 +1265,10 @@ if (!singleInstance) {
     // If the native bridge ever has to be restarted, Windows has already dropped the work area it
     // had reserved (it reverts when the process that set it dies): reserve and place again
     win32Daemon.onRestart(() => {
-      if ( isQuitting) return;
+      if (isQuitting) return;
       lastTaskbarLayoutKey = '';
       lastExtraHwndsKey = '';
+      for (const entry of secondaryDocks.values()) entry.lastReserveKey = '';
       void win32Daemon.send(
         `SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`
       );
@@ -1312,6 +1345,7 @@ if (!singleInstance) {
       const run = () => {
         if (isQuitting) return;
         lastTaskbarLayoutKey = '';
+        for (const entry of secondaryDocks.values()) entry.lastReserveKey = '';
         if (currentConfig.settings.replaceWindowsTaskbar && !dockManuallyHidden) {
           syncTaskbarReplacement(currentConfig.settings);
         }
