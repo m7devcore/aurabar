@@ -323,7 +323,7 @@ namespace AuraBarNative {
     private static readonly object thumbCacheLock = new object();
     private const int THUMB_W = 400;
     private const int THUMB_H = 240;
-    private static bool taskbarHiddenByUs = false;
+    private static volatile bool taskbarHiddenByUs = false;
     // The work area we reserved for the dock; Windows resets it behind our back (a full-screen
     // app exiting, a display change), which lets maximized windows slide under the dock
     private static bool hasDesiredWorkArea = false;
@@ -599,7 +599,7 @@ namespace AuraBarNative {
         while ((cur = FindWindowEx(IntPtr.Zero, cur, classes[i], null)) != IntPtr.Zero) {
           bool vis = IsWindowVisible(cur);
           if (show) {
-            if (!vis) ShowWindowAsync(cur, 5);
+            if (!vis) ShowWindow(cur, 5);
             SetWindowPos(cur, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
           } else if (vis) {
             ShowWindowAsync(cur, 0);
@@ -608,10 +608,33 @@ namespace AuraBarNative {
       }
     }
 
+    private static bool IsParentAlive() {
+      if (parentElectronPid <= 4) return true;
+      try {
+        using (Process p = Process.GetProcessById(parentElectronPid)) {
+          return !p.HasExited;
+        }
+      } catch {
+        return false;
+      }
+    }
+
     private static void PollForegroundLoop() {
       long lastFgSnapAt = 0;
+      int parentCheckTick = 0;
       while (true) {
         try {
+          if (++parentCheckTick >= 10) {
+            parentCheckTick = 0;
+            if (!IsParentAlive()) {
+              if (taskbarHiddenByUs) {
+                try { RestoreWindowsTaskbar(); } catch { }
+              }
+              Environment.Exit(0);
+              return;
+            }
+          }
+
           if (taskbarHiddenByUs) {
             SetAllNativeTaskbarsVisible(false);
           }
@@ -1693,7 +1716,7 @@ namespace AuraBarNative {
       hasDesiredWorkArea = false;
       IntPtr tray = FindWindow("Shell_TrayWnd", null);
       if (tray != IntPtr.Zero) {
-        ShowWindowAsync(tray, 5);
+        ShowWindow(tray, 5);
         SetWindowPos(tray, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
         int trayH = 72;
         RECT trayRc = new RECT();
