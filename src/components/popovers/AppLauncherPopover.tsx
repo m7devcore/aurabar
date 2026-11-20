@@ -162,15 +162,17 @@ export function AppLauncherPopover({
   };
 
   const pinRunningWindow = (win: RunningWindow) => {
-    if (!win.executablePath) return;
-    if (isPinnedApp(win.executablePath, win.processName)) {
-      removePinnedByMatch(win.executablePath, win.processName);
+    const launchPath = win.aumid ? `shell:AppsFolder\\${win.aumid}` : win.executablePath;
+    if (!launchPath) return;
+    if (!win.aumid && win.processName.toLowerCase() === 'applicationframehost') return;
+    if (isPinnedApp(launchPath, win.processName)) {
+      removePinnedByMatch(launchPath, win.processName);
       return;
     }
     const next: PinnedApp = {
       id: `app-${Date.now()}`,
       name: win.processName,
-      target: win.executablePath,
+      target: launchPath,
       kind: 'app',
       icon: 'app',
       color: '#38BDF8',
@@ -354,8 +356,9 @@ export function AppLauncherPopover({
         ) : (
           <div className="grid-2">
             {filteredWindows.map((win) => {
-              const pinned = win.executablePath
-                ? isPinnedApp(win.executablePath, win.processName)
+              const launchPath = win.aumid ? `shell:AppsFolder\\${win.aumid}` : win.executablePath;
+              const pinned = launchPath
+                ? isPinnedApp(launchPath, win.processName)
                 : false;
               return (
                 <div key={win.hwnd ?? win.pid} className="card row-between" style={{ padding: '8px 10px' }}>
@@ -370,7 +373,11 @@ export function AppLauncherPopover({
                       minWidth: 0,
                       flex: 1
                     }}
-                    onClick={() => void dockBridge.focusWindow(win.pid, win.hwnd)}
+                    onClick={() =>
+                      void dockBridge.focusWindow(win.pid, win.hwnd).then((ok) => {
+                        if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
+                      })
+                    }
                   >
                     {win.iconDataUrl ? (
                       <img className="app-icon-img" src={win.iconDataUrl} alt={win.processName} />
@@ -394,7 +401,7 @@ export function AppLauncherPopover({
                       </div>
                     </div>
                   </button>
-                  {win.executablePath && (
+                  {launchPath && (
                     <button
                       className={`btn btn-icon ${pinned ? 'btn-primary' : ''}`}
                       style={{ width: 26, height: 26 }}

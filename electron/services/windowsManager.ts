@@ -20,15 +20,195 @@ const winIconCache = new Map<string, string>();
 const iconMissAt = new Map<string, number>();
 const ICON_MISS_RETRY_MS = 60000;
 
+function stripQuotes(s: string): string {
+  return s.trim().replace(/^"+|"+$/g, '');
+}
+
+function isProtocolUri(s: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[a-z]:[\\/]/i.test(s);
+}
+
+function spawnDetached(command: string, args: string[], cwd?: string): boolean {
+  try {
+    const child = spawn(command, args, {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.on('error', () => undefined);
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface StartAppEntry {
+  Name: string;
+  AppID: string;
+}
+
+let cachedStartApps: StartAppEntry[] | null = null;
+let startAppsInFlight: Promise<StartAppEntry[]> | null = null;
+
+function getStartAppsList(): Promise<StartAppEntry[]> {
+  if (cachedStartApps) return Promise.resolve(cachedStartApps);
+  if (startAppsInFlight) return startAppsInFlight;
+  startAppsInFlight = new Promise<StartAppEntry[]>((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Get-StartApps | ConvertTo-Json -Compress'
+      ],
+      { timeout: 6000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve([]);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout.trim()) as StartAppEntry | StartAppEntry[];
+          const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+          cachedStartApps = list.filter((x) => x && typeof x.Name === 'string' && typeof x.AppID === 'string');
+          resolve(cachedStartApps);
+        } catch {
+          resolve([]);
+        }
+      }
+    );
+  }).finally(() => {
+    startAppsInFlight = null;
+  });
+  return startAppsInFlight;
+}
+
+function parseWindowsAppsPackage(filePath: string): { pkgRoot: string; pfn: string; relExe: string } | null {
+  const m = /^([a-z]:[\\/]+program files[\\/]+windowsapps[\\/]+([^\\/]+))(?:[\\/](.*))?$/i.exec(filePath);
+  if (!m) return null;
+  const pkgRoot = m[1];
+  const fullName = m[2];
+  const relExe = (m[3] || '').replace(/\//g, '\\').toLowerCase();
+  const parts = fullName.split('_');
+  if (parts.length < 2) return null;
+  const pfn = `${parts[0]}_${parts[parts.length - 1]}`;
+  return { pkgRoot, pfn, relExe };
+}
+
+function resolveWindowsAppsAumidSync(filePath: string): string | null {
+  const info = parseWindowsAppsPackage(filePath);
+  if (!info) return null;
+  const manifestPath = path.join(info.pkgRoot, 'AppxManifest.xml');
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const xml = fs.readFileSync(manifestPath, 'utf-8');
+    const appTags = xml.match(/<Application\b[^>]*>/gi) ?? [];
+    let firstId: string | null = null;
+    const baseName = path.basename(info.relExe).toLowerCase();
+    for (const tag of appTags) {
+      const idMatch = /\bId\s*=\s*"([^"]+)"/i.exec(tag);
+      if (!idMatch) continue;
+      const appId = idMatch[1];
+      if (!firstId) firstId = appId;
+      const exeMatch = /\bExecutable\s*=\s*"([^"]+)"/i.exec(tag);
+      if (exeMatch && info.relExe) {
+        const tagExe = exeMatch[1].replace(/\//g, '\\').toLowerCase();
+        if (tagExe === info.relExe || path.basename(tagExe) === baseName) {
+          return `${info.pfn}!${appId}`;
+        }
+      }
+    }
+    if (firstId) return `${info.pfn}!${firstId}`;
+  } catch {
+    // Ignore unreadable manifests
+  }
+  return null;
+}
+
+async function resolveWindowsAppsAumidAsync(filePath: string): Promise<string | null> {
+  const sync = resolveWindowsAppsAumidSync(filePath);
+  if (sync) return sync;
+  const info = parseWindowsAppsPackage(filePath);
+  if (!info) return null;
+  const apps = await getStartAppsList();
+  const prefix = `${info.pfn.toLowerCase()}!`;
+  const match = apps.find((a) => a.AppID.toLowerCase().startsWith(prefix));
+  return match ? match.AppID : null;
+}
+
+function isLocalWindowsAppsAlias(filePath: string): boolean {
+  return /[\\/]appdata[\\/]local[\\/]microsoft[\\/]windowsapps[\\/][^\\/]+\.exe$/i.test(filePath);
+}
+
+function resolveSquirrelTarget(
+  filePath: string
+): { updateExe?: string; processStart: string; newestExe?: string; parentDir: string } | null {
+  const m = /^(.*)[\\/]app-[0-9]+(?:\.[0-9]+)*[\\/]([^\\/]+\.exe)$/i.exec(filePath);
+  if (!m) return null;
+  const parentDir = m[1];
+  const exeName = m[2];
+  const updateCandidate = path.join(parentDir, 'Update.exe');
+  const updateExe = fs.existsSync(updateCandidate) ? updateCandidate : undefined;
+
+  let newestExe: string | undefined;
+  try {
+    const dirs = fs
+      .readdirSync(parentDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^app-[0-9]+/i.test(d.name))
+      .map((d) => d.name)
+      .sort((a, b) => {
+        const pa = a.slice(4).split('.').map(Number);
+        const pb = b.slice(4).split('.').map(Number);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i++) {
+          const diff = (pb[i] || 0) - (pa[i] || 0);
+          if (diff !== 0) return diff;
+        }
+        return 0;
+      });
+    for (const dir of dirs) {
+      const candidate = path.join(parentDir, dir, exeName);
+      if (fs.existsSync(candidate)) {
+        newestExe = candidate;
+        break;
+      }
+    }
+  } catch {
+    // Ignore unreadable parent dir
+  }
+
+  return { updateExe, processStart: exeName, newestExe, parentDir };
+}
+
+function readUrlShortcut(filePath: string): { url?: string; iconFile?: string } {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const url = /^\s*URL\s*=\s*(.+)$/im.exec(raw)?.[1]?.trim();
+    const iconFile = /^\s*IconFile\s*=\s*(.+)$/im.exec(raw)?.[1]?.trim();
+    return { url, iconFile };
+  } catch {
+    return {};
+  }
+}
+
 function resolveKnownSystemPath(target: string): string | null {
-  const lower = target.trim().toLowerCase();
-  if (fs.existsSync(target)) return target;
+  const cleaned = stripQuotes(target);
+  const lower = cleaned.toLowerCase();
+  if (fs.existsSync(cleaned)) return cleaned;
   const winDir = process.env.WINDIR || 'C:\\Windows';
-  if (lower === 'explorer.exe') return path.join(winDir, 'explorer.exe');
-  if (lower === 'calc.exe') return path.join(winDir, 'System32', 'calc.exe');
-  if (lower === 'notepad.exe') return path.join(winDir, 'System32', 'notepad.exe');
-  if (lower === 'cmd.exe') return path.join(winDir, 'System32', 'cmd.exe');
-  if (lower === 'wt.exe') {
+  if (lower === 'explorer.exe' || lower === 'explorer') return path.join(winDir, 'explorer.exe');
+  if (lower === 'calc.exe' || lower === 'calc') return path.join(winDir, 'System32', 'calc.exe');
+  if (lower === 'notepad.exe' || lower === 'notepad') return path.join(winDir, 'System32', 'notepad.exe');
+  if (lower === 'cmd.exe' || lower === 'cmd') return path.join(winDir, 'System32', 'cmd.exe');
+  if (lower === 'powershell.exe' || lower === 'powershell') {
+    return path.join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  }
+  if (lower === 'mspaint.exe' || lower === 'mspaint') return path.join(winDir, 'System32', 'mspaint.exe');
+  if (lower === 'taskmgr.exe' || lower === 'taskmgr') return path.join(winDir, 'System32', 'Taskmgr.exe');
+  if (lower === 'wt.exe' || lower === 'wt') {
     const wt = path.join(
       process.env.LOCALAPPDATA || '',
       'Microsoft',
@@ -37,33 +217,50 @@ function resolveKnownSystemPath(target: string): string | null {
     );
     if (fs.existsSync(wt)) return wt;
   }
-  if (lower === 'code') {
-    const codeUser = path.join(
-      process.env.LOCALAPPDATA || '',
-      'Programs',
-      'Microsoft VS Code',
-      'Code.exe'
-    );
-    if (fs.existsSync(codeUser)) return codeUser;
-    const codeGlobal = 'C:\\Program Files\\Microsoft VS Code\\Code.exe';
-    if (fs.existsSync(codeGlobal)) return codeGlobal;
+  if (lower === 'code' || lower === 'code.exe') {
+    const candidates = [
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe'),
+      'C:\\Program Files\\Microsoft VS Code\\Code.exe',
+      'C:\\Program Files (x86)\\Microsoft VS Code\\Code.exe',
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code Insiders', 'Code - Insiders.exe')
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
   }
   return null;
 }
 
 export async function getIconDataUrl(target: string): Promise<string | undefined> {
-  if (!target || /^https?:\/\//i.test(target) || /^ms-settings:/i.test(target)) {
+  const cleaned = stripQuotes(target || '');
+  if (!cleaned) return undefined;
+  const isShellPath = /^shell:/i.test(cleaned);
+  if (!isShellPath && isProtocolUri(cleaned)) {
     return undefined;
   }
-  const key = target.toLowerCase();
+  const key = cleaned.toLowerCase();
   if (iconCache.has(key)) return iconCache.get(key);
   const missAt = iconMissAt.get(key);
   if (missAt !== undefined && Date.now() - missAt < ICON_MISS_RETRY_MS) return undefined;
 
-  let resolved = resolveKnownSystemPath(target) ?? target;
+  let resolved = isShellPath ? cleaned : resolveKnownSystemPath(cleaned) ?? cleaned;
+
+  // If a Squirrel app auto-updated and deleted the old app-<ver> folder, pull the icon from the newest one
+  if (!isShellPath && !fs.existsSync(resolved)) {
+    const sq = resolveSquirrelTarget(resolved);
+    if (sq?.newestExe) resolved = sq.newestExe;
+  }
+
+  // .url shortcuts (e.g. Steam games) often declare IconFile= pointing to their real .ico/.exe
+  if (!isShellPath && resolved.toLowerCase().endsWith('.url')) {
+    const { iconFile } = readUrlShortcut(resolved);
+    if (iconFile && fs.existsSync(iconFile)) {
+      resolved = iconFile;
+    }
+  }
 
   // Prefer the shortcut's underlying .ico or .exe target so icons render cleanly without shortcut arrows
-  if (resolved.toLowerCase().endsWith('.lnk')) {
+  if (!isShellPath && resolved.toLowerCase().endsWith('.lnk')) {
     try {
       const link = shell.readShortcutLink(resolved);
       if (link.icon && fs.existsSync(link.icon) && !link.icon.toLowerCase().endsWith('.dll')) {
@@ -80,57 +277,117 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
     }
   }
 
-  // Primary: native Windows Shell SHGetFileInfo (works for .lnk, .exe, .ico, WindowsApps, and folders)
+  // Primary: native Windows Shell SHGetFileInfo (works for .lnk, .exe, .ico, shell:AppsFolder, and folders)
   const shellIcon = await win32Daemon.send(`ICON ${resolved}`);
   if (shellIcon.startsWith('data:image/png;base64,')) {
     iconCache.set(key, shellIcon);
     return shellIcon;
   }
 
-  // Fallback to original .lnk path if resolved target failed
-  if (resolved !== target) {
-    const lnkIcon = await win32Daemon.send(`ICON ${target}`);
-    if (lnkIcon.startsWith('data:image/png;base64,')) {
-      iconCache.set(key, lnkIcon);
-      return lnkIcon;
+  // Fallback to original .lnk/.url path if resolved target failed
+  if (resolved !== cleaned) {
+    const origIcon = await win32Daemon.send(`ICON ${cleaned}`);
+    if (origIcon.startsWith('data:image/png;base64,')) {
+      iconCache.set(key, origIcon);
+      return origIcon;
     }
   }
 
-  // Final fallback: Electron app.getFileIcon
-  try {
-    const img = await app.getFileIcon(resolved, { size: 'normal' });
-    if (!img.isEmpty()) {
-      const url = img.toDataURL();
-      iconCache.set(key, url);
-      return url;
+  // For WindowsApps paths, fall back to shell:AppsFolder\<AUMID> icon extraction
+  if (!isShellPath && parseWindowsAppsPackage(cleaned)) {
+    const aumid = resolveWindowsAppsAumidSync(cleaned);
+    if (aumid) {
+      const appIcon = await win32Daemon.send(`ICON shell:AppsFolder\\${aumid}`);
+      if (appIcon.startsWith('data:image/png;base64,')) {
+        iconCache.set(key, appIcon);
+        return appIcon;
+      }
     }
-  } catch {
-    // Ignore fallback failure
+  }
+
+  // Final fallback: Electron app.getFileIcon (skip for virtual shell: paths)
+  if (!isShellPath) {
+    try {
+      const img = await app.getFileIcon(resolved, { size: 'normal' });
+      if (!img.isEmpty()) {
+        const url = img.toDataURL();
+        iconCache.set(key, url);
+        return url;
+      }
+    } catch {
+      // Ignore fallback failure
+    }
   }
   if (iconMissAt.size > 500) iconMissAt.clear();
   iconMissAt.set(key, Date.now());
   return undefined;
 }
 
+const KNOWN_STORE_EXE_HINTS: Array<[RegExp, string]> = [
+  [/windowscalculator/i, 'calculatorapp'],
+  [/windowsterminal/i, 'windowsterminal'],
+  [/whatsapp/i, 'whatsapp'],
+  [/spotifymusic/i, 'spotify'],
+  [/windows\.photos/i, 'photos'],
+  [/windowscamera/i, 'windowscamera'],
+  [/windowsnotepad/i, 'notepad'],
+  [/^microsoft\.paint/i, 'mspaint'],
+  [/screensketch/i, 'snippingtool'],
+  [/gamingapp/i, 'xboxpcapp'],
+  [/windowsstore/i, 'winstore.app'],
+  [/windowsalarms/i, 'time'],
+  [/claude/i, 'claude']
+];
+
 export function resolveExeName(target: string): string | undefined {
-  const trimmed = target.trim();
-  if (!trimmed || /^https?:\/\//i.test(trimmed) || /^ms-settings:/i.test(trimmed)) {
+  const trimmed = stripQuotes(target);
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+
+  if (lower.startsWith('shell:appsfolder\\')) {
+    const aumid = trimmed.slice('shell:appsfolder\\'.length);
+    for (const [re, exe] of KNOWN_STORE_EXE_HINTS) {
+      if (re.test(aumid)) return exe;
+    }
+    const bangIdx = aumid.lastIndexOf('!');
+    if (bangIdx !== -1) {
+      const appId = aumid.slice(bangIdx + 1).replace(/\.exe$/i, '').toLowerCase();
+      if (appId && appId !== 'app' && !appId.includes('.')) {
+        return appId;
+      }
+    }
     return undefined;
   }
-  const lower = trimmed.toLowerCase();
-  if (lower === 'wt.exe') return 'windowsterminal';
-  if (lower === 'calc.exe') return 'calculatorapp';
+
+  if (isProtocolUri(trimmed) || lower.endsWith('.url')) {
+    return undefined;
+  }
+
+  if (lower === 'wt.exe' || lower === 'wt') return 'windowsterminal';
+  if (lower === 'calc.exe' || lower === 'calc') return 'calculatorapp';
+  if (lower === 'code' || lower === 'code.exe') return 'code';
+
   if (lower.endsWith('.lnk')) {
     try {
       const link = shell.readShortcutLink(trimmed);
       if (link.target) {
-        return path.basename(link.target).replace(/\.exe$/i, '').toLowerCase();
+        const base = path.basename(link.target).replace(/\.exe$/i, '').toLowerCase();
+        // Squirrel shortcuts (Discord, Slack, Postman...) point to Update.exe --processStart <App>.exe
+        if (base === 'update' && link.args) {
+          const procMatch = /--processStart(?:=|\s+)"?([^"\s]+)"?/i.exec(link.args);
+          if (procMatch?.[1]) {
+            return path.basename(procMatch[1]).replace(/\.exe$/i, '').toLowerCase();
+          }
+        }
+        if (base && base !== 'update') {
+          return base;
+        }
       }
     } catch {
       // Fallback to shortcut name
     }
   }
-  return path.basename(trimmed).replace(/\.(exe|lnk|bat|cmd)$/i, '').toLowerCase();
+  return path.basename(trimmed).replace(/\.(exe|lnk|bat|cmd|url)$/i, '').toLowerCase();
 }
 
 let cachedInstalledApps: InstalledApp[] | null = null;
@@ -146,8 +403,8 @@ function collectShortcutsRecursive(dir: string, out: { name: string; fullPath: s
           continue;
         }
         collectShortcutsRecursive(fullPath, out, depth + 1);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lnk')) {
-        const base = entry.name.replace(/\.lnk$/i, '');
+      } else if (entry.isFile() && /\.(lnk|url)$/i.test(entry.name)) {
+        const base = entry.name.replace(/\.(lnk|url)$/i, '');
         if (/(uninstall|documentation|help|readme|website|release notes|manual|license|repair)/i.test(base)) {
           continue;
         }
@@ -180,6 +437,18 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
     }
   }
 
+  // Merge Microsoft Store / UWP / MSIX apps (WhatsApp, Spotify Store, Calculator, Photos, Terminal...)
+  // which have no .lnk file in Start Menu\Programs and launch via shell:AppsFolder\<AUMID>
+  const startApps = await getStartAppsList();
+  for (const sa of startApps) {
+    if (!sa.Name || !sa.AppID || !sa.AppID.includes('!')) continue;
+    if (/(uninstall|help|readme|feedback hub|get started|tips)/i.test(sa.Name)) continue;
+    const key = sa.Name.toLowerCase();
+    if (!deduped.has(key)) {
+      deduped.set(key, { name: sa.Name, fullPath: `shell:AppsFolder\\${sa.AppID}` });
+    }
+  }
+
   // Return the full list so search covers every app; icons are fetched lazily by the renderer
   // for the rows it actually shows (extracting hundreds up front stalls the daemon queue)
   const sorted = Array.from(deduped.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -195,15 +464,20 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
 }
 
 export async function createPinnedAppFromPath(filePath: string): Promise<PinnedApp | null> {
-  const clean = filePath.trim();
+  const clean = stripQuotes(filePath);
   if (!clean || !fs.existsSync(clean)) return null;
   const isDir = fs.statSync(clean).isDirectory();
-  const base = path.basename(clean).replace(/\.(exe|lnk|bat|cmd)$/i, '');
-  const iconDataUrl = isDir ? undefined : await getIconDataUrl(clean);
+  const base = path.basename(clean).replace(/\.(exe|lnk|url|bat|cmd)$/i, '');
+  let target = clean;
+  if (!isDir && parseWindowsAppsPackage(clean)) {
+    const aumid = await resolveWindowsAppsAumidAsync(clean);
+    if (aumid) target = `shell:AppsFolder\\${aumid}`;
+  }
+  const iconDataUrl = isDir ? undefined : await getIconDataUrl(target);
   return {
     id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name: base || clean,
-    target: clean,
+    target,
     kind: isDir ? 'folder' : 'app',
     icon: isDir ? 'folder' : 'app',
     color: isDir ? '#F59E0B' : '#38BDF8',
@@ -259,7 +533,12 @@ export async function listRunningWindows(): Promise<RunningWindow[]> {
     const parsed = JSON.parse(raw) as RunningWindow[];
     const enriched = await Promise.all(
       parsed.map(async (w) => {
-        let iconDataUrl = w.executablePath ? await getIconDataUrl(w.executablePath) : undefined;
+        let iconDataUrl = w.aumid
+          ? await getIconDataUrl(`shell:AppsFolder\\${w.aumid}`)
+          : undefined;
+        if (!iconDataUrl && w.executablePath) {
+          iconDataUrl = await getIconDataUrl(w.executablePath);
+        }
         if (!iconDataUrl && w.hwnd) {
           if (winIconCache.has(w.hwnd)) {
             iconDataUrl = winIconCache.get(w.hwnd) || undefined;
@@ -323,10 +602,15 @@ async function scanBackgroundApps(): Promise<BackgroundApp[]> {
   try {
     const parsed = JSON.parse(raw) as BackgroundApp[];
     const enriched = await Promise.all(
-      parsed.map(async (item) => ({
-        ...item,
-        iconDataUrl: item.executablePath ? await getIconDataUrl(item.executablePath) : undefined
-      }))
+      parsed.map(async (item) => {
+        let iconDataUrl = item.aumid
+          ? await getIconDataUrl(`shell:AppsFolder\\${item.aumid}`)
+          : undefined;
+        if (!iconDataUrl && item.executablePath) {
+          iconDataUrl = await getIconDataUrl(item.executablePath);
+        }
+        return { ...item, iconDataUrl };
+      })
     );
     return enriched.sort((a, b) => a.displayName.localeCompare(b.displayName));
   } catch {
@@ -428,30 +712,80 @@ export async function quitAppByPid(pid: number, executablePath?: string): Promis
 }
 
 export async function launchTarget(target: string): Promise<boolean> {
-  const trimmed = target.trim();
-  if (!trimmed) return false;
+  const cleaned = stripQuotes(target);
+  if (!cleaned) return false;
 
-  if (/^https?:\/\//i.test(trimmed) || /^ms-settings:/i.test(trimmed)) {
-    await shell.openExternal(trimmed);
-    return true;
+  // 1) Virtual shell targets (Microsoft Store / UWP / MSIX apps via shell:AppsFolder\<AUMID>)
+  if (/^shell:/i.test(cleaned)) {
+    return spawnDetached('explorer.exe', [cleaned]);
   }
 
-  if (trimmed.includes('\\') || trimmed.includes('/')) {
-    const err = await shell.openPath(trimmed);
-    return err === '';
+  // 2) Any URL or custom protocol (https://, ms-settings:, steam://, discord://, spotify:, ...)
+  if (isProtocolUri(cleaned)) {
+    try {
+      await shell.openExternal(cleaned);
+      return true;
+    } catch {
+      return spawnDetached('explorer.exe', [cleaned]);
+    }
   }
 
-  try {
-    const child = spawn('cmd.exe', ['/c', 'start', '""', trimmed], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    });
-    child.unref();
-    return true;
-  } catch {
-    return false;
+  // 3) Microsoft Store / MSIX executable inside C:\Program Files\WindowsApps\...
+  // Windows blocks direct execution there with Access Denied; resolve its AUMID and open via shell:AppsFolder
+  if (parseWindowsAppsPackage(cleaned)) {
+    const aumid = await resolveWindowsAppsAumidAsync(cleaned);
+    if (aumid) {
+      return spawnDetached('explorer.exe', [`shell:AppsFolder\\${aumid}`]);
+    }
   }
+
+  // 4) .url Internet / Steam / Epic shortcuts
+  if (cleaned.toLowerCase().endsWith('.url')) {
+    const { url } = readUrlShortcut(cleaned);
+    if (url) {
+      try {
+        await shell.openExternal(url);
+        return true;
+      } catch {
+        // Fall through to explorer.exe
+      }
+    }
+    return spawnDetached('explorer.exe', [cleaned]);
+  }
+
+  let resolved = resolveKnownSystemPath(cleaned) ?? cleaned;
+
+  // 5) App Execution Aliases in %LOCALAPPDATA%\Microsoft\WindowsApps\*.exe (wt.exe, spotify.exe, whatsapp.exe...)
+  if (isLocalWindowsAppsAlias(resolved)) {
+    return spawnDetached('explorer.exe', [resolved]);
+  }
+
+  // 6) Squirrel auto-updating apps (Discord, Slack, Postman...) whose pinned app-<ver> folder was replaced
+  const sq = resolveSquirrelTarget(resolved);
+  if (sq && !fs.existsSync(resolved)) {
+    if (sq.updateExe) {
+      return spawnDetached(sq.updateExe, ['--processStart', sq.processStart], sq.parentDir);
+    }
+    if (sq.newestExe) {
+      resolved = sq.newestExe;
+    }
+  }
+
+  // 7) Regular filesystem paths (.exe, .lnk, folders, documents)
+  if (resolved.includes('\\') || resolved.includes('/')) {
+    const err = await shell.openPath(resolved);
+    if (err === '') return true;
+
+    // shell.openPath can fail on UAC-elevated apps, IDList-only Store .lnk shortcuts, or working-dir-sensitive apps.
+    // explorer.exe delegates to the user's Shell cleanly (including UAC prompt & .lnk metadata).
+    if (sq?.updateExe) {
+      return spawnDetached(sq.updateExe, ['--processStart', sq.processStart], sq.parentDir);
+    }
+    return spawnDetached('explorer.exe', [resolved]);
+  }
+
+  // 8) Bare command name (fallback via cmd start)
+  return spawnDetached('cmd.exe', ['/c', 'start', '""', resolved]);
 }
 
 export async function pickExecutableOrFolder(
@@ -467,7 +801,7 @@ export async function pickExecutableOrFolder(
     title: 'Select an Application or Shortcut',
     properties: ['openFile'],
     filters: [
-      { name: 'Applications & Shortcuts', extensions: ['exe', 'lnk', 'bat', 'cmd'] },
+      { name: 'Applications & Shortcuts', extensions: ['exe', 'lnk', 'url', 'bat', 'cmd'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   });
@@ -475,10 +809,15 @@ export async function pickExecutableOrFolder(
   if (result.canceled || result.filePaths.length === 0) return null;
   const chosen = result.filePaths[0];
   const base = chosen.split(/[\\/]/).pop() ?? chosen;
-  const cleanName = base.replace(/\.(exe|lnk|bat|cmd)$/i, '');
-  const iconDataUrl = await getIconDataUrl(chosen);
+  const cleanName = base.replace(/\.(exe|lnk|url|bat|cmd)$/i, '');
+  let targetPath = chosen;
+  if (parseWindowsAppsPackage(chosen)) {
+    const aumid = await resolveWindowsAppsAumidAsync(chosen);
+    if (aumid) targetPath = `shell:AppsFolder\\${aumid}`;
+  }
+  const iconDataUrl = await getIconDataUrl(targetPath);
   return {
-    path: chosen,
+    path: targetPath,
     name: cleanName,
     kind: 'app',
     iconDataUrl,

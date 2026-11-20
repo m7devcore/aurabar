@@ -203,12 +203,10 @@ export function App() {
     if (VIEW_MODE === 'island') return;
     void refreshWindows();
     const id = setInterval(() => {
-      if (config?.settings.showOpenWindowsInBar || activePanel === 'apps') {
-        void refreshWindows();
-      }
+      void refreshWindows();
     }, 1800);
     return () => clearInterval(id);
-  }, [activePanel, config?.settings.showOpenWindowsInBar, refreshWindows]);
+  }, [refreshWindows]);
 
   if (VIEW_MODE === 'island') {
     return (

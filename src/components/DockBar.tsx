@@ -301,6 +301,7 @@ export function DockBar({
       }
     };
     document.addEventListener('animationend', onAnimEnd);
+    window.addEventListener('resize', reportHitRects);
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportHitRects) : null;
     if (ro) {
       if (dockBarRef.current) ro.observe(dockBarRef.current);
@@ -314,6 +315,7 @@ export function DockBar({
       ro?.disconnect();
       window.clearTimeout(settleTimer);
       document.removeEventListener('animationend', onAnimEnd);
+      window.removeEventListener('resize', reportHitRects);
     };
   }, [
     activePanel,
@@ -972,6 +974,7 @@ export function DockBar({
     const centers = items.map((it) => it.center);
     const step = Math.abs(from > 0 ? centers[from] - centers[from - 1] : centers[1] - centers[0]);
     const startX = e.clientX;
+    const startY = e.clientY;
     let active = false;
     let to = from;
 
@@ -986,8 +989,9 @@ export function DockBar({
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
       if (!active) {
-        if (Math.abs(dx) < 6) return;
+        if (Math.hypot(dx, dy) < 11) return;
         active = true;
         runDragRef.current = true;
         closePeekNow();
@@ -1084,11 +1088,13 @@ export function DockBar({
   };
 
   const winToPinned = (win: RunningWindow): PinnedApp | null => {
-    if (!win.executablePath) return null;
+    const target = win.aumid ? `shell:AppsFolder\\${win.aumid}` : win.executablePath;
+    if (!target) return null;
+    if (!win.aumid && win.processName.toLowerCase() === 'applicationframehost') return null;
     return {
       id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       name: win.processName,
-      target: win.executablePath,
+      target,
       kind: 'app',
       icon: 'app',
       color: '#4CB3F0',
@@ -1105,11 +1111,12 @@ export function DockBar({
   };
 
   const pinBackgroundApp = (bg: BackgroundApp) => {
-    if (!bg.executablePath || pinnedExeNames.has(bg.processName.toLowerCase())) return;
+    const target = bg.aumid ? `shell:AppsFolder\\${bg.aumid}` : bg.executablePath;
+    if (!target || pinnedExeNames.has(bg.processName.toLowerCase())) return;
     const next: PinnedApp = {
       id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       name: bg.displayName || bg.processName,
-      target: bg.executablePath,
+      target,
       kind: 'app',
       icon: 'app',
       color: '#4CB3F0',
@@ -1391,8 +1398,9 @@ export function DockBar({
           onMouseLeave={schedulePeekClose}
           onActivate={(win) => {
             closePeekNow();
-            void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+            void dockBridge.focusWindow(win.pid, win.hwnd).then((ok) => {
               setTimeout(onRefreshWindows, 80);
+              if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
             });
           }}
           onCloseWindow={(win) => {
@@ -1456,8 +1464,9 @@ export function DockBar({
                     e.stopPropagation();
                     setOpenFolder(null);
                     if (matchedWin && !e.shiftKey) {
-                      void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then(() => {
+                      void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then((ok) => {
                         setTimeout(onRefreshWindows, 120);
+                        if (!ok) void dockBridge.launchTarget(child.target);
                       });
                     } else {
                       void dockBridge.launchTarget(child.target);
@@ -1812,7 +1821,7 @@ export function DockBar({
                 <Zap size={14} style={{ color: 'var(--accent)' }} />
                 <span>{settings.language === 'ar' ? 'فتح / إظهار' : 'Open / Focus'}</span>
               </button>
-              {ctxMenu.running.executablePath &&
+              {(ctxMenu.running.aumid || ctxMenu.running.executablePath) &&
                 !pinnedExeNames.has(ctxMenu.running.processName.toLowerCase()) && (
                   <button
                     className="taskbar-ctx-item"
@@ -1825,11 +1834,13 @@ export function DockBar({
                     <span>{settings.language === 'ar' ? 'تثبيت في الشريط' : 'Pin to taskbar'}</span>
                   </button>
                 )}
-              {ctxMenu.running.executablePath && (
+              {(ctxMenu.running.aumid || ctxMenu.running.executablePath) && (
                 <button
                   className="taskbar-ctx-item"
                   onClick={() => {
-                    void dockBridge.launchTarget(ctxMenu.running!.executablePath!);
+                    const r = ctxMenu.running!;
+                    const target = r.aumid ? `shell:AppsFolder\\${r.aumid}` : r.executablePath!;
+                    void dockBridge.launchTarget(target);
                     setCtxMenu(null);
                     setOverflowTray(null);
                   }}
@@ -2308,8 +2319,9 @@ export function DockBar({
                             return;
                           }
                           closePeekNow();
-                          void dockBridge.focusWindow(win.pid, win.hwnd).then(() => {
+                          void dockBridge.focusWindow(win.pid, win.hwnd).then((ok) => {
                             setTimeout(onRefreshWindows, 80);
+                            if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
                           });
                         }}
                       >

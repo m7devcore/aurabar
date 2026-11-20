@@ -754,7 +754,8 @@ function withResolvedExeNames(apps: PinnedApp[]): PinnedApp[] {
     if (item.kind === 'group') {
       return { ...item, children: item.children ? withResolvedExeNames(item.children) : [] };
     }
-    if (item.exeName || !item.target) return item;
+    // Re-resolve missing exeName OR legacy 'update' from Squirrel shortcuts (Discord, Slack, Postman...)
+    if ((item.exeName && item.exeName.toLowerCase() !== 'update') || !item.target) return item;
     const exeName = resolveExeName(item.target);
     return exeName ? { ...item, exeName } : item;
   });

@@ -30,6 +30,7 @@ export interface RunningWindow {
   processName: string;
   title: string;
   executablePath?: string;
+  aumid?: string;
   iconDataUrl?: string;
   isMinimized?: boolean;
   isActive?: boolean;
@@ -40,6 +41,7 @@ export interface BackgroundApp {
   processName: string;
   displayName: string;
   executablePath: string;
+  aumid?: string;
   iconDataUrl?: string;
 }
 

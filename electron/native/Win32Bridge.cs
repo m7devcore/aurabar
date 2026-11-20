@@ -59,6 +59,15 @@ namespace AuraBarNative {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
 
+    [DllImport("shell32.dll", EntryPoint = "SHGetFileInfoW", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
+
+    [DllImport("ole32.dll")]
+    private static extern void CoTaskMemFree(IntPtr pv);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
@@ -94,6 +103,12 @@ namespace AuraBarNative {
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetLastActivePopup(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
@@ -291,6 +306,7 @@ namespace AuraBarNative {
     private static readonly Dictionary<long, long> firstSeenMap = new Dictionary<long, long>();
     private static readonly HashSet<long> maximizedHwnds = new HashSet<long>();
     private static readonly Dictionary<uint, ProcMeta> procCache = new Dictionary<uint, ProcMeta>();
+    private static readonly Dictionary<uint, string> aumidCache = new Dictionary<uint, string>();
     private static readonly Dictionary<string, int> subsystemCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, string> descCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private static readonly object procCacheLock = new object();
@@ -359,6 +375,42 @@ namespace AuraBarNative {
         }
       }
       return meta;
+    }
+
+    private static string GetCachedAumid(uint pid) {
+      if (pid <= 4) return "";
+      string cached;
+      lock (procCacheLock) {
+        if (aumidCache.TryGetValue(pid, out cached)) return cached;
+      }
+      string aumid = TryGetAumid(pid);
+      lock (procCacheLock) {
+        if (aumidCache.Count > 250) aumidCache.Clear();
+        aumidCache[pid] = aumid;
+      }
+      return aumid;
+    }
+
+    // UWP/Store apps (WhatsApp, Calculator, Photos, Settings...) host their top-level frame inside
+    // ApplicationFrameHost.exe. Find the real hosted child CoreWindow PID so AuraBar gets the true
+    // app name, executable path, icon, and AUMID instead of ApplicationFrameHost.
+    private static uint ResolveRealUwpPid(IntPtr hWnd, uint hostPid) {
+      uint corePid = 0;
+      uint fallbackPid = 0;
+      EnumChildWindows(hWnd, delegate(IntPtr child, IntPtr lp) {
+        uint cPid;
+        GetWindowThreadProcessId(child, out cPid);
+        if (cPid == 0 || cPid == hostPid) return true;
+        StringBuilder cls = new StringBuilder(64);
+        GetClassName(child, cls, cls.Capacity);
+        if (cls.ToString() == "Windows.UI.Core.CoreWindow") {
+          corePid = cPid;
+          return false;
+        }
+        if (fallbackPid == 0) fallbackPid = cPid;
+        return true;
+      }, IntPtr.Zero);
+      return corePid != 0 ? corePid : (fallbackPid != 0 ? fallbackPid : hostPid);
     }
 
     // Uncached lookup for destructive paths: a cached entry can be stale after PID reuse
@@ -658,6 +710,17 @@ namespace AuraBarNative {
         if (string.IsNullOrEmpty(title)) return true;
 
         ProcMeta meta = GetProcMeta(pid);
+        uint effectivePid = pid;
+        if (meta.name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) {
+          uint realPid = ResolveRealUwpPid(hWnd, pid);
+          if (realPid != pid) {
+            ProcMeta realMeta = GetProcMeta(realPid);
+            if (!string.IsNullOrEmpty(realMeta.name)) {
+              effectivePid = realPid;
+              meta = realMeta;
+            }
+          }
+        }
         if (meta.name.Equals("TextInputHost", StringComparison.OrdinalIgnoreCase)) return true;
 
         long hwndNum = hWnd.ToInt64();
@@ -670,14 +733,19 @@ namespace AuraBarNative {
 
         bool isMin = IsIconic(hWnd);
         bool isAct = (hWnd == activeHwnd) && !isMin;
+        string aumid = GetCachedAumid(effectivePid);
+        string aumidPart = !string.IsNullOrEmpty(aumid)
+          ? ",\"aumid\":\"" + JsonEscape(aumid) + "\""
+          : "";
 
         string json = string.Format(
-          "{{\"hwnd\":\"{0}\",\"pid\":{1},\"processName\":\"{2}\",\"title\":\"{3}\",\"executablePath\":\"{4}\",\"isMinimized\":{5},\"isActive\":{6}}}",
+          "{{\"hwnd\":\"{0}\",\"pid\":{1},\"processName\":\"{2}\",\"title\":\"{3}\",\"executablePath\":\"{4}\"{5},\"isMinimized\":{6},\"isActive\":{7}}}",
           hwndNum,
-          pid,
+          effectivePid,
           JsonEscape(meta.name),
           JsonEscape(title),
           JsonEscape(meta.exePath),
+          aumidPart,
           isMin ? "true" : "false",
           isAct ? "true" : "false"
         );
@@ -695,7 +763,7 @@ namespace AuraBarNative {
       }
 
       entries.Sort(delegate(WinEntry a, WinEntry b) { return a.seq.CompareTo(b.seq); });
-      if (entries.Count > 24) entries.RemoveRange(24, entries.Count - 24);
+      if (entries.Count > 40) entries.RemoveRange(40, entries.Count - 40);
 
       string[] jsonArr = new string[entries.Count];
       for (int i = 0; i < entries.Count; i++) jsonArr[i] = entries[i].json;
@@ -936,18 +1004,26 @@ namespace AuraBarNative {
     private static bool ForceFocus(IntPtr hWnd) {
       RestoreIfMinimized(hWnd);
 
+      // If the app has a visible modal dialog/popup open (e.g. Save As, Preferences), focus that
+      // popup rather than the disabled owner window, which Windows refuses to activate directly.
+      IntPtr target = hWnd;
+      IntPtr popup = GetLastActivePopup(hWnd);
+      if (popup != IntPtr.Zero && popup != hWnd && IsWindowVisible(popup) && !IsIconic(popup)) {
+        target = popup;
+      }
+
       AllowSetForegroundWindow(-1);
       if (IsForegroundTarget(hWnd)) return true;
 
       Condition isFront = delegate() { return IsForegroundTarget(hWnd); };
 
-      if (IsProtectedWindow(hWnd)) {
-        SwitchToThisWindow(hWnd, true);
+      if (IsProtectedWindow(target)) {
+        SwitchToThisWindow(target, true);
         if (WaitUntil(isFront, 150)) return true;
       }
 
-      BringWindowToTop(hWnd);
-      if (SetForegroundWindow(hWnd) && WaitUntil(isFront, 16)) return true;
+      BringWindowToTop(target);
+      if (SetForegroundWindow(target) && WaitUntil(isFront, 16)) return true;
 
       // Attach only to current foreground thread (typically our own responsive dockWindow) to unlock SetForegroundWindow
       IntPtr fg = GetForegroundWindow();
@@ -959,19 +1035,19 @@ namespace AuraBarNative {
       if (fgThread != 0 && fgThread != curThread) {
         attachedFg = AttachThreadInput(curThread, fgThread, true);
       }
-      BringWindowToTop(hWnd);
-      SetForegroundWindow(hWnd);
+      BringWindowToTop(target);
+      SetForegroundWindow(target);
       if (attachedFg) {
         AttachThreadInput(curThread, fgThread, false);
       }
       if (WaitUntil(isFront, 16)) return true;
 
-      uint targetThread = GetWindowThreadProcessId(hWnd, out dummy);
+      uint targetThread = GetWindowThreadProcessId(target, out dummy);
       bool attachedTarget = targetThread != 0 && targetThread != curThread
         ? AttachThreadInput(curThread, targetThread, true)
         : false;
-      BringWindowToTop(hWnd);
-      SetForegroundWindow(hWnd);
+      BringWindowToTop(target);
+      SetForegroundWindow(target);
       if (attachedTarget) {
         AttachThreadInput(curThread, targetThread, false);
       }
@@ -979,7 +1055,7 @@ namespace AuraBarNative {
 
       // Last resort, the same call Alt+Tab makes: works on elevated windows and past the
       // foreground lock
-      SwitchToThisWindow(hWnd, true);
+      SwitchToThisWindow(target, true);
       return WaitUntil(isFront, 150);
     }
 
@@ -1126,6 +1202,10 @@ namespace AuraBarNative {
         GetWindowThreadProcessId(hWnd, out pid);
         if (pid == 0 || IsAuraBarWindow(pid, hWnd)) return true;
         ProcMeta meta = GetProcMeta(pid);
+        if (meta.name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) {
+          uint realPid = ResolveRealUwpPid(hWnd, pid);
+          if (realPid != pid) meta = GetProcMeta(realPid);
+        }
         if (!string.IsNullOrEmpty(meta.exePath)) {
           taskbarExePaths.Add(meta.exePath);
         }
@@ -1149,13 +1229,18 @@ namespace AuraBarNative {
           if (GetPESubsystem(meta.exePath) != 2) continue;
 
           string displayName = GetExeDisplayName(meta.exePath, meta.name);
+          string aumid = GetCachedAumid(pid);
+          string aumidPart = !string.IsNullOrEmpty(aumid)
+            ? ",\"aumid\":\"" + JsonEscape(aumid) + "\""
+            : "";
 
           byExe[meta.exePath] = string.Format(
-            "{{\"pid\":{0},\"processName\":\"{1}\",\"displayName\":\"{2}\",\"executablePath\":\"{3}\"}}",
+            "{{\"pid\":{0},\"processName\":\"{1}\",\"displayName\":\"{2}\",\"executablePath\":\"{3}\"{4}}}",
             pid,
             JsonEscape(meta.name),
             JsonEscape(displayName),
-            JsonEscape(meta.exePath)
+            JsonEscape(meta.exePath),
+            aumidPart
           );
           if (byExe.Count >= 24) break;
         } catch {
@@ -1224,7 +1309,15 @@ namespace AuraBarNative {
       EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
         uint wPid;
         GetWindowThreadProcessId(hWnd, out wPid);
-        if (!pids.Contains(wPid)) return true;
+        bool matchesPid = pids.Contains(wPid);
+        if (!matchesPid && wPid > 4) {
+          ProcMeta wm = GetProcMeta(wPid);
+          if (wm.name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) {
+            uint realPid = ResolveRealUwpPid(hWnd, wPid);
+            if (realPid != wPid && pids.Contains(realPid)) matchesPid = true;
+          }
+        }
+        if (!matchesPid) return true;
 
         if (IsTaskbarWindow(hWnd)) {
           visibleWin = hWnd;
@@ -1411,6 +1504,23 @@ namespace AuraBarNative {
     private static string GetFileIconDataUrl(string filePath) {
       if (string.IsNullOrEmpty(filePath)) return "";
       SHFILEINFO shfi = new SHFILEINFO();
+      if (filePath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)) {
+        IntPtr pidl = IntPtr.Zero;
+        uint sfgao = 0;
+        int hr = SHParseDisplayName(filePath, IntPtr.Zero, out pidl, 0, out sfgao);
+        if (hr == 0 && pidl != IntPtr.Zero) {
+          try {
+            // SHGFI_ICON (0x100) | SHGFI_PIDL (0x008)
+            SHGetFileInfoPidl(pidl, 0, ref shfi, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 0x108);
+            if (shfi.hIcon != IntPtr.Zero) {
+              return IconHandleToDataUrl(shfi.hIcon, true);
+            }
+          } finally {
+            CoTaskMemFree(pidl);
+          }
+        }
+        return "";
+      }
       SHGetFileInfo(filePath, 0, ref shfi, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 0x100);
       if (shfi.hIcon != IntPtr.Zero) {
         return IconHandleToDataUrl(shfi.hIcon, true);
