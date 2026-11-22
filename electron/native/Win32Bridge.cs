@@ -4,9 +4,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using Microsoft.Win32;
 
 namespace AuraBarNative {
   public class Win32Bridge {
@@ -65,8 +67,105 @@ namespace AuraBarNative {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
 
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(ref Guid rfid, uint dwFlags, IntPtr hToken, out IntPtr ppszPath);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[] phiconLarge, IntPtr[] phiconSmall, int nIcons);
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid riid, out IPropertyStore ppv);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHGetPropertyStoreFromParsingName(string pszPath, IntPtr pbc, int flags, ref Guid riid, out IPropertyStore ppv);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SIZE {
+      public int cx;
+      public int cy;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GDI_BITMAP {
+      public int bmType, bmWidth, bmHeight, bmWidthBytes;
+      public ushort bmPlanes, bmBitsPixel;
+      public IntPtr bmBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFOHEADER {
+      public uint biSize;
+      public int biWidth, biHeight;
+      public ushort biPlanes, biBitCount;
+      public uint biCompression, biSizeImage;
+      public int biXPelsPerMeter, biYPelsPerMeter;
+      public uint biClrUsed, biClrImportant;
+    }
+
+    [ComImport]
+    [Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItemImageFactory {
+      [PreserveSig] int GetImage(SIZE size, int flags, out IntPtr phbm);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHCreateItemFromParsingName(string pszPath, IntPtr pbc, ref Guid riid, out IShellItemImageFactory ppv);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out GDI_BITMAP lpvObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint start, uint lines, byte[] bits, ref BITMAPINFOHEADER bmi, uint usage);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateSolidBrush(uint crColor);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
+
     [DllImport("ole32.dll")]
     private static extern void CoTaskMemFree(IntPtr pv);
+
+    [DllImport("ole32.dll")]
+    private static extern int PropVariantClear(ref PROPVARIANT pvar);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PHYSICAL_MONITOR {
+      public IntPtr hPhysicalMonitor;
+      [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+      public string szPhysicalMonitorDescription;
+    }
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint pdwNumberOfPhysicalMonitors);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint dwPhysicalMonitorArraySize, [Out] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool DestroyPhysicalMonitors(uint dwPhysicalMonitorArraySize, [In] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool GetMonitorBrightness(IntPtr hMonitor, out uint pdwMinimumBrightness, out uint pdwCurrentBrightness, out uint pdwMaximumBrightness);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool SetMonitorBrightness(IntPtr hMonitor, uint dwNewBrightness);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
@@ -100,6 +199,9 @@ namespace AuraBarNative {
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
@@ -240,6 +342,79 @@ namespace AuraBarNative {
     [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
     private static extern int DwmGetWindowRect(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DWM_THUMBNAIL_PROPERTIES {
+      public uint dwFlags;
+      public RECT rcDestination;
+      public RECT rcSource;
+      public byte opacity;
+      [MarshalAs(UnmanagedType.Bool)] public bool fVisible;
+      [MarshalAs(UnmanagedType.Bool)] public bool fSourceClientAreaOnly;
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmRegisterThumbnail(IntPtr hwndDestination, IntPtr hwndSource, out IntPtr phThumbnailId);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmUnregisterThumbnail(IntPtr hThumbnailId);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmQueryThumbnailSourceSize(IntPtr hThumbnail, out SIZE pSize);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref DWM_THUMBNAIL_PROPERTIES ptnProperties);
+
+    private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WNDCLASSEX {
+      public uint cbSize;
+      public uint style;
+      public IntPtr lpfnWndProc;
+      public int cbClsExtra;
+      public int cbWndExtra;
+      public IntPtr hInstance;
+      public IntPtr hIcon;
+      public IntPtr hCursor;
+      public IntPtr hbrBackground;
+      public string lpszMenuName;
+      public string lpszClassName;
+      public IntPtr hIconSm;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG {
+      public IntPtr hwnd;
+      public uint message;
+      public IntPtr wParam;
+      public IntPtr lParam;
+      public uint time;
+      public POINT pt;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateWindowEx(
+      uint dwExStyle, string lpClassName, string lpWindowName, uint dwStyle,
+      int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr DefWindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("user32.dll")]
+    private static extern bool TranslateMessage(ref MSG lpMsg);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr DispatchMessage(ref MSG lpMsg);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+
     [DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 
@@ -249,42 +424,164 @@ namespace AuraBarNative {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROPERTYKEY {
+      public Guid fmtid;
+      public uint pid;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROPVARIANT {
+      public ushort vt;
+      public ushort wReserved1;
+      public ushort wReserved2;
+      public ushort wReserved3;
+      public IntPtr p;
+      public IntPtr p2;
+    }
+
+    [ComImport]
+    [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPropertyStore {
+      [PreserveSig] int GetCount(out uint cProps);
+      [PreserveSig] int GetAt(uint iProp, out PROPERTYKEY pkey);
+      [PreserveSig] int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+      [PreserveSig] int SetValue(ref PROPERTYKEY key, ref PROPVARIANT propvar);
+      [PreserveSig] int Commit();
+    }
+
     [ComImport]
     [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
     private class MMDeviceEnumeratorComObject { }
 
     [ComImport]
+    [Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDeviceCollection {
+      [PreserveSig] int GetCount(out uint pcDevices);
+      [PreserveSig] int Item(uint nDevice, out IMMDevice ppDevice);
+    }
+
+    [ComImport]
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMMDeviceEnumerator {
-      int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
-      int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
+      [PreserveSig] int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IMMDeviceCollection ppDevices);
+      [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
     }
 
     [ComImport]
     [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMMDevice {
-      int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+      [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+      [PreserveSig] int OpenPropertyStore(int stgmAccess, out IPropertyStore ppProperties);
+      [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string ppstrId);
+      [PreserveSig] int GetState(out int pdwState);
     }
 
     [ComImport]
     [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAudioEndpointVolume {
-      int RegisterControlChangeNotify(IntPtr pNotify);
-      int UnregisterControlChangeNotify(IntPtr pNotify);
-      int GetChannelCount(out uint pnChannelCount);
-      int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
-      int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
-      int GetMasterVolumeLevel(out float pfLevelDB);
-      int GetMasterVolumeLevelScalar(out float pfLevel);
-      int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
-      int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
-      int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
-      int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
-      int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
-      int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+      [PreserveSig] int RegisterControlChangeNotify(IntPtr pNotify);
+      [PreserveSig] int UnregisterControlChangeNotify(IntPtr pNotify);
+      [PreserveSig] int GetChannelCount(out uint pnChannelCount);
+      [PreserveSig] int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+      [PreserveSig] int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+      [PreserveSig] int GetMasterVolumeLevel(out float pfLevelDB);
+      [PreserveSig] int GetMasterVolumeLevelScalar(out float pfLevel);
+      [PreserveSig] int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
+      [PreserveSig] int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+      [PreserveSig] int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+      [PreserveSig] int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+      [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+      [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+    }
+
+    [ComImport]
+    [Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
+    private class PolicyConfigClientComObject { }
+
+    [ComImport]
+    [Guid("F8679F50-850A-41CF-9C72-430F290290C8")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPolicyConfig {
+      [PreserveSig] int GetMixFormat([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, IntPtr ppFormat);
+      [PreserveSig] int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int bDefault, IntPtr ppFormat);
+      [PreserveSig] int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName);
+      [PreserveSig] int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, IntPtr pEndpointFormat, IntPtr pMixFormat);
+      [PreserveSig] int GetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int bDefault, IntPtr pmftDefaultPeriod, IntPtr pmftMinimumPeriod);
+      [PreserveSig] int SetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, IntPtr pmftPeriod);
+      [PreserveSig] int GetShareMode([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, IntPtr pMode);
+      [PreserveSig] int SetShareMode([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, IntPtr mode);
+      [PreserveSig] int GetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int bFxStore, IntPtr key, IntPtr pv);
+      [PreserveSig] int SetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int bFxStore, IntPtr key, IntPtr pv);
+      [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int role);
+      [PreserveSig] int SetEndpointVisibility([MarshalAs(UnmanagedType.LPWStr)] string pszDeviceName, int bVisible);
+    }
+
+    [ComImport]
+    [Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioSessionManager2 {
+      [PreserveSig] int GetAudioSessionControl(IntPtr AudioSessionGuid, uint StreamFlags, out IntPtr SessionControl);
+      [PreserveSig] int GetSimpleAudioVolume(IntPtr AudioSessionGuid, uint StreamFlags, out IntPtr AudioVolume);
+      [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator SessionEnum);
+    }
+
+    [ComImport]
+    [Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioSessionEnumerator {
+      [PreserveSig] int GetCount(out int SessionCount);
+      [PreserveSig] int GetSession(int SessionCount, out IAudioSessionControl Session);
+    }
+
+    [ComImport]
+    [Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioSessionControl {
+      [PreserveSig] int GetState(out int pRetVal);
+      [PreserveSig] int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
+      [PreserveSig] int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
+      [PreserveSig] int GetGroupingParam(out Guid pRetVal);
+      [PreserveSig] int SetGroupingParam(ref Guid Override, ref Guid EventContext);
+      [PreserveSig] int RegisterAudioSessionNotification(IntPtr NewNotifications);
+      [PreserveSig] int UnregisterAudioSessionNotification(IntPtr NewNotifications);
+    }
+
+    [ComImport]
+    [Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioSessionControl2 {
+      [PreserveSig] int GetState(out int pRetVal);
+      [PreserveSig] int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
+      [PreserveSig] int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, ref Guid EventContext);
+      [PreserveSig] int GetGroupingParam(out Guid pRetVal);
+      [PreserveSig] int SetGroupingParam(ref Guid Override, ref Guid EventContext);
+      [PreserveSig] int RegisterAudioSessionNotification(IntPtr NewNotifications);
+      [PreserveSig] int UnregisterAudioSessionNotification(IntPtr NewNotifications);
+      [PreserveSig] int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+      [PreserveSig] int GetProcessId(out uint pRetVal);
+      [PreserveSig] int IsSystemSoundsSession();
+      [PreserveSig] int SetDuckingPreference([MarshalAs(UnmanagedType.Bool)] bool optOut);
+    }
+
+    [ComImport]
+    [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ISimpleAudioVolume {
+      [PreserveSig] int SetMasterVolume(float fLevel, ref Guid EventContext);
+      [PreserveSig] int GetMasterVolume(out float pfLevel);
+      [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid EventContext);
+      [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
     }
 
     private const int GWL_EXSTYLE = -20;
@@ -310,6 +607,24 @@ namespace AuraBarNative {
     private static volatile int startMenuClosedByDockAt = 0;
     private static IntPtr dockHwnd = IntPtr.Zero;
     private static IntPtr islandHwnd = IntPtr.Zero;
+    private static volatile IntPtr peekOverlayHwnd = IntPtr.Zero;
+    private static IntPtr activePeekThumb = IntPtr.Zero;
+    private static WndProcDelegate peekWndProcRef = null;
+    private static readonly object liveThumbLock = new object();
+    private struct LiveThumbSpec {
+      public long targetHwnd;
+      public int screenX, screenY, w, h, radius;
+    }
+    private static List<LiveThumbSpec> pendingThumbSpecs = new List<LiveThumbSpec>();
+    private static readonly List<IntPtr> liveThumbPool = new List<IntPtr>();
+    private static readonly List<IntPtr> liveThumbHandles = new List<IntPtr>();
+    private static readonly List<string> liveThumbSig = new List<string>();
+    private static readonly HashSet<IntPtr> liveThumbHwndSet = new HashSet<IntPtr>();
+    private static IntPtr liveThumbBrush = IntPtr.Zero;
+    private const uint WM_PEEK_START = 0x8010;
+    private const uint WM_PEEK_STOP = 0x8011;
+    private const uint WM_THUMBS_SYNC = 0x8012;
+    private const uint WM_THUMBS_CLEAR = 0x8013;
     private static readonly object extraHwndsLock = new object();
     private static readonly List<IntPtr> extraDockHwnds = new List<IntPtr>();
     private static readonly Dictionary<IntPtr, RECT> extraDockRects = new Dictionary<IntPtr, RECT>();
@@ -320,6 +635,7 @@ namespace AuraBarNative {
     private static int parentElectronPid = 0;
     private static long nextSeenSeq = 1;
     private static readonly Dictionary<long, long> firstSeenMap = new Dictionary<long, long>();
+    private static readonly Dictionary<long, string> winAppIdCache = new Dictionary<long, string>();
     private static readonly HashSet<long> maximizedHwnds = new HashSet<long>();
     private static readonly Dictionary<uint, ProcMeta> procCache = new Dictionary<uint, ProcMeta>();
     private static readonly Dictionary<uint, string> aumidCache = new Dictionary<uint, string>();
@@ -344,6 +660,8 @@ namespace AuraBarNative {
     // app exiting, a display change), which lets maximized windows slide under the dock
     private static bool hasDesiredWorkArea = false;
     private static RECT desiredWorkArea;
+    private static int primaryWorkAreaBackoffUntil = 0;
+    private static readonly Dictionary<IntPtr, int> secWorkAreaBackoffUntil = new Dictionary<IntPtr, int>();
     private static int savedScreenLeft = 0;
     private static int savedScreenRight = 1920;
     private static int savedScreenBottom = 1080;
@@ -478,7 +796,12 @@ namespace AuraBarNative {
     }
 
     private static bool IsAuraBarWindow(uint pid, IntPtr hWnd) {
-      if (hWnd != IntPtr.Zero && (hWnd == dockHwnd || hWnd == islandHwnd || IsExtraDockHwnd(hWnd))) return true;
+      if (hWnd != IntPtr.Zero) {
+        if (hWnd == dockHwnd || hWnd == islandHwnd || hWnd == peekOverlayHwnd || IsExtraDockHwnd(hWnd)) return true;
+        lock (liveThumbLock) {
+          if (liveThumbHwndSet.Contains(hWnd)) return true;
+        }
+      }
       if (parentElectronPid > 0 && pid == (uint)parentElectronPid) return true;
       return GetProcMeta(pid).isElectron;
     }
@@ -492,9 +815,11 @@ namespace AuraBarNative {
     private static void RefitMaximizedOnMonitor(IntPtr targetMon, RECT want) {
       EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
         if (!IsWindowVisible(hWnd) || !IsZoomed(hWnd)) return true;
-        // Never un-maximize/re-maximize borderless games or fullscreen players
+        // Never un-maximize/re-maximize borderless games or fullscreen players (including YouTube F11)
         if ((GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0) return true;
-        if (targetMon != IntPtr.Zero && MonitorFromWindow(hWnd, 2) != targetMon) return true;
+        IntPtr mon = MonitorFromWindow(hWnd, 2);
+        if (targetMon != IntPtr.Zero && mon != targetMon) return true;
+        if (IsFullscreenWindowOnMonitor(hWnd, mon)) return true;
         RECT wr;
         if (!GetWindowRect(hWnd, out wr)) return true;
         // A maximized window overhangs its work area by the frame (about 8px); more than that
@@ -510,18 +835,33 @@ namespace AuraBarNative {
 
     private static void EnforceWorkArea() {
       if (!taskbarHiddenByUs) return;
+      // Never broadcast SPI_SETWORKAREA / WM_SETTINGCHANGE while ANY monitor has an active
+      // fullscreen game or video — it stalls DirectX/Vulkan games and causes system-wide stutters.
+      if (IsAnyMonitorFullscreen()) return;
 
-      if (hasDesiredWorkArea) {
+      int now = Environment.TickCount;
+
+      if (hasDesiredWorkArea && unchecked(now - primaryWorkAreaBackoffUntil) >= 0) {
         RECT cur = new RECT();
         if (SystemParametersInfo(0x0030, 0, ref cur, 0)) {
           RECT want = desiredWorkArea;
           bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
                          Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
-          if (drifted && !IsFullscreenForeground()) {
+          if (drifted) {
             SystemParametersInfo(0x002F, 0, ref want, 0);
-            POINT origin = new POINT();
-            IntPtr primaryMon = MonitorFromPoint(origin, 1);
-            RefitMaximizedOnMonitor(primaryMon, want);
+            RECT after = new RECT();
+            if (SystemParametersInfo(0x0030, 0, ref after, 0)) {
+              bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
+                                  Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
+              if (stillDrifted) {
+                // Windows rejected/clamped the rect (e.g. display mode change): back off 30s
+                primaryWorkAreaBackoffUntil = unchecked(now + 30000);
+              } else {
+                POINT origin = new POINT();
+                IntPtr primaryMon = MonitorFromPoint(origin, 1);
+                RefitMaximizedOnMonitor(primaryMon, want);
+              }
+            }
           }
         }
       }
@@ -533,9 +873,16 @@ namespace AuraBarNative {
         }
       }
       if (secList != null) {
-        IntPtr fsTarget = GetActiveFullscreenTarget();
         for (int i = 0; i < secList.Count; i++) {
           IntPtr mon = secList[i].Key;
+          int backoffUntil;
+          bool backedOff = false;
+          lock (extraHwndsLock) {
+            if (secWorkAreaBackoffUntil.TryGetValue(mon, out backoffUntil) && unchecked(now - backoffUntil) < 0) {
+              backedOff = true;
+            }
+          }
+          if (backedOff) continue;
           RECT want = secList[i].Value;
           MONITORINFO mi = new MONITORINFO();
           mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
@@ -544,9 +891,22 @@ namespace AuraBarNative {
           bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
                          Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
           if (!drifted) continue;
-          if (fsTarget != IntPtr.Zero && IsFullscreenWindowOnMonitor(fsTarget, mon)) continue;
           SystemParametersInfo(0x002F, 0, ref want, 0);
-          RefitMaximizedOnMonitor(mon, want);
+          MONITORINFO afterMi = new MONITORINFO();
+          afterMi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (GetMonitorInfo(mon, ref afterMi)) {
+            RECT after = afterMi.rcWork;
+            bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
+                                Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
+            if (stillDrifted) {
+              // Avoid infinite WM_SETTINGCHANGE storm if Windows rejects secondary work area
+              lock (extraHwndsLock) {
+                secWorkAreaBackoffUntil[mon] = unchecked(now + 30000);
+              }
+            } else {
+              RefitMaximizedOnMonitor(mon, want);
+            }
+          }
         }
       }
     }
@@ -702,8 +1062,8 @@ namespace AuraBarNative {
     }
 
     private static void PollForegroundLoop() {
-      long lastFgSnapAt = 0;
       int parentCheckTick = 0;
+      int enforceTick = 0;
       while (true) {
         try {
           if (++parentCheckTick >= 10) {
@@ -717,21 +1077,44 @@ namespace AuraBarNative {
             }
           }
 
-          if (taskbarHiddenByUs) {
-            SetAllNativeTaskbarsVisible(false);
-          }
+          // Enforce work area, dock rect, and topmost z-order every ~560ms instead of 7x/sec
+          if (++enforceTick >= 4) {
+            enforceTick = 0;
+            POINT origin = new POINT();
+            IntPtr primaryMon = MonitorFromPoint(origin, 1);
+            int qState;
+            bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
+            bool primaryFs = IsMonitorShowingFullscreen(primaryMon, primaryMon, primaryD3dFs);
+            bool anyFs = primaryFs;
 
-          EnforceWorkArea();
-          EnforceDockPlacement();
-          KeepOnTopIfDemoted(dockHwnd);
-          KeepOnTopIfDemoted(islandHwnd);
-          List<IntPtr> extrasCopy = null;
-          lock (extraHwndsLock) {
-            if (extraDockHwnds.Count > 0) extrasCopy = new List<IntPtr>(extraDockHwnds);
-          }
-          if (extrasCopy != null) {
-            for (int i = 0; i < extrasCopy.Count; i++) {
-              KeepOnTopIfDemoted(extrasCopy[i]);
+            List<IntPtr> extrasCopy = null;
+            lock (extraHwndsLock) {
+              if (extraDockHwnds.Count > 0) extrasCopy = new List<IntPtr>(extraDockHwnds);
+            }
+
+            if (!primaryFs) {
+              EnforceDockPlacement();
+              KeepOnTopIfDemoted(dockHwnd);
+              KeepOnTopIfDemoted(islandHwnd);
+            }
+            if (extrasCopy != null) {
+              for (int i = 0; i < extrasCopy.Count; i++) {
+                IntPtr eh = extrasCopy[i];
+                if (eh == IntPtr.Zero || !IsWindow(eh)) continue;
+                IntPtr eMon = MonitorFromWindow(eh, 2);
+                bool eFs = eMon != IntPtr.Zero && IsMonitorShowingFullscreen(eMon, primaryMon, primaryD3dFs);
+                if (eFs) {
+                  anyFs = true;
+                } else {
+                  KeepOnTopIfDemoted(eh);
+                }
+              }
+            }
+            if (!anyFs) {
+              if (taskbarHiddenByUs) {
+                SetAllNativeTaskbarsVisible(false);
+              }
+              EnforceWorkArea();
             }
           }
 
@@ -755,16 +1138,7 @@ namespace AuraBarNative {
             }
             if (!isAura && IsTaskbarWindow(fg)) {
               if (fg != lastExternalForeground) {
-                IntPtr leaving = lastExternalForeground;
                 lastExternalForeground = fg;
-                // The window being left is usually still visible here, before any minimize
-                if (leaving != IntPtr.Zero) SnapshotThumb(leaving);
-                SnapshotThumb(fg);
-                lastFgSnapAt = Environment.TickCount;
-              } else if (unchecked(Environment.TickCount - lastFgSnapAt) > 4000) {
-                // Keeps a recent frame for windows minimized via their own title-bar button
-                SnapshotThumb(fg);
-                lastFgSnapAt = Environment.TickCount;
               }
             } else if (!isAura) {
               // Focus went to the desktop, Start, a shell popup...: the old window is no longer
@@ -852,18 +1226,32 @@ namespace AuraBarNative {
         bool isMin = IsIconic(hWnd);
         bool isAct = (hWnd == activeHwnd) && !isMin;
         string aumid = GetCachedAumid(effectivePid);
+        string winAppId = GetCachedWindowAppId(hWnd);
+        string effectiveAppId = !string.IsNullOrEmpty(winAppId) ? winAppId : aumid;
+        string displayName = !string.IsNullOrEmpty(meta.exePath)
+          ? GetExeDisplayName(meta.exePath, meta.name)
+          : meta.name;
+
         string aumidPart = !string.IsNullOrEmpty(aumid)
           ? ",\"aumid\":\"" + JsonEscape(aumid) + "\""
           : "";
+        string appIdPart = !string.IsNullOrEmpty(effectiveAppId)
+          ? ",\"appId\":\"" + JsonEscape(effectiveAppId) + "\""
+          : "";
+        string displayPart = !string.IsNullOrEmpty(displayName)
+          ? ",\"displayName\":\"" + JsonEscape(displayName) + "\""
+          : "";
 
         string json = string.Format(
-          "{{\"hwnd\":\"{0}\",\"pid\":{1},\"processName\":\"{2}\",\"title\":\"{3}\",\"executablePath\":\"{4}\"{5},\"isMinimized\":{6},\"isActive\":{7}}}",
+          "{{\"hwnd\":\"{0}\",\"pid\":{1},\"processName\":\"{2}\",\"title\":\"{3}\",\"executablePath\":\"{4}\"{5}{6}{7},\"isMinimized\":{8},\"isActive\":{9}}}",
           hwndNum,
           effectivePid,
           JsonEscape(meta.name),
           JsonEscape(title),
           JsonEscape(meta.exePath),
           aumidPart,
+          appIdPart,
+          displayPart,
           isMin ? "true" : "false",
           isAct ? "true" : "false"
         );
@@ -877,6 +1265,7 @@ namespace AuraBarNative {
       }
       for (int i = 0; i < stale.Count; i++) {
         firstSeenMap.Remove(stale[i]);
+        winAppIdCache.Remove(stale[i]);
         maximizedHwnds.Remove(stale[i]);
       }
 
@@ -952,6 +1341,7 @@ namespace AuraBarNative {
 
     private static bool IsFullscreenWindowOnMonitor(IntPtr hWnd, IntPtr targetMonitor) {
       if (hWnd == IntPtr.Zero || targetMonitor == IntPtr.Zero || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return false;
+      if (IsCloaked(hWnd)) return false;
 
       int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
       if ((ex & 0x00000020) != 0) return false; // WS_EX_TRANSPARENT (NVIDIA/Discord/Xbox overlays)
@@ -962,7 +1352,7 @@ namespace AuraBarNative {
       GetClassName(hWnd, cls, cls.Capacity);
       string clsName = cls.ToString();
       if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
-          clsName == "Shell_SecondaryTrayWnd") {
+          clsName == "Shell_SecondaryTrayWnd" || clsName == "Windows.UI.Core.CoreWindow") {
         return false;
       }
 
@@ -974,11 +1364,92 @@ namespace AuraBarNative {
       RECT r;
       if (!GetMonitorInfo(monitor, ref mi) || !GetWindowRect(hWnd, out r)) return false;
 
-      bool covers = r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
-                    r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+      // Allow +-2px tolerance for borderless game engines / DWM frame rounding
+      bool covers = r.left <= mi.rcMonitor.left + 2 && r.top <= mi.rcMonitor.top + 2 &&
+                    r.right >= mi.rcMonitor.right - 2 && r.bottom >= mi.rcMonitor.bottom - 2;
+      if (!covers) return false;
+
       bool hasCaption = (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
-      // Chromium/Electron fullscreen windows keep WS_CAPTION in style but are NOT IsZoomed and cover the full monitor
-      return covers && (!hasCaption || !IsZoomed(hWnd));
+      // If a taskbar reserves space on this monitor, a regular maximized window stops at rcWork,
+      // whereas a true fullscreen video/game (YouTube F11, VLC, CS2...) extends all the way past
+      // rcWork to rcMonitor edge even if Chromium/UWP kept WS_CAPTION + IsZoomed.
+      bool exceedsWorkArea =
+        ((mi.rcMonitor.bottom - mi.rcWork.bottom) >= 24 && r.bottom >= mi.rcMonitor.bottom - 2) ||
+        ((mi.rcWork.top - mi.rcMonitor.top) >= 24 && r.top <= mi.rcMonitor.top + 2);
+      return !hasCaption || !IsZoomed(hWnd) || exceedsWorkArea;
+    }
+
+    // Finds the topmost real visible application window on a specific monitor by walking Z-order
+    // from front to back. This keeps Monitor 1's dock hidden while a fullscreen game/video sits on
+    // Monitor 1 even when the user clicks Discord/Browser on Monitor 2, while ignoring transparent
+    // overlays (NVIDIA, Discord, Xbox Game Bar) and AuraBar itself.
+    private static IntPtr GetTopmostRealWindowOnMonitor(IntPtr targetMonitor) {
+      if (targetMonitor == IntPtr.Zero) return IntPtr.Zero;
+      IntPtr topWin = IntPtr.Zero;
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
+        if (!IsWindowVisible(hWnd) || IsIconic(hWnd) || IsCloaked(hWnd)) return true;
+        int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
+        if ((ex & 0x00000020) != 0) return true; // WS_EX_TRANSPARENT overlay
+        if ((ex & WS_EX_NOACTIVATE) != 0) return true;
+        if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0) return true;
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        if (IsAuraBarWindow(pid, hWnd)) return true;
+        StringBuilder cls = new StringBuilder(64);
+        GetClassName(hWnd, cls, cls.Capacity);
+        string clsName = cls.ToString();
+        if (clsName == "Progman" || clsName == "WorkerW" || clsName == "Shell_TrayWnd" ||
+            clsName == "Shell_SecondaryTrayWnd" || clsName == "Windows.UI.Core.CoreWindow") {
+          return true;
+        }
+        RECT rc;
+        if (!GetWindowRect(hWnd, out rc)) return true;
+        if ((rc.right - rc.left) < 120 || (rc.bottom - rc.top) < 80) return true;
+        if (MonitorFromWindow(hWnd, 2) != targetMonitor) return true;
+        topWin = hWnd;
+        return false; // Stop at the very first (topmost) real app window on this monitor
+      }, IntPtr.Zero);
+      return topWin;
+    }
+
+    private static bool IsMonitorShowingFullscreen(IntPtr monitor, IntPtr primaryMon, bool primaryD3dFs) {
+      if (monitor == IntPtr.Zero) return false;
+      IntPtr topWin = GetTopmostRealWindowOnMonitor(monitor);
+      if (topWin != IntPtr.Zero && IsFullscreenWindowOnMonitor(topWin, monitor)) return true;
+      if (monitor == primaryMon && primaryD3dFs) {
+        // Exclusive Direct3D/Vulkan fullscreen on primary monitor (e.g. CS2 4:3 stretched)
+        if (topWin == IntPtr.Zero || IsFullscreenWindowOnMonitor(topWin, monitor)) return true;
+        // Also check if the active foreground window itself is on primary and D3D exclusive
+        IntPtr fg = GetForegroundWindow();
+        if (fg != IntPtr.Zero && MonitorFromWindow(fg, 2) == primaryMon) return true;
+      }
+      return false;
+    }
+
+    private static bool IsAnyMonitorFullscreen() {
+      int qState;
+      bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
+      if (primaryD3dFs) return true;
+
+      POINT origin = new POINT();
+      IntPtr primaryMon = MonitorFromPoint(origin, 1);
+      if (IsMonitorShowingFullscreen(primaryMon, primaryMon, false)) return true;
+
+      List<IntPtr> extras = null;
+      lock (extraHwndsLock) {
+        if (extraDockHwnds.Count > 0) extras = new List<IntPtr>(extraDockHwnds);
+      }
+      if (extras != null) {
+        for (int i = 0; i < extras.Count; i++) {
+          IntPtr eh = extras[i];
+          if (eh == IntPtr.Zero || !IsWindow(eh)) continue;
+          IntPtr mon = MonitorFromWindow(eh, 2);
+          if (mon != IntPtr.Zero && mon != primaryMon && IsMonitorShowingFullscreen(mon, primaryMon, false)) {
+            return true;
+          }
+        }
+      }
+      return false;
     }
 
     private static bool IsFullscreenWindow(IntPtr hWnd) {
@@ -989,32 +1460,10 @@ namespace AuraBarNative {
       return IsFullscreenWindowOnMonitor(hWnd, dockMonitor);
     }
 
-    // Foreground-only per-monitor fullscreen check: never scans EnumWindows (which would false-trigger
-    // on permanent transparent overlays like NVIDIA Overlay), and only hides the dock on the monitor
-    // where the active fullscreen window lives.
-    private static IntPtr GetActiveFullscreenTarget() {
-      IntPtr fg = GetForegroundWindow();
-      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
-        return lastExternalForeground;
-      }
-      uint pid;
-      GetWindowThreadProcessId(fg, out pid);
-      if (IsAuraBarWindow(pid, fg) || !IsTaskbarWindow(fg)) {
-        return lastExternalForeground != IntPtr.Zero ? lastExternalForeground : fg;
-      }
-      return fg;
-    }
-
     private static string CheckFullscreenForHwnds(string csv) {
       if (string.IsNullOrWhiteSpace(csv)) return "";
       POINT origin = new POINT();
       IntPtr primaryMon = MonitorFromPoint(origin, 1);
-      IntPtr targetWin = GetActiveFullscreenTarget();
-      IntPtr targetWinMon = (targetWin != IntPtr.Zero && IsWindowVisible(targetWin) && !IsIconic(targetWin))
-        ? MonitorFromWindow(targetWin, 2)
-        : IntPtr.Zero;
-      bool targetIsFs = targetWinMon != IntPtr.Zero && IsFullscreenWindowOnMonitor(targetWin, targetWinMon);
-
       int qState;
       bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
 
@@ -1028,44 +1477,20 @@ namespace AuraBarNative {
         }
         IntPtr h = new IntPtr(hv);
         IntPtr mon = MonitorFromWindow(h, 2);
-        bool isFs =
-          (targetIsFs && mon == targetWinMon) ||
-          (mon == primaryMon && primaryD3dFs && (targetWinMon == IntPtr.Zero || targetWinMon == primaryMon));
-        results[i] = isFs ? "1" : "0";
+        results[i] = IsMonitorShowingFullscreen(mon, primaryMon, primaryD3dFs) ? "1" : "0";
       }
       return string.Join(",", results);
     }
 
-    // True while the window in front is a full-screen app (game, video player, browser F11...)
-    // on the monitor the dock lives on. Windows that merely cover the work area (maximized) do
-    // not count: they keep their title bar, full-screen apps do not.
+    // True while the primary dock's monitor currently has a fullscreen app on top (game, video
+    // player, browser F11...), even if the user clicked another monitor or the Dynamic Island.
     private static bool IsFullscreenForeground() {
-      IntPtr fg = GetForegroundWindow();
-      if (fg == IntPtr.Zero || !IsWindowVisible(fg) || IsIconic(fg)) {
-        if (lastExternalForeground != IntPtr.Zero && IsFullscreenWindow(lastExternalForeground)) return true;
-        return false;
-      }
-
-      uint pid;
-      GetWindowThreadProcessId(fg, out pid);
-      if (IsAuraBarWindow(pid, fg)) {
-        // Clicking the Dynamic Island while in a game/video temporarily focuses AuraBar;
-        // judge fullscreen by the underlying external foreground window so the dock stays hidden.
-        if (IsFullscreenWindow(lastExternalForeground)) return true;
-        int nState;
-        return SHQueryUserNotificationState(out nState) == 0 && (nState == 3 || nState == 4);
-      }
-
-      if (IsFullscreenWindow(fg)) return true;
-
-      // Alt+Esc / cursor-unlock in games can focus Desktop or a tiny non-taskbar overlay while the
-      // fullscreen game itself remains visible and unminimized across the monitor: keep dock hidden.
-      if (!IsTaskbarWindow(fg) && IsFullscreenWindow(lastExternalForeground)) return true;
-
-      // Exclusive full-screen Direct3D games and presentation mode
-      int state;
-      if (SHQueryUserNotificationState(out state) == 0 && (state == 3 || state == 4)) return true;
-      return false;
+      POINT origin = new POINT();
+      IntPtr primaryMon = MonitorFromPoint(origin, 1);
+      IntPtr dockMon = dockHwnd != IntPtr.Zero ? MonitorFromWindow(dockHwnd, 2) : primaryMon;
+      int qState;
+      bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
+      return IsMonitorShowingFullscreen(dockMon, primaryMon, primaryD3dFs);
     }
 
     private static bool IsForegroundTarget(IntPtr hWnd) {
@@ -1172,9 +1597,9 @@ namespace AuraBarNative {
       if (WaitUntil(isFront, 16)) return true;
 
       // Last resort, the same call Alt+Tab makes: works on elevated windows and past the
-      // foreground lock
+      // foreground lock. Games restoring from minimized fullscreen can need ~250-320ms.
       SwitchToThisWindow(target, true);
-      return WaitUntil(isFront, 150);
+      return WaitUntil(isFront, 320);
     }
 
     private static bool MinimizeWindow(IntPtr hWnd) {
@@ -1191,8 +1616,10 @@ namespace AuraBarNative {
     }
 
     private static string ToggleWindow(long hwndVal) {
+      StopLivePeek();
+      ClearLiveThumbs();
       IntPtr hWnd = new IntPtr(hwndVal);
-      if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "false";
+      if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "gone";
 
       IntPtr fg = GetForegroundWindow();
       bool dockHasFocus = fg == IntPtr.Zero || fg == dockHwnd || fg == islandHwnd || IsExtraDockHwnd(fg);
@@ -1225,14 +1652,366 @@ namespace AuraBarNative {
           lastExternalForeground = hWnd;
           return "focused";
         }
-        return "failed";
+        return IsWindow(hWnd) ? "attempted" : "gone";
       } else {
         if (ForceFocus(hWnd)) {
           lastExternalForeground = hWnd;
           return "focused";
         }
-        return "failed";
+        // Window is still alive (e.g. elevated game or slow fullscreen restore) — never tell the
+        // caller to spawn a duplicate copy while the window still exists.
+        return IsWindow(hWnd) ? "attempted" : "gone";
       }
+    }
+
+    private static string ActivateWindow(long hwndVal) {
+      StopLivePeek();
+      ClearLiveThumbs();
+      IntPtr hWnd = new IntPtr(hwndVal);
+      if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "gone";
+      if (ForceFocus(hWnd)) {
+        lastExternalForeground = hWnd;
+        return "focused";
+      }
+      return IsWindow(hWnd) ? "attempted" : "gone";
+    }
+
+    private static IntPtr PeekOverlayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
+      // Belt-and-suspenders click-through: never intercept mouse hover, clicks, or cursor
+      if (msg == 0x0084) { // WM_NCHITTEST
+        return new IntPtr(-1); // HTTRANSPARENT
+      }
+      if (msg == 0x0021) { // WM_MOUSEACTIVATE
+        return new IntPtr(3); // MA_NOACTIVATE
+      }
+      if (msg == WM_PEEK_START) {
+        ApplyLivePeekOnThread(hWnd, wParam);
+        return IntPtr.Zero;
+      }
+      if (msg == WM_PEEK_STOP) {
+        ClearLivePeekOnThread(hWnd);
+        return IntPtr.Zero;
+      }
+      if (msg == WM_THUMBS_SYNC) {
+        SyncLiveThumbsOnThread();
+        return IntPtr.Zero;
+      }
+      if (msg == WM_THUMBS_CLEAR) {
+        ClearLiveThumbsOnThread();
+        return IntPtr.Zero;
+      }
+      return DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+
+    private static void ClearLiveThumbSlot(int i) {
+      if (i < liveThumbHandles.Count && liveThumbHandles[i] != IntPtr.Zero) {
+        try { DwmUnregisterThumbnail(liveThumbHandles[i]); } catch { }
+        liveThumbHandles[i] = IntPtr.Zero;
+      }
+      if (i < liveThumbSig.Count) liveThumbSig[i] = "";
+      if (i < liveThumbPool.Count && liveThumbPool[i] != IntPtr.Zero) {
+        ShowWindow(liveThumbPool[i], 0); // SW_HIDE
+      }
+    }
+
+    private static void ClearLiveThumbsOnThread() {
+      for (int i = 0; i < liveThumbPool.Count; i++) {
+        ClearLiveThumbSlot(i);
+      }
+    }
+
+    private static void RaiseLiveThumbsAboveDock() {
+      for (int i = 0; i < liveThumbPool.Count; i++) {
+        IntPtr th = liveThumbPool[i];
+        if (th != IntPtr.Zero && IsWindowVisible(th)) {
+          SetWindowPos(th, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+        }
+      }
+    }
+
+    private static void SyncLiveThumbsOnThread() {
+      List<LiveThumbSpec> specs;
+      lock (liveThumbLock) {
+        specs = new List<LiveThumbSpec>(pendingThumbSpecs);
+      }
+      if (specs.Count == 0) {
+        ClearLiveThumbsOnThread();
+        return;
+      }
+
+      IntPtr hInst = GetModuleHandle(null);
+      int count = Math.Min(specs.Count, 12);
+      // WS_EX_LAYERED (0x80000) + WS_EX_TRANSPARENT (0x20) is REQUIRED by Win32 for true
+      // click-through at the compositor level so mouse hovers/clicks pass cleanly to Electron!
+      const uint OVERLAY_EX_STYLE = 0x080800A8u; // TOOLWINDOW | NOACTIVATE | LAYERED | TRANSPARENT | TOPMOST
+      while (liveThumbPool.Count < count) {
+        IntPtr w = CreateWindowEx(
+          OVERLAY_EX_STYLE,
+          "AuraBarLiveThumbSlot",
+          "",
+          0x80000000u, // WS_POPUP
+          0, 0, 1, 1,
+          IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero
+        );
+        if (w == IntPtr.Zero) break;
+        SetLayeredWindowAttributes(w, 0, 255, 2); // LWA_ALPHA = 255 (opaque live DWM surface, 100% click-through)
+        liveThumbPool.Add(w);
+        liveThumbHandles.Add(IntPtr.Zero);
+        liveThumbSig.Add("");
+        lock (liveThumbLock) {
+          liveThumbHwndSet.Add(w);
+        }
+      }
+
+      // Hide any surplus pool slots no longer needed
+      for (int i = count; i < liveThumbPool.Count; i++) {
+        ClearLiveThumbSlot(i);
+      }
+
+      for (int i = 0; i < count && i < liveThumbPool.Count; i++) {
+        LiveThumbSpec sp = specs[i];
+        IntPtr target = new IntPtr(sp.targetHwnd);
+        if (target == IntPtr.Zero || !IsWindow(target) || sp.w < 16 || sp.h < 16) {
+          ClearLiveThumbSlot(i);
+          continue;
+        }
+
+        int sx = sp.screenX;
+        int sy = sp.screenY;
+        bool targetMin = IsIconic(target);
+        string sig = sp.targetHwnd + ":" + sx + "," + sy + "," + sp.w + "," + sp.h + ":" + (targetMin ? 1 : 0);
+
+        // Already showing this exact live thumbnail at this exact pixel rect: skip tear-down (0 flicker!)
+        if (liveThumbSig[i] == sig && liveThumbHandles[i] != IntPtr.Zero && IsWindowVisible(liveThumbPool[i])) {
+          continue;
+        }
+
+        ClearLiveThumbSlot(i);
+
+        IntPtr slotWin = liveThumbPool[i];
+        IntPtr hThumb;
+        if (DwmRegisterThumbnail(slotWin, target, out hThumb) != 0 || hThumb == IntPtr.Zero) continue;
+
+        SIZE srcSize;
+        if (DwmQueryThumbnailSourceSize(hThumb, out srcSize) != 0 || srcSize.cx <= 0 || srcSize.cy <= 0) {
+          try { DwmUnregisterThumbnail(hThumb); } catch { }
+          continue;
+        }
+        // Minimized windows whose DWM surface collapsed to a tiny caption stub should fall back
+        // to the HTML card's cached full-window snapshot instead of drawing a tiny title bar.
+        if (targetMin && (srcSize.cx < 200 || srcSize.cy < 120)) {
+          try { DwmUnregisterThumbnail(hThumb); } catch { }
+          continue;
+        }
+
+        double scale = Math.Min((double)sp.w / srcSize.cx, (double)sp.h / srcSize.cy);
+        int dw = Math.Max(1, (int)Math.Round(srcSize.cx * scale));
+        int dh = Math.Max(1, (int)Math.Round(srcSize.cy * scale));
+        int dx = (sp.w - dw) / 2;
+        int dy = (sp.h - dh) / 2;
+
+        liveThumbHandles[i] = hThumb;
+        liveThumbSig[i] = sig;
+        DWM_THUMBNAIL_PROPERTIES props = new DWM_THUMBNAIL_PROPERTIES {
+          dwFlags = 0x0001 | 0x0004 | 0x0008, // DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE
+          rcDestination = new RECT { left = dx, top = dy, right = dx + dw, bottom = dy + dh },
+          opacity = 255,
+          fVisible = true
+        };
+        DwmUpdateThumbnailProperties(hThumb, ref props);
+
+        int r = Math.Max(0, sp.radius) * 2;
+        IntPtr rgn = CreateRoundRectRgn(0, 0, sp.w + 1, sp.h + 1, r, r);
+        if (rgn != IntPtr.Zero) {
+          SetWindowRgn(slotWin, rgn, false);
+        }
+
+        SetWindowPos(slotWin, new IntPtr(-1), sx, sy, sp.w, sp.h, 0x0010 | 0x0040); // SWP_NOACTIVATE | SWP_SHOWWINDOW
+      }
+    }
+
+    private static void ClearLivePeekOnThread(IntPtr overlay) {
+      if (activePeekThumb != IntPtr.Zero) {
+        try { DwmUnregisterThumbnail(activePeekThumb); } catch { }
+        activePeekThumb = IntPtr.Zero;
+      }
+      if (overlay != IntPtr.Zero) {
+        ShowWindow(overlay, 0); // SW_HIDE
+      }
+    }
+
+    private static void ApplyLivePeekOnThread(IntPtr overlay, IntPtr targetHwnd) {
+      ClearLivePeekOnThread(overlay);
+      if (overlay == IntPtr.Zero || targetHwnd == IntPtr.Zero || !IsWindow(targetHwnd)) return;
+
+      bool targetMin = IsIconic(targetHwnd);
+      // Already visible in front on screen: no need to paint a redundant topmost overlay over it
+      if (!targetMin && targetHwnd == lastExternalForeground) return;
+
+      IntPtr hThumb;
+      if (DwmRegisterThumbnail(overlay, targetHwnd, out hThumb) != 0 || hThumb == IntPtr.Zero) return;
+
+      SIZE srcSize;
+      if (DwmQueryThumbnailSourceSize(hThumb, out srcSize) != 0 || srcSize.cx <= 0 || srcSize.cy <= 0) {
+        try { DwmUnregisterThumbnail(hThumb); } catch { }
+        return;
+      }
+      // Never stretch a minimized caption-bar stub across the whole screen
+      if (targetMin && (srcSize.cx < 200 || srcSize.cy < 120)) {
+        try { DwmUnregisterThumbnail(hThumb); } catch { }
+        return;
+      }
+
+      RECT rc;
+      if (!targetMin) {
+        if (!GetWindowRect(targetHwnd, out rc)) {
+          try { DwmUnregisterThumbnail(hThumb); } catch { }
+          return;
+        }
+      } else {
+        WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+        wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+        if (!GetWindowPlacement(targetHwnd, ref wp)) {
+          try { DwmUnregisterThumbnail(hThumb); } catch { }
+          return;
+        }
+        bool wasMax = (wp.flags & 0x0002) != 0 || maximizedHwnds.Contains(targetHwnd.ToInt64());
+        if (wasMax) {
+          IntPtr mon = MonitorFromWindow(targetHwnd, 2);
+          MONITORINFO mi = new MONITORINFO();
+          mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi)) {
+            rc = mi.rcWork;
+          } else {
+            rc = wp.rcNormalPosition;
+          }
+        } else {
+          rc = wp.rcNormalPosition;
+        }
+      }
+
+      int w = rc.right - rc.left;
+      int h = rc.bottom - rc.top;
+      if (w < 80 || h < 60) {
+        try { DwmUnregisterThumbnail(hThumb); } catch { }
+        return;
+      }
+
+      activePeekThumb = hThumb;
+      DWM_THUMBNAIL_PROPERTIES props = new DWM_THUMBNAIL_PROPERTIES {
+        dwFlags = 0x0001 | 0x0004 | 0x0008, // DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE
+        rcDestination = new RECT { left = 0, top = 0, right = w, bottom = h },
+        opacity = 255,
+        fVisible = true
+      };
+      DwmUpdateThumbnailProperties(hThumb, ref props);
+
+      // Show overlay topmost without activating, then keep AuraBar dock & preview card above it
+      SetWindowPos(overlay, new IntPtr(-1), rc.left, rc.top, w, h, 0x0010 | 0x0040); // SWP_NOACTIVATE | SWP_SHOWWINDOW
+      if (dockHwnd != IntPtr.Zero && IsWindow(dockHwnd)) {
+        SetWindowPos(dockHwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+      }
+      lock (extraHwndsLock) {
+        for (int i = 0; i < extraDockHwnds.Count; i++) {
+          IntPtr eh = extraDockHwnds[i];
+          if (eh != IntPtr.Zero && IsWindow(eh)) {
+            SetWindowPos(eh, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+          }
+        }
+      }
+      RaiseLiveThumbsAboveDock();
+    }
+
+    private static void PeekOverlayLoop() {
+      try {
+        peekWndProcRef = new WndProcDelegate(PeekOverlayWndProc);
+        IntPtr hInst = GetModuleHandle(null);
+        liveThumbBrush = CreateSolidBrush(0x00141416u);
+        WNDCLASSEX wc = new WNDCLASSEX {
+          cbSize = (uint)Marshal.SizeOf(typeof(WNDCLASSEX)),
+          lpfnWndProc = Marshal.GetFunctionPointerForDelegate(peekWndProcRef),
+          hInstance = hInst,
+          lpszClassName = "AuraBarLivePeekOverlay"
+        };
+        RegisterClassEx(ref wc);
+
+        WNDCLASSEX tc = new WNDCLASSEX {
+          cbSize = (uint)Marshal.SizeOf(typeof(WNDCLASSEX)),
+          lpfnWndProc = Marshal.GetFunctionPointerForDelegate(peekWndProcRef),
+          hInstance = hInst,
+          hbrBackground = liveThumbBrush,
+          lpszClassName = "AuraBarLiveThumbSlot"
+        };
+        RegisterClassEx(ref tc);
+        // WS_POPUP (0x80000000), WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST
+        IntPtr h = CreateWindowEx(
+          0x080800A8u,
+          "AuraBarLivePeekOverlay",
+          "",
+          0x80000000u,
+          0, 0, 1, 1,
+          IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero
+        );
+        peekOverlayHwnd = h;
+        if (h == IntPtr.Zero) return;
+        SetLayeredWindowAttributes(h, 0, 255, 2); // LWA_ALPHA = 255 so WS_EX_TRANSPARENT is 100% click-through
+        MSG msg;
+        while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) {
+          TranslateMessage(ref msg);
+          DispatchMessage(ref msg);
+        }
+      } catch { }
+    }
+
+    private static void StartLivePeek(long hwndVal) {
+      IntPtr ov = peekOverlayHwnd;
+      if (ov != IntPtr.Zero && hwndVal != 0) {
+        PostMessage(ov, WM_PEEK_START, new IntPtr(hwndVal), IntPtr.Zero);
+      }
+    }
+
+    private static void StopLivePeek() {
+      IntPtr ov = peekOverlayHwnd;
+      if (ov != IntPtr.Zero) {
+        PostMessage(ov, WM_PEEK_STOP, IntPtr.Zero, IntPtr.Zero);
+      }
+    }
+
+    private static void SetLiveThumbs(string payload) {
+      IntPtr ov = peekOverlayHwnd;
+      if (ov == IntPtr.Zero) return;
+      List<LiveThumbSpec> list = new List<LiveThumbSpec>();
+      if (!string.IsNullOrWhiteSpace(payload)) {
+        string[] items = payload.Trim().Split(';');
+        for (int i = 0; i < items.Length; i++) {
+          string[] f = items[i].Split(',');
+          if (f.Length >= 5) {
+            long th;
+            int sx, sy, w, h, rad = 7;
+            if (long.TryParse(f[0], out th) &&
+                int.TryParse(f[1], out sx) &&
+                int.TryParse(f[2], out sy) &&
+                int.TryParse(f[3], out w) &&
+                int.TryParse(f[4], out h)) {
+              if (f.Length >= 6) int.TryParse(f[5], out rad);
+              list.Add(new LiveThumbSpec { targetHwnd = th, screenX = sx, screenY = sy, w = w, h = h, radius = rad });
+            }
+          }
+        }
+      }
+      lock (liveThumbLock) {
+        pendingThumbSpecs = list;
+      }
+      PostMessage(ov, WM_THUMBS_SYNC, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private static void ClearLiveThumbs() {
+      IntPtr ov = peekOverlayHwnd;
+      if (ov == IntPtr.Zero) return;
+      lock (liveThumbLock) {
+        pendingThumbSpecs = new List<LiveThumbSpec>();
+      }
+      PostMessage(ov, WM_THUMBS_CLEAR, IntPtr.Zero, IntPtr.Zero);
     }
 
     private static string CloseWindowByHwnd(long hwndVal) {
@@ -1312,7 +2091,137 @@ namespace AuraBarNative {
       return false;
     }
 
+    private static string ResolveKnownFolderPath(string rawPath) {
+      if (string.IsNullOrEmpty(rawPath)) return "";
+      string p = rawPath.Trim();
+      if (p.Length > 38 && p[0] == '{' && p[37] == '}') {
+        Guid g;
+        if (Guid.TryParse(p.Substring(1, 36), out g)) {
+          IntPtr ptr = IntPtr.Zero;
+          try {
+            if (SHGetKnownFolderPath(ref g, 0, IntPtr.Zero, out ptr) == 0 && ptr != IntPtr.Zero) {
+              string folder = Marshal.PtrToStringUni(ptr);
+              if (!string.IsNullOrEmpty(folder)) {
+                string rest = p.Substring(38).TrimStart('\\', '/');
+                p = Path.Combine(folder, rest);
+              }
+            }
+          } catch {
+          } finally {
+            if (ptr != IntPtr.Zero) CoTaskMemFree(ptr);
+          }
+        }
+      }
+      return p.Replace('/', '\\');
+    }
+
+    private static string CleanTrayTooltip(string tip) {
+      if (string.IsNullOrWhiteSpace(tip)) return "";
+      // Strip Unicode directional marks (LRE/PDF/LRM/RLM) Windows sometimes embeds in tray tooltips
+      StringBuilder sb = new StringBuilder(tip.Length);
+      for (int i = 0; i < tip.Length; i++) {
+        char c = tip[i];
+        if (c == '\r' || c == '\n') break;
+        if (c >= 0x200E && c <= 0x202E) continue;
+        sb.Append(c);
+      }
+      string clean = sb.ToString().Trim();
+      if (clean.Length == 0 || clean.Length > 42) return "";
+      return clean;
+    }
+
+    // Windows 11 records every app that registered a real Notification Area (system tray) icon
+    // under HKCU\Control Panel\NotifyIconSettings. Intersecting this with running user processes
+    // gives the exact Windows tray overflow list without non-tray windows or headless helpers.
+    private static Dictionary<string, string> GetRegisteredTrayIconExes() {
+      Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+      try {
+        using (RegistryKey root = Registry.CurrentUser.OpenSubKey(@"Control Panel\NotifyIconSettings", false)) {
+          if (root == null) return map;
+          string[] subNames = root.GetSubKeyNames();
+          for (int i = 0; i < subNames.Length; i++) {
+            try {
+              using (RegistryKey sub = root.OpenSubKey(subNames[i], false)) {
+                if (sub == null) continue;
+                string rawExe = sub.GetValue("ExecutablePath") as string;
+                if (string.IsNullOrWhiteSpace(rawExe)) continue;
+                string resolved = ResolveKnownFolderPath(rawExe);
+                if (string.IsNullOrEmpty(resolved)) continue;
+                string fileName = Path.GetFileName(resolved).ToLowerInvariant();
+                if (fileName == "explorer.exe" || fileName == "taskmgr.exe" ||
+                    fileName == "monotificationux.exe" || fileName == "aurabar.exe" ||
+                    fileName == "electron.exe" || fileName == "shellexperiencehost.exe") {
+                  continue;
+                }
+                string tip = CleanTrayTooltip(sub.GetValue("InitialTooltip") as string);
+                string existing;
+                if (!map.TryGetValue(resolved, out existing) || (string.IsNullOrEmpty(existing) && !string.IsNullOrEmpty(tip))) {
+                  map[resolved] = tip;
+                }
+              }
+            } catch { }
+          }
+        }
+      } catch { }
+      return map;
+    }
+
     private static string ListBackgroundAppsJson() {
+      int mySession = Process.GetCurrentProcess().SessionId;
+      Dictionary<string, string> byExe = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+      HashSet<string> seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+      Dictionary<string, string> registeredTray = GetRegisteredTrayIconExes();
+      if (registeredTray.Count > 0) {
+        Process[] procs = Process.GetProcesses();
+        for (int i = 0; i < procs.Length; i++) {
+          Process p = procs[i];
+          try {
+            if (p.SessionId != mySession) continue;
+            uint pid = (uint)p.Id;
+            ProcMeta meta = GetProcMeta(pid);
+            if (string.IsNullOrEmpty(meta.exePath)) continue;
+            if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+
+            string tip;
+            if (!registeredTray.TryGetValue(meta.exePath, out tip)) continue;
+            if (byExe.ContainsKey(meta.exePath)) continue;
+            if (!string.IsNullOrEmpty(meta.name) && !seenNames.Add(meta.name)) continue;
+
+            string displayName = !string.IsNullOrEmpty(tip) ? tip : "";
+            if (string.IsNullOrEmpty(displayName) &&
+                meta.name.Equals("SecurityHealthSystray", StringComparison.OrdinalIgnoreCase)) {
+              displayName = "Windows Security";
+            }
+            if (string.IsNullOrEmpty(displayName)) {
+              displayName = GetExeDisplayName(meta.exePath, meta.name);
+            }
+            string aumid = GetCachedAumid(pid);
+            string aumidPart = !string.IsNullOrEmpty(aumid)
+              ? ",\"aumid\":\"" + JsonEscape(aumid) + "\""
+              : "";
+
+            byExe[meta.exePath] = string.Format(
+              "{{\"pid\":{0},\"processName\":\"{1}\",\"displayName\":\"{2}\",\"executablePath\":\"{3}\"{4}}}",
+              pid,
+              JsonEscape(meta.name),
+              JsonEscape(displayName),
+              JsonEscape(meta.exePath),
+              aumidPart
+            );
+            if (byExe.Count >= 24) break;
+          } catch {
+          } finally {
+            p.Dispose();
+          }
+        }
+
+        string[] trayArr = new string[byExe.Count];
+        byExe.Values.CopyTo(trayArr, 0);
+        return "[" + string.Join(",", trayArr) + "]";
+      }
+
+      // Fallback for Windows 10 where NotifyIconSettings does not exist
       HashSet<string> taskbarExePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
       EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
         if (!IsTaskbarWindow(hWnd)) return true;
@@ -1330,12 +2239,9 @@ namespace AuraBarNative {
         return true;
       }, IntPtr.Zero);
 
-      int mySession = Process.GetCurrentProcess().SessionId;
-      Dictionary<string, string> byExe = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-      Process[] procs = Process.GetProcesses();
-      for (int i = 0; i < procs.Length; i++) {
-        Process p = procs[i];
+      Process[] fallbackProcs = Process.GetProcesses();
+      for (int i = 0; i < fallbackProcs.Length; i++) {
+        Process p = fallbackProcs[i];
         try {
           if (p.SessionId != mySession) continue;
           uint pid = (uint)p.Id;
@@ -1345,6 +2251,7 @@ namespace AuraBarNative {
           if (taskbarExePaths.Contains(meta.exePath)) continue;
           if (byExe.ContainsKey(meta.exePath)) continue;
           if (GetPESubsystem(meta.exePath) != 2) continue;
+          if (ExtractIconEx(meta.exePath, -1, null, null, 0) <= 0) continue;
 
           string displayName = GetExeDisplayName(meta.exePath, meta.name);
           string aumid = GetCachedAumid(pid);
@@ -1622,6 +2529,613 @@ namespace AuraBarNative {
       return GetVolumeJson();
     }
 
+    private static PROPERTYKEY PKEY_Device_FriendlyName = new PROPERTYKEY {
+      fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"),
+      pid = 14
+    };
+
+    private static PROPERTYKEY PKEY_AppUserModel_ID = new PROPERTYKEY {
+      fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+      pid = 5
+    };
+
+    private static string ReadAppIdFromStore(IPropertyStore store) {
+      if (store == null) return "";
+      try {
+        PROPVARIANT pv;
+        if (store.GetValue(ref PKEY_AppUserModel_ID, out pv) == 0) {
+          try {
+            if (pv.vt == 31 && pv.p != IntPtr.Zero) {
+              return (Marshal.PtrToStringUni(pv.p) ?? "").Trim();
+            }
+          } finally {
+            PropVariantClear(ref pv);
+          }
+        }
+      } catch { }
+      return "";
+    }
+
+    private static string GetCachedWindowAppId(IntPtr hWnd) {
+      long key = hWnd.ToInt64();
+      string cached;
+      if (winAppIdCache.TryGetValue(key, out cached)) return cached;
+      string appId = "";
+      try {
+        Guid iid = typeof(IPropertyStore).GUID;
+        IPropertyStore store;
+        if (SHGetPropertyStoreForWindow(hWnd, ref iid, out store) == 0 && store != null) {
+          appId = ReadAppIdFromStore(store);
+        }
+      } catch { }
+      if (winAppIdCache.Count > 250) winAppIdCache.Clear();
+      winAppIdCache[key] = appId;
+      return appId;
+    }
+
+    private static string GetShortcutAppId(string filePath) {
+      if (string.IsNullOrWhiteSpace(filePath)) return "";
+      try {
+        Guid iid = typeof(IPropertyStore).GUID;
+        IPropertyStore store;
+        if (SHGetPropertyStoreFromParsingName(filePath, IntPtr.Zero, 0, ref iid, out store) == 0 && store != null) {
+          return ReadAppIdFromStore(store);
+        }
+      } catch { }
+      return "";
+    }
+
+    // Wakes a tray-minimized app's hidden main window (e.g. Medal, Discord, Spotify) when the
+    // user clicks its pinned icon, avoiding launching a redundant second instance.
+    private static string WakeHiddenApp(string exeName, string installDir) {
+      string wantExe = (exeName ?? "").Trim().ToLowerInvariant();
+      string wantDir = (installDir ?? "").Trim().ToLowerInvariant();
+      if (wantExe.Length == 0 && wantDir.Length == 0) return "none";
+
+      Dictionary<string, string> trayExes = GetRegisteredTrayIconExes();
+      if (trayExes.Count == 0) return "none";
+
+      int mySession = Process.GetCurrentProcess().SessionId;
+      HashSet<uint> matchingPids = new HashSet<uint>();
+      Process[] procs = Process.GetProcesses();
+      for (int i = 0; i < procs.Length; i++) {
+        Process p = procs[i];
+        try {
+          if (p.SessionId != mySession) continue;
+          uint pid = (uint)p.Id;
+          ProcMeta meta = GetProcMeta(pid);
+          if (string.IsNullOrEmpty(meta.exePath)) continue;
+          if (!trayExes.ContainsKey(meta.exePath)) continue;
+          bool match = false;
+          if (wantExe.Length > 0 && meta.name.Equals(wantExe, StringComparison.OrdinalIgnoreCase)) {
+            match = true;
+          } else if (wantDir.Length > 0 &&
+              meta.exePath.StartsWith(wantDir + "\\", StringComparison.OrdinalIgnoreCase)) {
+            match = true;
+          }
+          if (match) matchingPids.Add(pid);
+        } catch {
+        } finally {
+          p.Dispose();
+        }
+      }
+      if (matchingPids.Count == 0) return "none";
+
+      IntPtr foundWin = IntPtr.Zero;
+      EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+        uint wPid;
+        GetWindowThreadProcessId(hWnd, out wPid);
+        if (!matchingPids.Contains(wPid)) return true;
+        if (IsTaskbarWindow(hWnd)) {
+          foundWin = hWnd;
+          return false;
+        }
+        if (foundWin == IntPtr.Zero && IsWindow(hWnd) && !IsCloaked(hWnd)) {
+          int style = GetWindowLong(hWnd, GWL_STYLE);
+          int len = GetWindowTextLength(hWnd);
+          RECT rc;
+          if (len > 0 && (style & 0x00C00000) != 0 && GetWindowRect(hWnd, out rc)) {
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            if (w >= 240 && h >= 160) {
+              foundWin = hWnd;
+            }
+          }
+        }
+        return true;
+      }, IntPtr.Zero);
+
+      if (foundWin == IntPtr.Zero) return "none";
+      if (!IsWindowVisible(foundWin)) ShowWindow(foundWin, 5);
+      ForceFocus(foundWin);
+      lastExternalForeground = foundWin;
+      return "focused";
+    }
+
+    private static string GetDeviceFriendlyName(IMMDevice dev) {
+      if (dev == null) return "";
+      try {
+        IPropertyStore store;
+        if (dev.OpenPropertyStore(0, out store) != 0 || store == null) return "";
+        PROPVARIANT pv;
+        if (store.GetValue(ref PKEY_Device_FriendlyName, out pv) == 0) {
+          try {
+            if (pv.vt == 31 && pv.p != IntPtr.Zero) {
+              return Marshal.PtrToStringUni(pv.p) ?? "";
+            }
+          } finally {
+            PropVariantClear(ref pv);
+          }
+        }
+      } catch { }
+      return "";
+    }
+
+    private static string GetAudioDevicesJson() {
+      try {
+        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        string defaultId = "";
+        try {
+          IMMDevice defDev;
+          if (enumerator.GetDefaultAudioEndpoint(0, 1, out defDev) == 0 && defDev != null) {
+            defDev.GetId(out defaultId);
+          }
+        } catch { }
+
+        IMMDeviceCollection col;
+        if (enumerator.EnumAudioEndpoints(0, 1, out col) != 0 || col == null) return "[]";
+        uint count;
+        if (col.GetCount(out count) != 0) return "[]";
+
+        StringBuilder sb = new StringBuilder("[");
+        bool first = true;
+        for (uint i = 0; i < count; i++) {
+          IMMDevice dev;
+          if (col.Item(i, out dev) != 0 || dev == null) continue;
+          string id;
+          if (dev.GetId(out id) != 0 || string.IsNullOrEmpty(id)) continue;
+          string name = GetDeviceFriendlyName(dev);
+          if (string.IsNullOrEmpty(name)) name = "Audio Device";
+          bool isDef = string.Equals(id, defaultId, StringComparison.OrdinalIgnoreCase);
+          if (!first) sb.Append(',');
+          first = false;
+          sb.Append("{\"id\":\"").Append(JsonEscape(id))
+            .Append("\",\"name\":\"").Append(JsonEscape(name))
+            .Append("\",\"isDefault\":").Append(isDef ? "true" : "false")
+            .Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+      } catch {
+        return "[]";
+      }
+    }
+
+    private static string SetDefaultAudioDevice(string deviceId) {
+      if (!string.IsNullOrEmpty(deviceId)) {
+        try {
+          IPolicyConfig policy = (IPolicyConfig)new PolicyConfigClientComObject();
+          policy.SetDefaultEndpoint(deviceId, 0);
+          policy.SetDefaultEndpoint(deviceId, 1);
+          policy.SetDefaultEndpoint(deviceId, 2);
+        } catch { }
+      }
+      return GetAudioDevicesJson();
+    }
+
+    private static string ComputeAudioSessionKey(IAudioSessionControl2 ctrl2, out string displayName, out string exePath, out bool isSystem) {
+      displayName = "";
+      exePath = "";
+      isSystem = false;
+      try {
+        if (ctrl2.IsSystemSoundsSession() == 0) {
+          isSystem = true;
+          displayName = "System Sounds";
+          return "system";
+        }
+        uint pid = 0;
+        ctrl2.GetProcessId(out pid);
+        if (pid == 0) {
+          isSystem = true;
+          displayName = "System Sounds";
+          return "system";
+        }
+        ProcMeta meta = GetProcMeta(pid);
+        exePath = meta.exePath ?? "";
+        string procName = meta.name ?? "";
+        if (!string.IsNullOrEmpty(exePath)) {
+          displayName = GetExeDisplayName(exePath, procName);
+        }
+        if (string.IsNullOrEmpty(displayName)) {
+          string rawName;
+          if (ctrl2.GetDisplayName(out rawName) == 0 && !string.IsNullOrEmpty(rawName) && !rawName.StartsWith("@")) {
+            displayName = rawName.Trim();
+          }
+        }
+        if (string.IsNullOrEmpty(displayName)) {
+          displayName = !string.IsNullOrEmpty(procName) ? procName : ("App " + pid);
+        }
+        return !string.IsNullOrEmpty(procName) ? procName.ToLowerInvariant() : ("pid:" + pid);
+      } catch {
+        return "";
+      }
+    }
+
+    private class AudioSessionGroup {
+      public string id;
+      public string name;
+      public string exePath;
+      public int volume;
+      public bool muted;
+      public bool isSystem;
+      public bool active;
+    }
+
+    private static string GetAudioSessionsJson() {
+      try {
+        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        IMMDevice device;
+        if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "[]";
+        Guid iid = typeof(IAudioSessionManager2).GUID;
+        object obj;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "[]";
+        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (mgr == null) return "[]";
+
+        IAudioSessionEnumerator sessionEnum;
+        if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "[]";
+        int count;
+        if (sessionEnum.GetCount(out count) != 0) return "[]";
+
+        Dictionary<string, AudioSessionGroup> grouped = new Dictionary<string, AudioSessionGroup>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < count; i++) {
+          IAudioSessionControl ctrl;
+          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+          int state = 0;
+          ctrl.GetState(out state);
+          if (state == 2) continue; // Expired
+
+          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+          if (ctrl2 == null || vol == null) continue;
+
+          string name, exePath;
+          bool isSys;
+          string key = ComputeAudioSessionKey(ctrl2, out name, out exePath, out isSys);
+          if (string.IsNullOrEmpty(key)) continue;
+
+          float scalar = 1f;
+          bool muted = false;
+          vol.GetMasterVolume(out scalar);
+          vol.GetMute(out muted);
+          int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100f)));
+          bool active = state == 1;
+
+          AudioSessionGroup existing;
+          if (grouped.TryGetValue(key, out existing)) {
+            if (active && !existing.active) {
+              existing.active = true;
+              existing.volume = pct;
+              existing.muted = muted;
+            }
+            if (string.IsNullOrEmpty(existing.exePath) && !string.IsNullOrEmpty(exePath)) {
+              existing.exePath = exePath;
+            }
+          } else {
+            grouped[key] = new AudioSessionGroup {
+              id = key,
+              name = name,
+              exePath = exePath,
+              volume = pct,
+              muted = muted,
+              isSystem = isSys,
+              active = active
+            };
+          }
+        }
+
+        List<AudioSessionGroup> list = new List<AudioSessionGroup>(grouped.Values);
+        list.Sort(delegate(AudioSessionGroup a, AudioSessionGroup b) {
+          if (a.isSystem != b.isSystem) return a.isSystem ? -1 : 1;
+          if (a.active != b.active) return a.active ? -1 : 1;
+          return string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase);
+        });
+
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < list.Count; i++) {
+          AudioSessionGroup g = list[i];
+          if (i > 0) sb.Append(',');
+          sb.Append("{\"id\":\"").Append(JsonEscape(g.id))
+            .Append("\",\"name\":\"").Append(JsonEscape(g.name))
+            .Append("\",\"exePath\":\"").Append(JsonEscape(g.exePath))
+            .Append("\",\"volume\":").Append(g.volume)
+            .Append(",\"muted\":").Append(g.muted ? "true" : "false")
+            .Append(",\"isSystem\":").Append(g.isSystem ? "true" : "false")
+            .Append(",\"active\":").Append(g.active ? "true" : "false")
+            .Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+      } catch {
+        return "[]";
+      }
+    }
+
+    private static string SetAudioSessionVolume(string targetKey, int pct) {
+      if (string.IsNullOrEmpty(targetKey)) return "ok";
+      try {
+        int clamped = Math.Max(0, Math.Min(100, pct));
+        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        IMMDevice device;
+        if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "ok";
+        Guid iid = typeof(IAudioSessionManager2).GUID;
+        object obj;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "ok";
+        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (mgr == null) return "ok";
+
+        IAudioSessionEnumerator sessionEnum;
+        if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "ok";
+        int count;
+        if (sessionEnum.GetCount(out count) != 0) return "ok";
+
+        Guid ctx = Guid.Empty;
+        for (int i = 0; i < count; i++) {
+          IAudioSessionControl ctrl;
+          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+          int state = 0;
+          ctrl.GetState(out state);
+          if (state == 2) continue;
+          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+          if (ctrl2 == null || vol == null) continue;
+
+          string dn, ep;
+          bool isSys;
+          string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
+          if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
+            vol.SetMasterVolume(clamped / 100f, ref ctx);
+            if (clamped > 0) vol.SetMute(false, ref ctx);
+          }
+        }
+      } catch { }
+      return "ok";
+    }
+
+    private static string ToggleAudioSessionMute(string targetKey) {
+      if (string.IsNullOrEmpty(targetKey)) return "ok";
+      try {
+        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        IMMDevice device;
+        if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "ok";
+        Guid iid = typeof(IAudioSessionManager2).GUID;
+        object obj;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "ok";
+        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (mgr == null) return "ok";
+
+        IAudioSessionEnumerator sessionEnum;
+        if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "ok";
+        int count;
+        if (sessionEnum.GetCount(out count) != 0) return "ok";
+
+        List<ISimpleAudioVolume> matches = new List<ISimpleAudioVolume>();
+        for (int i = 0; i < count; i++) {
+          IAudioSessionControl ctrl;
+          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+          int state = 0;
+          ctrl.GetState(out state);
+          if (state == 2) continue;
+          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+          if (ctrl2 == null || vol == null) continue;
+
+          string dn, ep;
+          bool isSys;
+          string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
+          if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
+            matches.Add(vol);
+          }
+        }
+
+        if (matches.Count > 0) {
+          bool curMuted = false;
+          matches[0].GetMute(out curMuted);
+          bool nextMuted = !curMuted;
+          Guid ctx = Guid.Empty;
+          for (int i = 0; i < matches.Count; i++) {
+            matches[i].SetMute(nextMuted, ref ctx);
+          }
+        }
+      } catch { }
+      return "ok";
+    }
+
+    // Brightness backend: 0 = unknown, 1 = WMI (laptop), 2 = DDC/CI (desktop monitor), -1 = unsupported
+    private static int brightnessBackend = 0;
+    private static ManagementObject cachedWmiBrightMethod = null;
+
+    private static bool TryGetWmiBrightness(out int level) {
+      level = 100;
+      try {
+        using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("root\\WMI", "SELECT CurrentBrightness FROM WmiMonitorBrightness"))
+        using (ManagementObjectCollection results = searcher.Get()) {
+          foreach (ManagementObject obj in results) {
+            object val = obj["CurrentBrightness"];
+            if (val != null) {
+              level = Math.Max(0, Math.Min(100, Convert.ToInt32(val)));
+              return true;
+            }
+          }
+        }
+      } catch { }
+      return false;
+    }
+
+    private static bool TrySetWmiBrightness(int pct) {
+      try {
+        byte b = (byte)Math.Max(0, Math.Min(100, pct));
+        if (cachedWmiBrightMethod == null) {
+          using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM WmiMonitorBrightnessMethods"))
+          using (ManagementObjectCollection results = searcher.Get()) {
+            foreach (ManagementObject obj in results) {
+              cachedWmiBrightMethod = obj;
+              break;
+            }
+          }
+        }
+        if (cachedWmiBrightMethod != null) {
+          cachedWmiBrightMethod.InvokeMethod("WmiSetBrightness", new object[] { (uint)0, b });
+          return true;
+        }
+      } catch {
+        cachedWmiBrightMethod = null;
+      }
+      return false;
+    }
+
+    private static bool TryGetDdcciBrightness(out int level) {
+      level = 100;
+      try {
+        POINT origin = new POINT { X = 0, Y = 0 };
+        IntPtr hMon = MonitorFromPoint(origin, 1);
+        if (hMon == IntPtr.Zero) return false;
+        uint count;
+        if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMon, out count) || count == 0) return false;
+        PHYSICAL_MONITOR[] mons = new PHYSICAL_MONITOR[count];
+        if (!GetPhysicalMonitorsFromHMONITOR(hMon, count, mons)) return false;
+        try {
+          uint minB, curB, maxB;
+          if (GetMonitorBrightness(mons[0].hPhysicalMonitor, out minB, out curB, out maxB) && maxB > minB) {
+            level = Math.Max(0, Math.Min(100, (int)Math.Round(((double)(curB - minB) / (maxB - minB)) * 100.0)));
+            return true;
+          }
+        } finally {
+          DestroyPhysicalMonitors(count, mons);
+        }
+      } catch { }
+      return false;
+    }
+
+    private static bool TrySetDdcciBrightness(int pct) {
+      try {
+        int clamped = Math.Max(0, Math.Min(100, pct));
+        POINT origin = new POINT { X = 0, Y = 0 };
+        IntPtr hMon = MonitorFromPoint(origin, 1);
+        if (hMon == IntPtr.Zero) return false;
+        uint count;
+        if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMon, out count) || count == 0) return false;
+        PHYSICAL_MONITOR[] mons = new PHYSICAL_MONITOR[count];
+        if (!GetPhysicalMonitorsFromHMONITOR(hMon, count, mons)) return false;
+        try {
+          bool any = false;
+          for (uint i = 0; i < count; i++) {
+            uint minB, curB, maxB;
+            if (GetMonitorBrightness(mons[i].hPhysicalMonitor, out minB, out curB, out maxB) && maxB > minB) {
+              uint target = minB + (uint)Math.Round((clamped / 100.0) * (maxB - minB));
+              if (SetMonitorBrightness(mons[i].hPhysicalMonitor, target)) any = true;
+            }
+          }
+          return any;
+        } finally {
+          DestroyPhysicalMonitors(count, mons);
+        }
+      } catch { }
+      return false;
+    }
+
+    private static string GetBrightnessJson() {
+      int level = 100;
+      if (brightnessBackend == 0) {
+        if (TryGetWmiBrightness(out level)) {
+          brightnessBackend = 1;
+          return "{\"supported\":true,\"level\":" + level + "}";
+        }
+        if (TryGetDdcciBrightness(out level)) {
+          brightnessBackend = 2;
+          return "{\"supported\":true,\"level\":" + level + "}";
+        }
+        brightnessBackend = -1;
+        return "{\"supported\":false,\"level\":100}";
+      }
+      if (brightnessBackend == 1 && TryGetWmiBrightness(out level)) {
+        return "{\"supported\":true,\"level\":" + level + "}";
+      }
+      if (brightnessBackend == 2 && TryGetDdcciBrightness(out level)) {
+        return "{\"supported\":true,\"level\":" + level + "}";
+      }
+      return "{\"supported\":false,\"level\":100}";
+    }
+
+    private static string SetBrightnessLevel(int pct) {
+      int clamped = Math.Max(0, Math.Min(100, pct));
+      if (brightnessBackend == 0) GetBrightnessJson();
+      if (brightnessBackend == 1) {
+        if (TrySetWmiBrightness(clamped)) return "{\"supported\":true,\"level\":" + clamped + "}";
+      } else if (brightnessBackend == 2) {
+        if (TrySetDdcciBrightness(clamped)) return "{\"supported\":true,\"level\":" + clamped + "}";
+      }
+      return "{\"supported\":false,\"level\":100}";
+    }
+
+    private const string NIGHT_LIGHT_REG_PATH =
+      @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate";
+
+    private static string GetNightLightJson() {
+      try {
+        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(NIGHT_LIGHT_REG_PATH, false)) {
+          if (key == null) return "{\"supported\":false,\"enabled\":false}";
+          byte[] data = key.GetValue("Data") as byte[];
+          if (data == null || data.Length < 25) return "{\"supported\":false,\"enabled\":false}";
+          if (data[18] == 0x15) return "{\"supported\":true,\"enabled\":true}";
+          if (data[18] == 0x13) return "{\"supported\":true,\"enabled\":false}";
+        }
+      } catch { }
+      return "{\"supported\":false,\"enabled\":false}";
+    }
+
+    private static string ToggleNightLight() {
+      try {
+        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(NIGHT_LIGHT_REG_PATH, true)) {
+          if (key == null) return "{\"supported\":false,\"enabled\":false}";
+          byte[] data = key.GetValue("Data") as byte[];
+          if (data == null || data.Length < 25) return "{\"supported\":false,\"enabled\":false}";
+          bool isOn = data[18] == 0x15;
+          bool isOff = data[18] == 0x13;
+          if (!isOn && !isOff) return "{\"supported\":false,\"enabled\":false}";
+
+          byte[] next;
+          if (isOn) {
+            next = new byte[data.Length - 2];
+            Array.Copy(data, 0, next, 0, 23);
+            Array.Copy(data, 25, next, 23, data.Length - 25);
+            next[18] = 0x13;
+          } else {
+            next = new byte[data.Length + 2];
+            Array.Copy(data, 0, next, 0, 23);
+            next[23] = 0x10;
+            next[24] = 0x00;
+            Array.Copy(data, 23, next, 25, data.Length - 23);
+            next[18] = 0x15;
+          }
+
+          // Bump the 5-byte CloudStore timestamp so Shell picks up the change immediately
+          for (int i = 10; i < 15; i++) {
+            if (next[i] != 0xFF) {
+              next[i] = (byte)(next[i] + 1);
+              break;
+            }
+            next[i] = 0x00;
+          }
+
+          key.SetValue("Data", next, RegistryValueKind.Binary);
+          return "{\"supported\":true,\"enabled\":" + (!isOn ? "true" : "false") + "}";
+        }
+      } catch {
+        return "{\"supported\":false,\"enabled\":false}";
+      }
+    }
+
     private static string GetKbdLang() {
       IntPtr fg = lastExternalForeground != IntPtr.Zero ? lastExternalForeground : GetForegroundWindow();
       uint dummy;
@@ -1651,10 +3165,105 @@ namespace AuraBarNative {
       }
     }
 
-    private static string GetFileIconDataUrl(string filePath) {
+    private static string HBitmapToPngDataUrl(IntPtr hbm) {
+      if (hbm == IntPtr.Zero) return "";
+      try {
+        GDI_BITMAP bm;
+        if (GetObject(hbm, Marshal.SizeOf(typeof(GDI_BITMAP)), out bm) == 0) return "";
+        int w = bm.bmWidth;
+        int h = bm.bmHeight;
+        if (w <= 0 || h <= 0 || w > 512 || h > 512) return "";
+
+        byte[] raw = new byte[w * h * 4];
+        BITMAPINFOHEADER bih = new BITMAPINFOHEADER {
+          biSize = (uint)Marshal.SizeOf(typeof(BITMAPINFOHEADER)),
+          biWidth = w,
+          biHeight = -h, // top-down DIB
+          biPlanes = 1,
+          biBitCount = 32,
+          biCompression = 0 // BI_RGB
+        };
+        IntPtr hdc = CreateCompatibleDC(IntPtr.Zero);
+        if (hdc == IntPtr.Zero) return "";
+        try {
+          if (GetDIBits(hdc, hbm, 0, (uint)h, raw, ref bih, 0) == 0) return "";
+        } finally {
+          DeleteDC(hdc);
+        }
+
+        bool hasAlpha = false;
+        for (int i = 3; i < raw.Length; i += 4) {
+          if (raw[i] != 0) { hasAlpha = true; break; }
+        }
+        if (!hasAlpha) {
+          for (int i = 3; i < raw.Length; i += 4) raw[i] = 255;
+        }
+
+        // IShellItemImageFactory produces premultiplied 32-bit ARGB (PARGB); locking as
+        // Format32bppPArgb lets GDI+ un-premultiply cleanly when encoding PNG with full alpha.
+        PixelFormat fmt = hasAlpha ? PixelFormat.Format32bppPArgb : PixelFormat.Format32bppArgb;
+        using (Bitmap bmp = new Bitmap(w, h, fmt)) {
+          BitmapData bd = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, fmt);
+          try {
+            Marshal.Copy(raw, 0, bd.Scan0, raw.Length);
+          } finally {
+            bmp.UnlockBits(bd);
+          }
+          using (MemoryStream ms = new MemoryStream()) {
+            bmp.Save(ms, ImageFormat.Png);
+            return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+          }
+        }
+      } catch {
+        return "";
+      }
+    }
+
+    private static string GetShellItemIconDataUrl(string filePath, int size) {
+      try {
+        Guid iid = typeof(IShellItemImageFactory).GUID;
+        IShellItemImageFactory factory;
+        if (SHCreateItemFromParsingName(filePath, IntPtr.Zero, ref iid, out factory) != 0 || factory == null) {
+          return "";
+        }
+        IntPtr hbm = IntPtr.Zero;
+        // SIIGBF_BIGGERSIZEOK (0x01) | SIIGBF_ICONONLY (0x04) = 0x05
+        int hr = factory.GetImage(new SIZE { cx = size, cy = size }, 0x05, out hbm);
+        if (hr != 0 || hbm == IntPtr.Zero) {
+          hr = factory.GetImage(new SIZE { cx = size, cy = size }, 0x01, out hbm);
+        }
+        if (hr != 0 || hbm == IntPtr.Zero) return "";
+        try {
+          return HBitmapToPngDataUrl(hbm);
+        } finally {
+          DeleteObject(hbm);
+        }
+      } catch {
+        return "";
+      }
+    }
+
+    private static string GetFileIconDataUrl(string filePath, bool strictExe) {
       if (string.IsNullOrEmpty(filePath)) return "";
+
+      bool isShellPath = filePath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase);
+
+      // When strictExe is requested (for running windows), skip .exe files that have zero
+      // embedded icon resources so the caller can fall back to the window's live WM_GETICON
+      // instead of caching Windows' generic white default-exe box.
+      if (strictExe && !isShellPath && filePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
+        if (ExtractIconEx(filePath, -1, null, null, 0) <= 0) {
+          return "";
+        }
+      }
+
+      // Primary: IShellItemImageFactory — renders crisp 48x48 transparent icons for ALL UWP /
+      // MSIX / SystemApps (Settings, Calculator, Photos, Store, Terminal...) as well as Win32 exes.
+      string shellImg = GetShellItemIconDataUrl(filePath, 48);
+      if (shellImg.Length > 0) return shellImg;
+
       SHFILEINFO shfi = new SHFILEINFO();
-      if (filePath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)) {
+      if (isShellPath) {
         IntPtr pidl = IntPtr.Zero;
         uint sfgao = 0;
         int hr = SHParseDisplayName(filePath, IntPtr.Zero, out pidl, 0, out sfgao);
@@ -1768,8 +3377,8 @@ namespace AuraBarNative {
           using (Bitmap thumb = new Bitmap(tw, th, PixelFormat.Format24bppRgb))
           using (Graphics g2 = Graphics.FromImage(thumb))
           using (MemoryStream ms = new MemoryStream()) {
-            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            g2.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            g2.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighSpeed;
             g2.DrawImage(full, new Rectangle(0, 0, tw, th), crop, GraphicsUnit.Pixel);
 
             ImageCodecInfo jpeg = null;
@@ -1827,15 +3436,11 @@ namespace AuraBarNative {
       RECT rc = new RECT { left = left, top = top, right = right, bottom = bottom };
       desiredWorkArea = rc;
       hasDesiredWorkArea = true;
+      primaryWorkAreaBackoffUntil = 0;
       SystemParametersInfo(0x002F, 0, ref rc, 0);
-      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
-        if (IsWindowVisible(hWnd) && IsZoomed(hWnd) && (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) != 0) {
-          ShowWindowAsync(hWnd, 9);
-          Thread.Sleep(25);
-          ShowWindowAsync(hWnd, 3);
-        }
-        return true;
-      }, IntPtr.Zero);
+      POINT origin = new POINT();
+      IntPtr primaryMon = MonitorFromPoint(origin, 1);
+      RefitMaximizedOnMonitor(primaryMon, rc);
     }
 
     private static void RestoreWindowsTaskbar() {
@@ -1923,6 +3528,7 @@ namespace AuraBarNative {
           savedSecWorkAreas[mon] = mi.rcWork;
         }
         desiredSecWorkAreas[mon] = want;
+        secWorkAreaBackoffUntil.Remove(mon);
       }
 
       RECT cur = mi.rcWork;
@@ -1976,7 +3582,15 @@ namespace AuraBarNative {
     }
 
     public static void Main(string[] args) {
-      SetProcessDPIAware();
+      // Per-Monitor DPI Aware v2 so multi-monitor setups with mixed scaling (e.g. 150% + 100%)
+      // use true physical pixel coordinates on every monitor without DWM virtualization drift.
+      try {
+        if (!SetProcessDpiAwarenessContext(new IntPtr(-4))) {
+          SetProcessDPIAware();
+        }
+      } catch {
+        SetProcessDPIAware();
+      }
       if (args.Length > 0) {
         int.TryParse(args[0], out parentElectronPid);
       }
@@ -1984,6 +3598,11 @@ namespace AuraBarNative {
       Thread pollThread = new Thread(PollForegroundLoop);
       pollThread.IsBackground = true;
       pollThread.Start();
+
+      Thread peekThread = new Thread(PeekOverlayLoop);
+      peekThread.IsBackground = true;
+      peekThread.SetApartmentState(ApartmentState.STA);
+      peekThread.Start();
 
       Console.InputEncoding = Encoding.UTF8;
       Console.OutputEncoding = Encoding.UTF8;
@@ -2010,6 +3629,22 @@ namespace AuraBarNative {
           } else if (line.StartsWith("TOGGLE ")) {
             long hv = long.Parse(line.Substring(7).Trim());
             Reply(ToggleWindow(hv));
+          } else if (line.StartsWith("FOCUS ")) {
+            long hv = long.Parse(line.Substring(6).Trim());
+            Reply(ActivateWindow(hv));
+          } else if (line.StartsWith("PEEK_START ")) {
+            long hv = long.Parse(line.Substring(11).Trim());
+            StartLivePeek(hv);
+            Reply("ok");
+          } else if (line == "PEEK_STOP") {
+            StopLivePeek();
+            Reply("ok");
+          } else if (line.StartsWith("LIVE_THUMBS ")) {
+            SetLiveThumbs(line.Substring(12).Trim());
+            Reply("ok");
+          } else if (line == "LIVE_THUMBS_CLEAR") {
+            ClearLiveThumbs();
+            Reply("ok");
           } else if (line.StartsWith("CLOSE_WIN ")) {
             long hv = long.Parse(line.Substring(10).Trim());
             Reply(CloseWindowByHwnd(hv));
@@ -2055,6 +3690,33 @@ namespace AuraBarNative {
             Reply("ok");
           } else if (line == "VOL_MUTE") {
             Reply(ToggleVolumeMute());
+          } else if (line == "AUDIO_DEVICES") {
+            Reply(GetAudioDevicesJson());
+          } else if (line.StartsWith("AUDIO_SET_DEVICE ")) {
+            Reply(SetDefaultAudioDevice(line.Substring(17).Trim()));
+          } else if (line == "AUDIO_SESSIONS") {
+            Reply(GetAudioSessionsJson());
+          } else if (line.StartsWith("AUDIO_SESSION_VOL ")) {
+            string rest = line.Substring(18).Trim();
+            int sp2 = rest.IndexOf(' ');
+            if (sp2 > 0) {
+              int pct = int.Parse(rest.Substring(0, sp2));
+              string key = rest.Substring(sp2 + 1).Trim();
+              Reply(SetAudioSessionVolume(key, pct));
+            } else {
+              Reply("ok");
+            }
+          } else if (line.StartsWith("AUDIO_SESSION_MUTE ")) {
+            Reply(ToggleAudioSessionMute(line.Substring(19).Trim()));
+          } else if (line == "BRIGHT_GET") {
+            Reply(GetBrightnessJson());
+          } else if (line.StartsWith("BRIGHT_SET ")) {
+            int pct = int.Parse(line.Substring(11).Trim());
+            Reply(SetBrightnessLevel(pct));
+          } else if (line == "NIGHTLIGHT_GET") {
+            Reply(GetNightLightJson());
+          } else if (line == "NIGHTLIGHT_TOGGLE") {
+            Reply(ToggleNightLight());
           } else if (line == "MEDIA_PLAYPAUSE") {
             TapKey(0xB3);
             Reply("ok");
@@ -2177,8 +3839,18 @@ namespace AuraBarNative {
           } else if (line.StartsWith("KEEP_TOP ")) {
             keepOnTop = line.Substring(9).Trim() != "0";
             Reply("ok");
+          } else if (line.StartsWith("ICON_STRICT ")) {
+            Reply(GetFileIconDataUrl(line.Substring(12).Trim(), true));
           } else if (line.StartsWith("ICON ")) {
-            Reply(GetFileIconDataUrl(line.Substring(5).Trim()));
+            Reply(GetFileIconDataUrl(line.Substring(5).Trim(), false));
+          } else if (line.StartsWith("LNK_APPID ")) {
+            Reply(GetShortcutAppId(line.Substring(10).Trim()));
+          } else if (line.StartsWith("WAKE_HIDDEN ")) {
+            string arg = line.Substring(12).Trim();
+            int sep = arg.IndexOf('|');
+            string ex = sep >= 0 ? arg.Substring(0, sep) : arg;
+            string dir = sep >= 0 ? arg.Substring(sep + 1) : "";
+            Reply(WakeHiddenApp(ex, dir));
           } else if (line.StartsWith("THUMB ")) {
             string[] parts = line.Substring(6).Trim().Split(' ');
             Reply(GetWindowThumbDataUrl(long.Parse(parts[0])));
@@ -2186,6 +3858,8 @@ namespace AuraBarNative {
             long hv = long.Parse(line.Substring(8).Trim());
             Reply(GetWindowIconDataUrl(hv));
           } else if (line == "EXIT") {
+            StopLivePeek();
+            ClearLiveThumbs();
             if (taskbarHiddenByUs) RestoreWindowsTaskbar();
             Reply("bye");
             break;

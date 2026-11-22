@@ -25,32 +25,51 @@ import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
 import { win32Daemon } from './services/win32Daemon';
 import {
+  activateWindowByPid,
   adjustSystemVolume,
+  clearLiveThumbnails,
   closeWindowByHwnd,
+  connectWifiNetwork,
   createPinnedAppFromPath,
   focusWindowByPid,
   getIconDataUrl,
   getKeyboardLayoutCode,
   getNetworkInfo,
+  getNightLightStatus,
+  getScreenBrightness,
   getSystemVolume,
   getWindowThumbnail,
   importTaskbarPinnedApps,
   launchTarget,
+  listAudioDevices,
+  listAudioSessions,
   listBackgroundApps,
   listInstalledApps,
   listRunningWindows,
+  listWifiNetworks,
   openAppByPid,
   pickExecutableOrFolder,
   quitAppByPid,
+  resolveAppIdentity,
   resolveExeName,
   restoreWindowsTaskbarSync,
   runQuickSystemAction,
+  setAudioSessionVolume,
+  setDefaultAudioDevice,
+  setLiveThumbnails,
+  setScreenBrightness,
   setSystemVolume,
   setWindowsTaskbarReplacement,
+  startLiveWindowPeek,
+  stopLiveWindowPeek,
   switchKeyboardLayout,
-  toggleSystemMute
+  toggleAudioSessionMute,
+  toggleNightLight,
+  toggleSystemMute,
+  wakeHiddenApp,
+  type LiveThumbSlot
 } from './services/windowsManager';
-import type { AppConfig, DockSettings, PinnedApp } from '../src/types';
+import type { AppConfig, DockSettings, PinnedApp, SystemAction } from '../src/types';
 
 interface HitRect {
   left: number;
@@ -308,6 +327,8 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
   });
   win.on('blur', () => {
     entry.interactiveLock = false;
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
     if (entry.popoverOpen) {
       entry.popoverOpen = false;
       if (!win.isDestroyed()) win.webContents.send('aurabar:blurred');
@@ -492,6 +513,8 @@ function createWindows(): void {
   });
   dockWindow.on('blur', () => {
     dockInteractiveLock = false;
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
     if (isPopoverOpen) {
       isPopoverOpen = false;
       dockWindow?.webContents.send('aurabar:blurred');
@@ -589,7 +612,9 @@ function setFullscreenSuspended(next: boolean): void {
   if (next === fullscreenSuspended) return;
   fullscreenSuspended = next;
   if (next) {
-    suspendedDockWasVisible = dockWindow?.isVisible() ?? false;
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
+    suspendedDockWasVisible = !dockManuallyHidden;
     suspendedIslandWasVisible = islandWindow?.isVisible() ?? false;
     islandFullscreenPeek = false;
     isPopoverOpen = false;
@@ -599,6 +624,7 @@ function setFullscreenSuspended(next: boolean): void {
     islandInteractiveState = false;
     dockWindow?.setIgnoreMouseEvents(true);
     islandWindow?.setIgnoreMouseEvents(true);
+    dockWindow?.webContents.send('aurabar:suspended', true);
     dockWindow?.hide();
     islandWindow?.hide();
   } else {
@@ -606,9 +632,10 @@ function setFullscreenSuspended(next: boolean): void {
     // The screen has just been through a mode/work-area change: lay everything out again from
     // fresh metrics *before* showing, and once more after it settles
     reassertLayoutAfterFullscreen();
-    if (suspendedDockWasVisible && dockWindow && !dockWindow.isDestroyed()) {
+    if ((suspendedDockWasVisible || !dockManuallyHidden) && dockWindow && !dockWindow.isDestroyed()) {
       dockWindow.showInactive();
       ensureOnTop(dockWindow);
+      dockWindow.webContents.send('aurabar:suspended', false);
     }
     if (
       suspendedIslandWasVisible &&
@@ -635,42 +662,46 @@ function setFullscreenSuspended(next: boolean): void {
 }
 
 function reassertLayoutAfterFullscreen(): void {
-  const settings = currentConfig.settings;
-  // Windows can reset the reserved work area when a full-screen app exits; only touch it
-  // again when it really changed, since re-applying makes every window relayout
-  if (settings.replaceWindowsTaskbar && taskbarWasAutoHidden) {
-    const d = screen.getPrimaryDisplay();
-    const expectedHeight = d.bounds.height - getReservedHeightPx(settings);
-    if (Math.abs(d.workArea.height - expectedHeight) > 8) {
-      lastTaskbarLayoutKey = '';
-      syncTaskbarReplacement(settings);
+  const applyOnce = () => {
+    if (fullscreenSuspended || isQuitting) return;
+    const settings = currentConfig.settings;
+    // Windows can reset the reserved work area or display resolution when a fullscreen game
+    // (like 4:3 stretched CS2) exits; re-sync only when metrics actually drifted.
+    if (settings.replaceWindowsTaskbar && taskbarWasAutoHidden) {
+      const d = screen.getPrimaryDisplay();
+      const expectedHeight = d.bounds.height - getReservedHeightPx(settings);
+      if (Math.abs(d.workArea.height - expectedHeight) > 8) {
+        lastTaskbarLayoutKey = '';
+        syncTaskbarReplacement(settings);
+      }
     }
-  }
-  if (dockWindow && !dockWindow.isDestroyed()) {
-    applyTopmost(dockWindow);
-    dockWindow.setBounds(computeDockBounds(settings), false);
-    placeDockPhysical(settings);
-  }
-  if (islandWindow && !islandWindow.isDestroyed()) {
-    applyTopmost(islandWindow);
-    islandWindow.setBounds(computeIslandBounds(), false);
-  }
-  setTimeout(() => {
-    if (!fullscreenSuspended && !isQuitting && dockWindow && !dockWindow.isDestroyed()) {
-      dockWindow.setBounds(computeDockBounds(currentConfig.settings), false);
-      placeDockPhysical(currentConfig.settings);
+    if (dockWindow && !dockWindow.isDestroyed()) {
+      applyTopmost(dockWindow);
+      dockWindow.setBounds(computeDockBounds(settings), false);
+      placeDockPhysical(settings);
     }
-  }, 450);
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      applyTopmost(islandWindow);
+      islandWindow.setBounds(computeIslandBounds(), false);
+    }
+  };
+  applyOnce();
+  // Games switching display mode back to native resolution often settle 400-1100ms after exit
+  setTimeout(applyOnce, 450);
+  setTimeout(applyOnce, 1200);
 }
 
 function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolean): void {
   if (next === entry.fullscreenSuspended || entry.win.isDestroyed()) return;
   entry.fullscreenSuspended = next;
   if (next) {
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
     entry.popoverOpen = false;
     entry.interactiveLock = false;
     entry.interactiveState = false;
     entry.win.setIgnoreMouseEvents(true);
+    entry.win.webContents.send('aurabar:suspended', true);
     entry.win.hide();
   } else if (!dockManuallyHidden) {
     const display = screen.getAllDisplays().find((d) => d.id === entry.displayId);
@@ -681,6 +712,7 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
     }
     entry.win.showInactive();
     ensureOnTop(entry.win);
+    entry.win.webContents.send('aurabar:suspended', false);
   }
 }
 
@@ -703,7 +735,7 @@ async function pollFullscreen(): Promise<void> {
         setFullscreenSuspended(true);
       } else if (reply === '0') {
         notFullscreenStreak += 1;
-        if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+        if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
       }
     } finally {
       fullscreenPolling = false;
@@ -725,7 +757,7 @@ async function pollFullscreen(): Promise<void> {
       setFullscreenSuspended(true);
     } else if (flags[0] === '0') {
       notFullscreenStreak += 1;
-      if (notFullscreenStreak >= 3) setFullscreenSuspended(false);
+      if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
     }
 
     for (let i = 0; i < secEntries.length; i++) {
@@ -736,7 +768,7 @@ async function pollFullscreen(): Promise<void> {
         setSecondaryFullscreenSuspended(entry, true);
       } else if (flag === '0') {
         entry.notFullscreenStreak += 1;
-        if (entry.notFullscreenStreak >= 3) setSecondaryFullscreenSuspended(entry, false);
+        if (entry.notFullscreenStreak >= 2) setSecondaryFullscreenSuspended(entry, false);
       }
     }
   } finally {
@@ -747,7 +779,7 @@ async function pollFullscreen(): Promise<void> {
 function syncFullscreenWatcher(): void {
   const wanted = currentConfig.settings.hideInFullscreen;
   if (wanted && !fullscreenPollTimer) {
-    fullscreenPollTimer = setInterval(() => void pollFullscreen(), 300);
+    fullscreenPollTimer = setInterval(() => void pollFullscreen(), 400);
   } else if (!wanted) {
     if (fullscreenPollTimer) clearInterval(fullscreenPollTimer);
     fullscreenPollTimer = null;
@@ -794,34 +826,81 @@ function withResolvedExeNames(apps: PinnedApp[]): PinnedApp[] {
   });
 }
 
+let refreshedShellIconsOnce = false;
+
 async function backfillPinnedIcons(): Promise<void> {
-  const missing = new Map<string, string>();
+  const needIcon = new Map<string, string>();
+  const needIdentity = new Map<string, string>();
+  const refreshShell = !refreshedShellIconsOnce;
+  refreshedShellIconsOnce = true;
+
   const collect = (apps: PinnedApp[]) => {
     for (const item of apps) {
-      if (item.kind === 'group') collect(item.children ?? []);
-      else if (!item.iconDataUrl && item.target) missing.set(item.id, item.target);
+      if (item.kind === 'group') {
+        collect(item.children ?? []);
+      } else if (item.target) {
+        const isShell = /^shell:appsfolder\\/i.test(item.target);
+        if (!item.iconDataUrl || (refreshShell && isShell)) {
+          needIcon.set(item.id, item.target);
+        }
+        if (!item.appId && !item.installDir) needIdentity.set(item.id, item.target);
+      }
     }
   };
   collect(currentConfig.pinnedApps);
-  if (missing.size === 0) return;
+  if (needIcon.size === 0 && needIdentity.size === 0) return;
 
-  const found = new Map<string, string>();
-  for (const [id, target] of missing) {
+  const foundIcons = new Map<string, string>();
+  for (const [id, target] of needIcon) {
     const url = await getIconDataUrl(target);
-    if (url) found.set(id, url);
+    if (url) foundIcons.set(id, url);
   }
-  if (found.size === 0) return;
 
+  const foundIdentities = new Map<string, { exeName?: string; appId?: string; installDir?: string }>();
+  for (const [id, target] of needIdentity) {
+    const ident = await resolveAppIdentity(target);
+    if (ident.appId || ident.installDir || ident.exeName) {
+      foundIdentities.set(id, ident);
+    }
+  }
+  if (foundIcons.size === 0 && foundIdentities.size === 0) return;
+
+  let changed = false;
   // Merge into whatever the config is *now*; the user may have edited pins meanwhile
   const apply = (apps: PinnedApp[]): PinnedApp[] =>
-    apps.map((item) =>
-      item.kind === 'group'
-        ? { ...item, children: apply(item.children ?? []) }
-        : !item.iconDataUrl && found.has(item.id)
-          ? { ...item, iconDataUrl: found.get(item.id) }
-          : item
-    );
-  currentConfig = saveConfig({ ...currentConfig, pinnedApps: apply(currentConfig.pinnedApps) });
+    apps.map((item) => {
+      if (item.kind === 'group') {
+        return { ...item, children: apply(item.children ?? []) };
+      }
+      const nextIcon = foundIcons.get(item.id);
+      const iconUpdated = Boolean(nextIcon && nextIcon !== item.iconDataUrl);
+      const ident = foundIdentities.get(item.id);
+      const nextAppId = !item.appId && ident?.appId ? ident.appId : item.appId;
+      const nextDir = !item.installDir && ident?.installDir ? ident.installDir : item.installDir;
+      const nextExe =
+        (!item.exeName || item.exeName.toLowerCase() === 'update') && ident?.exeName
+          ? ident.exeName
+          : item.exeName;
+      if (
+        iconUpdated ||
+        nextAppId !== item.appId ||
+        nextDir !== item.installDir ||
+        nextExe !== item.exeName
+      ) {
+        changed = true;
+        return {
+          ...item,
+          ...(iconUpdated ? { iconDataUrl: nextIcon } : {}),
+          ...(nextAppId ? { appId: nextAppId } : {}),
+          ...(nextDir ? { installDir: nextDir } : {}),
+          ...(nextExe ? { exeName: nextExe } : {})
+        };
+      }
+      return item;
+    });
+  const nextPinned = apply(currentConfig.pinnedApps);
+  if (!changed) return;
+  currentConfig = saveConfig({ ...currentConfig, pinnedApps: nextPinned });
   broadcastConfig(currentConfig);
 }
 
@@ -917,6 +996,8 @@ function setupTray(): void {
 function toggleDockVisibility(): void {
   if (!dockWindow || fullscreenSuspended) return;
   if (dockWindow.isVisible()) {
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
     dockManuallyHidden = true;
     isPopoverOpen = false;
     dockInteractiveLock = false;
@@ -988,10 +1069,21 @@ function isPointInRects(x: number, y: number, rects: HitRect[]): boolean {
 
 function updateCursorHitTesting(): void {
   if (isQuitting) return;
+  const dockVis = Boolean(dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible());
+  const islandVis = Boolean(islandWindow && !islandWindow.isDestroyed() && islandWindow.isVisible());
+  let secVis = false;
+  for (const entry of secondaryDocks.values()) {
+    if (!entry.win.isDestroyed() && entry.win.isVisible()) {
+      secVis = true;
+      break;
+    }
+  }
+  if (!dockVis && !islandVis && !secVis) return;
+
   const pt = screen.getCursorScreenPoint();
   const nowMs = Date.now();
 
-  if (dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) {
+  if (dockVis && dockWindow) {
     const b = dockWindow.getBounds();
     const insideDock = isPointInRects(pt.x - b.x, pt.y - b.y, dockLocalHitRects);
     const shouldBeInteractive = isPopoverOpen || dockInteractiveLock || insideDock;
@@ -1076,6 +1168,7 @@ function registerIpcHandlers(): void {
       rebuildTrayMenu();
     }
     broadcastConfig(currentConfig, e.sender);
+    void backfillPinnedIcons();
     return currentConfig;
   });
 
@@ -1157,6 +1250,43 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:focus-window', (_e, pid: number, hwnd?: string) =>
     focusWindowByPid(pid, hwnd)
   );
+  ipcMain.handle('aurabar:activate-window', (_e, pid: number, hwnd?: string) =>
+    activateWindowByPid(pid, hwnd)
+  );
+  ipcMain.on('aurabar:peek-start', (_e, hwnd: string) => startLiveWindowPeek(hwnd));
+  ipcMain.on('aurabar:peek-stop', () => stopLiveWindowPeek());
+  ipcMain.on('aurabar:live-thumbs', (e, slots: LiveThumbSlot[]) => {
+    const sec = findSecondaryEntryBySender(e.sender);
+    const hostWin = sec ? sec.win : dockWindow;
+    if (!hostWin || hostWin.isDestroyed() || !Array.isArray(slots) || slots.length === 0) {
+      clearLiveThumbnails();
+      return;
+    }
+    const winBounds = hostWin.getBounds();
+    const disp = screen.getDisplayMatching(winBounds);
+    const scale = disp.scaleFactor || 1;
+    const physicalSlots: LiveThumbSlot[] = slots.map((s) => {
+      const phys = screen.dipToScreenRect(hostWin, {
+        x: Math.round(winBounds.x + s.left),
+        y: Math.round(winBounds.y + s.top),
+        width: Math.round(s.width),
+        height: Math.round(s.height)
+      });
+      return {
+        hwnd: s.hwnd,
+        left: phys.x,
+        top: phys.y,
+        width: phys.width,
+        height: phys.height,
+        radius: Math.round((s.radius ?? 7) * scale)
+      };
+    });
+    setLiveThumbnails(physicalSlots);
+  });
+  ipcMain.on('aurabar:live-thumbs-clear', () => clearLiveThumbnails());
+  ipcMain.handle('aurabar:wake-hidden-app', (_e, exeName?: string, installDir?: string) =>
+    wakeHiddenApp(exeName, installDir)
+  );
   ipcMain.handle('aurabar:open-app', (_e, pid: number, executablePath?: string) =>
     openAppByPid(pid, executablePath)
   );
@@ -1190,15 +1320,32 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:get-volume', () => getSystemVolume());
   ipcMain.handle('aurabar:set-volume', (_e, level: number) => setSystemVolume(level));
   ipcMain.handle('aurabar:toggle-mute', () => toggleSystemMute());
-  ipcMain.handle(
-    'aurabar:system-action',
-    (_e, action: 'lock' | 'taskmgr' | 'settings' | 'start' | 'quicksettings' | 'desktop') =>
-      runQuickSystemAction(action)
+  ipcMain.handle('aurabar:get-audio-devices', () => listAudioDevices());
+  ipcMain.handle('aurabar:set-audio-device', (_e, deviceId: string) =>
+    setDefaultAudioDevice(deviceId)
+  );
+  ipcMain.handle('aurabar:get-audio-sessions', () => listAudioSessions());
+  ipcMain.handle('aurabar:set-audio-session-vol', (_e, sessionId: string, level: number) =>
+    setAudioSessionVolume(sessionId, level)
+  );
+  ipcMain.handle('aurabar:toggle-audio-session-mute', (_e, sessionId: string) =>
+    toggleAudioSessionMute(sessionId)
+  );
+  ipcMain.handle('aurabar:get-brightness', () => getScreenBrightness());
+  ipcMain.handle('aurabar:set-brightness', (_e, level: number) => setScreenBrightness(level));
+  ipcMain.handle('aurabar:get-nightlight', () => getNightLightStatus());
+  ipcMain.handle('aurabar:toggle-nightlight', () => toggleNightLight());
+  ipcMain.handle('aurabar:list-wifi-networks', () => listWifiNetworks());
+  ipcMain.handle('aurabar:connect-wifi-network', (_e, ssid: string) => connectWifiNetwork(ssid));
+  ipcMain.handle('aurabar:system-action', (_e, action: SystemAction) =>
+    runQuickSystemAction(action)
   );
   ipcMain.handle('aurabar:get-keyboard-lang', () => getKeyboardLayoutCode());
   ipcMain.handle('aurabar:switch-keyboard-lang', () => switchKeyboardLayout());
   ipcMain.handle('aurabar:get-network-info', () => getNetworkInfo());
   ipcMain.handle('aurabar:hide-dock', () => {
+    stopLiveWindowPeek();
+    clearLiveThumbnails();
     dockManuallyHidden = true;
     isPopoverOpen = false;
     dockInteractiveLock = false;
@@ -1306,7 +1453,7 @@ if (!singleInstance) {
         }
       }
     }, 4000);
-    setInterval(updateCursorHitTesting, 10);
+    setInterval(updateCursorHitTesting, 25);
 
     globalShortcut.register('Alt+Space', () => {
       toggleDockVisibility();

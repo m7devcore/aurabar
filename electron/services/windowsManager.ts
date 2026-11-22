@@ -5,11 +5,17 @@ import path from 'node:path';
 import { app, dialog, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import type {
+  AudioAppSession,
+  AudioOutputDevice,
   BackgroundApp,
+  BrightnessInfo,
   InstalledApp,
   NetworkInfo,
+  NightLightInfo,
   PinnedApp,
-  RunningWindow
+  RunningWindow,
+  SystemAction,
+  WifiNetwork
 } from '../../src/types';
 import { win32Daemon } from './win32Daemon';
 
@@ -236,14 +242,17 @@ function resolveKnownSystemPath(target: string): string | null {
   return null;
 }
 
-export async function getIconDataUrl(target: string): Promise<string | undefined> {
+export async function getIconDataUrl(
+  target: string,
+  strictExe = false
+): Promise<string | undefined> {
   const cleaned = stripQuotes(target || '');
   if (!cleaned) return undefined;
   const isShellPath = /^shell:/i.test(cleaned);
   if (!isShellPath && isProtocolUri(cleaned)) {
     return undefined;
   }
-  const key = cleaned.toLowerCase();
+  const key = (strictExe ? 'strict:' : '') + cleaned.toLowerCase();
   if (iconCache.has(key)) return iconCache.get(key);
   const missAt = iconMissAt.get(key);
   if (missAt !== undefined && Date.now() - missAt < ICON_MISS_RETRY_MS) return undefined;
@@ -282,8 +291,9 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
     }
   }
 
-  // Primary: native Windows Shell SHGetFileInfo (works for .lnk, .exe, .ico, shell:AppsFolder, and folders)
-  const shellIcon = await win32Daemon.send(`ICON ${resolved}`);
+  // Primary: native IShellItemImageFactory / SHGetFileInfo (works for UWP shell:AppsFolder, .lnk, .exe, .ico, folders)
+  const iconCmd = strictExe ? 'ICON_STRICT' : 'ICON';
+  const shellIcon = await win32Daemon.send(`${iconCmd} ${resolved}`);
   if (shellIcon.startsWith('data:image/png;base64,')) {
     iconCache.set(key, shellIcon);
     return shellIcon;
@@ -291,7 +301,7 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
 
   // Fallback to original .lnk/.url path if resolved target failed
   if (resolved !== cleaned) {
-    const origIcon = await win32Daemon.send(`ICON ${cleaned}`);
+    const origIcon = await win32Daemon.send(`${iconCmd} ${cleaned}`);
     if (origIcon.startsWith('data:image/png;base64,')) {
       iconCache.set(key, origIcon);
       return origIcon;
@@ -310,8 +320,8 @@ export async function getIconDataUrl(target: string): Promise<string | undefined
     }
   }
 
-  // Final fallback: Electron app.getFileIcon (skip for virtual shell: paths)
-  if (!isShellPath) {
+  // Final fallback: Electron app.getFileIcon (skip for virtual shell: paths or strictExe misses)
+  if (!isShellPath && !strictExe) {
     try {
       const img = await app.getFileIcon(resolved, { size: 'normal' });
       if (!img.isEmpty()) {
@@ -343,6 +353,138 @@ const KNOWN_STORE_EXE_HINTS: Array<[RegExp, string]> = [
   [/windowsalarms/i, 'time'],
   [/claude/i, 'claude']
 ];
+
+export function extractInstallDir(filePath: string): string | undefined {
+  const clean = stripQuotes(filePath).replace(/\//g, '\\').replace(/\\+$/, '');
+  if (!clean || !/^[a-z]:\\/i.test(clean)) return undefined;
+  let dir = path.win32.dirname(clean);
+  if (!dir || dir === clean) return undefined;
+
+  // Climb past version/architecture/helper folders so Update.exe or Launcher.exe shares the
+  // same app root directory as the actual running binary (e.g. Medal\app-4.x\Medal.exe or
+  // Game\Binaries\Win64\Game-Win64-Shipping.exe).
+  const TRANSPARENT_SUBDIRS =
+    /^(app-[0-9]+(?:\.[0-9]+)*|bin|binaries|win64|win32|x64|x86|amd64|cef|application|system_tray|launcher|shipping|client|engine)$/i;
+  for (let i = 0; i < 3; i++) {
+    const base = path.win32.basename(dir);
+    if (!TRANSPARENT_SUBDIRS.test(base)) break;
+    const parent = path.win32.dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+
+  const lower = dir.toLowerCase().replace(/\\+$/, '');
+  // Reject broad OS/shared roots so unrelated apps never collide on installDir
+  if (
+    /^[a-z]:$/.test(lower) ||
+    /^[a-z]:\\windows($|\\system32$|\\syswow64$)/.test(lower) ||
+    /^[a-z]:\\program files( \(x86\))?($|\\windowsapps$|\\common files$)/.test(lower) ||
+    /^[a-z]:\\programdata$/.test(lower) ||
+    /^[a-z]:\\users\\[^\\]+($|\\desktop$|\\downloads$|\\documents$|\\appdata($|\\local($|\\programs$|\\microsoft($|\\windowsapps$))|\\roaming$))/.test(
+      lower
+    ) ||
+    /\\steamapps\\common$/.test(lower) ||
+    /\\epic games$/.test(lower) ||
+    /\\riot games$/.test(lower)
+  ) {
+    return undefined;
+  }
+  return lower;
+}
+
+function discoverSquirrelExe(dir: string): string | undefined {
+  try {
+    const appDirs = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^app-[0-9]+/i.test(d.name))
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+    for (const sub of appDirs) {
+      const fullSub = path.join(dir, sub);
+      const exes = fs
+        .readdirSync(fullSub, { withFileTypes: true })
+        .filter(
+          (f) =>
+            f.isFile() &&
+            f.name.toLowerCase().endsWith('.exe') &&
+            !/^(update|squirrel|crash|unins|helper|elevat)/i.test(f.name)
+        );
+      if (exes.length > 0) {
+        return path.basename(exes[0].name, '.exe').toLowerCase();
+      }
+    }
+  } catch {
+    // Ignore unreadable folder
+  }
+  return undefined;
+}
+
+export async function resolveAppIdentity(
+  target: string
+): Promise<{ exeName?: string; appId?: string; installDir?: string }> {
+  const trimmed = stripQuotes(target);
+  if (!trimmed) return {};
+  const lower = trimmed.toLowerCase();
+
+  if (lower.startsWith('shell:appsfolder\\')) {
+    const aumid = trimmed.slice('shell:appsfolder\\'.length).trim();
+    return {
+      exeName: resolveExeName(trimmed),
+      appId: aumid ? aumid.toLowerCase() : undefined
+    };
+  }
+
+  if (lower.endsWith('.lnk')) {
+    let appId: string | undefined;
+    try {
+      const rawAppId = await win32Daemon.send(`LNK_APPID ${trimmed}`);
+      if (rawAppId && !rawAppId.startsWith('ERR:')) {
+        appId = rawAppId.trim().toLowerCase() || undefined;
+      }
+    } catch {
+      // Ignore LNK_APPID failures
+    }
+
+    let exeName = resolveExeName(trimmed);
+    let installDir: string | undefined;
+    try {
+      const link = shell.readShortcutLink(trimmed);
+      if (link.target) {
+        installDir = extractInstallDir(link.target);
+        const base = path.basename(link.target).replace(/\.exe$/i, '').toLowerCase();
+        if (base === 'update' && (!exeName || exeName === 'update')) {
+          const discovered = discoverSquirrelExe(path.dirname(link.target));
+          if (discovered) exeName = discovered;
+        }
+      }
+    } catch {
+      // Ignore unreadable shortcut
+    }
+    return { exeName, appId, installDir };
+  }
+
+  if (lower.endsWith('.url')) {
+    const { iconFile } = readUrlShortcut(trimmed);
+    if (iconFile && iconFile.toLowerCase().endsWith('.exe')) {
+      return {
+        exeName: path.basename(iconFile).replace(/\.exe$/i, '').toLowerCase(),
+        installDir: extractInstallDir(iconFile)
+      };
+    }
+    return {};
+  }
+
+  if (isProtocolUri(trimmed)) {
+    return {};
+  }
+
+  const resolved = resolveKnownSystemPath(trimmed) ?? trimmed;
+  return {
+    exeName: resolveExeName(trimmed),
+    installDir: extractInstallDir(resolved)
+  };
+}
 
 export function resolveExeName(target: string): string | undefined {
   const trimmed = stripQuotes(target);
@@ -483,6 +625,7 @@ export async function createPinnedAppFromPath(filePath: string): Promise<PinnedA
     if (aumid) target = `shell:AppsFolder\\${aumid}`;
   }
   const iconDataUrl = isDir ? undefined : await getIconDataUrl(target);
+  const identity = isDir ? {} : await resolveAppIdentity(target);
   return {
     id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name: base || clean,
@@ -491,7 +634,9 @@ export async function createPinnedAppFromPath(filePath: string): Promise<PinnedA
     icon: isDir ? 'folder' : 'app',
     color: isDir ? '#F59E0B' : '#38BDF8',
     iconDataUrl,
-    exeName: isDir ? undefined : resolveExeName(clean)
+    exeName: identity.exeName ?? (isDir ? undefined : resolveExeName(clean)),
+    appId: identity.appId,
+    installDir: identity.installDir
   };
 }
 
@@ -516,7 +661,10 @@ export async function importTaskbarPinnedApps(): Promise<PinnedApp[]> {
       files.map(async (file, idx) => {
         const fullPath = path.join(folder, file);
         const name = file.replace(/\.lnk$/i, '');
-        const iconDataUrl = await getIconDataUrl(fullPath);
+        const [iconDataUrl, identity] = await Promise.all([
+          getIconDataUrl(fullPath),
+          resolveAppIdentity(fullPath)
+        ]);
         return {
           id: `winpin-${idx}-${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
           name,
@@ -525,7 +673,9 @@ export async function importTaskbarPinnedApps(): Promise<PinnedApp[]> {
           icon: 'app',
           color: '#38BDF8',
           iconDataUrl,
-          exeName: resolveExeName(fullPath)
+          exeName: identity.exeName ?? resolveExeName(fullPath),
+          appId: identity.appId,
+          installDir: identity.installDir
         };
       })
     );
@@ -542,22 +692,50 @@ export async function listRunningWindows(): Promise<RunningWindow[]> {
     const parsed = JSON.parse(raw) as RunningWindow[];
     const enriched = await Promise.all(
       parsed.map(async (w) => {
-        let iconDataUrl = w.aumid
-          ? await getIconDataUrl(`shell:AppsFolder\\${w.aumid}`)
+        const shellAumid =
+          w.aumid || (w.appId && w.appId.includes('!') ? w.appId : undefined);
+        let iconDataUrl = shellAumid
+          ? await getIconDataUrl(`shell:AppsFolder\\${shellAumid}`)
           : undefined;
-        if (!iconDataUrl && w.executablePath) {
-          iconDataUrl = await getIconDataUrl(w.executablePath);
-        }
-        if (!iconDataUrl && w.hwnd) {
+
+        // Try live window icon first for wrapper/runtime exes (Java, Python, Electron, SystemApps)
+        const procLower = (w.processName || '').toLowerCase();
+        const isGenericHost =
+          procLower === 'applicationframehost' ||
+          procLower === 'systemsettings' ||
+          procLower === 'javaw' ||
+          procLower === 'java' ||
+          procLower === 'python' ||
+          procLower === 'pythonw' ||
+          procLower === 'electron' ||
+          procLower === 'node';
+
+        const fetchWinIcon = async (): Promise<string | undefined> => {
+          if (!w.hwnd) return undefined;
           if (winIconCache.has(w.hwnd)) {
-            iconDataUrl = winIconCache.get(w.hwnd) || undefined;
-          } else {
-            const winIcon = await win32Daemon.send(`WINICON ${w.hwnd}`);
-            const valid = winIcon.startsWith('data:image/png;base64,') ? winIcon : '';
-            if (winIconCache.size > 200) winIconCache.clear();
-            winIconCache.set(w.hwnd, valid);
-            iconDataUrl = valid || undefined;
+            return winIconCache.get(w.hwnd) || undefined;
           }
+          const winIcon = await win32Daemon.send(`WINICON ${w.hwnd}`);
+          const valid = winIcon.startsWith('data:image/png;base64,') ? winIcon : '';
+          if (winIconCache.size > 200) winIconCache.clear();
+          winIconCache.set(w.hwnd, valid);
+          return valid || undefined;
+        };
+
+        if (!iconDataUrl && isGenericHost) {
+          iconDataUrl = await fetchWinIcon();
+        }
+        // Strict exe lookup: only accept .exe icon if it actually embeds an icon resource
+        if (!iconDataUrl && w.executablePath) {
+          iconDataUrl = await getIconDataUrl(w.executablePath, true);
+        }
+        // Fallback to live window icon (catches custom icons set via WM_SETICON)
+        if (!iconDataUrl) {
+          iconDataUrl = await fetchWinIcon();
+        }
+        // Final fallback to non-strict shell icon
+        if (!iconDataUrl && w.executablePath) {
+          iconDataUrl = await getIconDataUrl(w.executablePath, false);
         }
         return { ...w, iconDataUrl };
       })
@@ -568,10 +746,19 @@ export async function listRunningWindows(): Promise<RunningWindow[]> {
   }
 }
 
-// 'failed' / 'false' mean the window could not be brought forward (or is gone), so the caller may
-// open the app instead. A timeout (empty reply) is not a failure: the toggle may well have happened.
+// 'gone' / 'false' mean the window no longer exists, so the caller may launch the app instead.
+// 'attempted' means the window is still alive (e.g. elevated or slow fullscreen game restore) —
+// never spawn a duplicate copy when the window still exists.
 function toggleSucceeded(reply: string): boolean {
-  return reply === '' || reply === 'focused' || reply === 'minimized';
+  return reply === '' || reply === 'focused' || reply === 'minimized' || reply === 'attempted';
+}
+
+export async function wakeHiddenApp(exeName?: string, installDir?: string): Promise<boolean> {
+  const ex = (exeName ?? '').replace(/[|\r\n]/g, '').trim();
+  const dir = (installDir ?? '').replace(/[|\r\n]/g, '').trim();
+  if (!ex && !dir) return false;
+  const reply = await win32Daemon.send(`WAKE_HIDDEN ${ex}|${dir}`);
+  return reply === 'focused';
 }
 
 export async function focusWindowByPid(_pid: number, hwnd?: string): Promise<boolean> {
@@ -584,6 +771,59 @@ export async function focusWindowByPid(_pid: number, hwnd?: string): Promise<boo
     return toggleSucceeded(await win32Daemon.send(`TOGGLE ${match.hwnd}`));
   }
   return false;
+}
+
+export async function activateWindowByPid(_pid: number, hwnd?: string): Promise<boolean> {
+  if (hwnd && /^\d+$/.test(hwnd)) {
+    return toggleSucceeded(await win32Daemon.send(`FOCUS ${hwnd}`));
+  }
+  const windows = await listRunningWindows();
+  const match = windows.find((w) => w.pid === _pid);
+  if (match?.hwnd) {
+    return toggleSucceeded(await win32Daemon.send(`FOCUS ${match.hwnd}`));
+  }
+  return false;
+}
+
+export function startLiveWindowPeek(hwnd: string): void {
+  if (!hwnd || !/^\d+$/.test(hwnd)) return;
+  void win32Daemon.send(`PEEK_START ${hwnd}`);
+}
+
+export function stopLiveWindowPeek(): void {
+  void win32Daemon.send('PEEK_STOP');
+}
+
+export interface LiveThumbSlot {
+  hwnd: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  radius?: number;
+}
+
+export function setLiveThumbnails(slots: LiveThumbSlot[]): void {
+  if (slots.length === 0) {
+    clearLiveThumbnails();
+    return;
+  }
+  const encoded = slots
+    .filter((s) => /^\d+$/.test(s.hwnd) && s.width >= 16 && s.height >= 16)
+    .map(
+      (s) =>
+        `${s.hwnd},${Math.round(s.left)},${Math.round(s.top)},${Math.round(s.width)},${Math.round(s.height)},${Math.round(s.radius ?? 7)}`
+    )
+    .join(';');
+  if (!encoded) {
+    clearLiveThumbnails();
+    return;
+  }
+  void win32Daemon.send(`LIVE_THUMBS ${encoded}`);
+}
+
+export function clearLiveThumbnails(): void {
+  void win32Daemon.send('LIVE_THUMBS_CLEAR');
 }
 
 // Hover prefetch and the click that follows ask within a second or two; share one scan
@@ -667,10 +907,18 @@ export async function openAppByPid(pid: number, executablePath?: string): Promis
     }
     const candidateExe = res.startsWith('exe:') ? res.slice(4).trim() : executablePath;
     if (candidateExe) {
-      // Handle tray helper binaries whose interactive UI lives in the parent binary (e.g. LGHUB)
+      // Handle tray helper binaries whose interactive UI lives elsewhere
       if (/\\lghub_system_tray\.exe$/i.test(candidateExe)) {
         const parentUi = path.resolve(path.dirname(candidateExe), '..', 'lghub.exe');
         if (fs.existsSync(parentUi)) return launchTarget(parentUi);
+      }
+      if (/\\securityhealthsystray\.exe$/i.test(candidateExe)) {
+        return launchTarget('windowsdefender:');
+      }
+      if (/\\(nvcontainer|nvdisplay\.container)\.exe$/i.test(candidateExe)) {
+        const nvApp = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\CEF\\NVIDIA App.exe';
+        if (fs.existsSync(nvApp)) return launchTarget(nvApp);
+        return launchTarget('nvcplui.exe');
       }
       return launchTarget(candidateExe);
     }
@@ -867,6 +1115,164 @@ export async function adjustSystemVolume(action: 'up' | 'down' | 'mute'): Promis
   await win32Daemon.send(cmd);
 }
 
+export async function listAudioDevices(): Promise<AudioOutputDevice[]> {
+  const raw = await win32Daemon.send('AUDIO_DEVICES');
+  if (!raw || !raw.startsWith('[')) return [];
+  try {
+    return JSON.parse(raw) as AudioOutputDevice[];
+  } catch {
+    return [];
+  }
+}
+
+export async function setDefaultAudioDevice(deviceId: string): Promise<AudioOutputDevice[]> {
+  if (!deviceId) return listAudioDevices();
+  const raw = await win32Daemon.send(`AUDIO_SET_DEVICE ${deviceId}`);
+  if (!raw || !raw.startsWith('[')) return listAudioDevices();
+  try {
+    return JSON.parse(raw) as AudioOutputDevice[];
+  } catch {
+    return [];
+  }
+}
+
+export async function listAudioSessions(): Promise<AudioAppSession[]> {
+  const raw = await win32Daemon.send('AUDIO_SESSIONS');
+  if (!raw || !raw.startsWith('[')) return [];
+  try {
+    const parsed = JSON.parse(raw) as AudioAppSession[];
+    return await Promise.all(
+      parsed.map(async (s) => {
+        if (s.isSystem || !s.exePath) return s;
+        const iconDataUrl = await getIconDataUrl(s.exePath);
+        return { ...s, iconDataUrl };
+      })
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function setAudioSessionVolume(sessionId: string, level: number): Promise<void> {
+  if (!sessionId) return;
+  const clamped = Math.max(0, Math.min(100, Math.round(level)));
+  await win32Daemon.send(`AUDIO_SESSION_VOL ${clamped} ${sessionId}`);
+}
+
+export async function toggleAudioSessionMute(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  await win32Daemon.send(`AUDIO_SESSION_MUTE ${sessionId}`);
+}
+
+export async function getScreenBrightness(): Promise<BrightnessInfo> {
+  const raw = await win32Daemon.send('BRIGHT_GET');
+  try {
+    const p = JSON.parse(raw) as Partial<BrightnessInfo>;
+    return {
+      supported: Boolean(p.supported),
+      level: typeof p.level === 'number' ? Math.max(0, Math.min(100, p.level)) : 100
+    };
+  } catch {
+    return { supported: false, level: 100 };
+  }
+}
+
+export async function setScreenBrightness(level: number): Promise<BrightnessInfo> {
+  const clamped = Math.max(0, Math.min(100, Math.round(level)));
+  const raw = await win32Daemon.send(`BRIGHT_SET ${clamped}`);
+  try {
+    const p = JSON.parse(raw) as Partial<BrightnessInfo>;
+    return {
+      supported: Boolean(p.supported),
+      level: typeof p.level === 'number' ? Math.max(0, Math.min(100, p.level)) : clamped
+    };
+  } catch {
+    return { supported: false, level: clamped };
+  }
+}
+
+export async function getNightLightStatus(): Promise<NightLightInfo> {
+  const raw = await win32Daemon.send('NIGHTLIGHT_GET');
+  try {
+    const p = JSON.parse(raw) as Partial<NightLightInfo>;
+    return { supported: Boolean(p.supported), enabled: Boolean(p.enabled) };
+  } catch {
+    return { supported: false, enabled: false };
+  }
+}
+
+export async function toggleNightLight(): Promise<NightLightInfo> {
+  const raw = await win32Daemon.send('NIGHTLIGHT_TOGGLE');
+  try {
+    const p = JSON.parse(raw) as Partial<NightLightInfo>;
+    if (!p.supported) {
+      void shell.openExternal('ms-settings:nightlight');
+      return { supported: false, enabled: false };
+    }
+    return { supported: true, enabled: Boolean(p.enabled) };
+  } catch {
+    void shell.openExternal('ms-settings:nightlight');
+    return { supported: false, enabled: false };
+  }
+}
+
+export async function listWifiNetworks(): Promise<WifiNetwork[]> {
+  const info = await getNetworkInfo();
+  const currentSsid = info.kind === 'wifi' && info.connected ? (info.ssid ?? '').toLowerCase() : '';
+  return new Promise((resolve) => {
+    execFile(
+      'netsh',
+      ['wlan', 'show', 'networks', 'mode=bssid'],
+      { timeout: 2500, windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve([]);
+          return;
+        }
+        const bySsid = new Map<string, WifiNetwork>();
+        const blocks = stdout.split(/\r?\n(?=SSID\s+\d+\s*:)/i);
+        for (const block of blocks) {
+          const ssidMatch = /^SSID\s+\d+\s*:\s*(.*)$/im.exec(block);
+          const ssid = ssidMatch?.[1]?.trim();
+          if (!ssid) continue;
+          const authMatch = /^\s*Authentication\s*:\s*(.+)$/im.exec(block);
+          const auth = authMatch?.[1]?.trim().toLowerCase() ?? '';
+          const secured = auth !== '' && auth !== 'open';
+          const signals = Array.from(block.matchAll(/^\s*Signal\s*:\s*(\d+)%/gim)).map((m) =>
+            Number(m[1])
+          );
+          const signalPercent = signals.length > 0 ? Math.max(...signals) : 0;
+          const connected = currentSsid !== '' && ssid.toLowerCase() === currentSsid;
+          const prev = bySsid.get(ssid.toLowerCase());
+          if (!prev || signalPercent > prev.signalPercent) {
+            bySsid.set(ssid.toLowerCase(), { ssid, signalPercent, secured, connected });
+          }
+        }
+        const list = Array.from(bySsid.values()).sort((a, b) => {
+          if (a.connected !== b.connected) return a.connected ? -1 : 1;
+          return b.signalPercent - a.signalPercent;
+        });
+        resolve(list);
+      }
+    );
+  });
+}
+
+export function connectWifiNetwork(ssid: string): Promise<boolean> {
+  if (!ssid || /["\r\n]/.test(ssid)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    execFile(
+      'netsh',
+      ['wlan', 'connect', `name=${ssid}`],
+      { timeout: 3000, windowsHide: true },
+      (err) => {
+        lastNetFetch = 0;
+        resolve(!err);
+      }
+    );
+  });
+}
+
 let cachedNetInfo: NetworkInfo = { connected: false, kind: 'offline' };
 let lastNetFetch = 0;
 let noWifiBackoffUntil = 0;
@@ -884,15 +1290,20 @@ function hasActiveEthernetInterface(): boolean {
 
 export function getNetworkInfo(): Promise<NetworkInfo> {
   const now = Date.now();
-  if (now - lastNetFetch < 3500) {
+  if (now - lastNetFetch < 15000) {
     return Promise.resolve(cachedNetInfo);
   }
-  // Desktops without a Wi-Fi adapter shouldn't spawn netsh every 3.5s; check Ethernet cheaply in-process
+  // Fast in-process check: if wired Ethernet is active, skip spawning netsh.exe completely
+  // (spawning netsh every few seconds causes micro-stutters in games like CS2).
+  if (hasActiveEthernetInterface()) {
+    lastNetFetch = now;
+    cachedNetInfo = { connected: true, kind: 'ethernet' };
+    return Promise.resolve(cachedNetInfo);
+  }
+  // Desktops without a Wi-Fi adapter shouldn't spawn netsh; return offline cheaply in-process
   if (now < noWifiBackoffUntil) {
     lastNetFetch = now;
-    cachedNetInfo = hasActiveEthernetInterface()
-      ? { connected: true, kind: 'ethernet' }
-      : { connected: false, kind: 'offline' };
+    cachedNetInfo = { connected: false, kind: 'offline' };
     return Promise.resolve(cachedNetInfo);
   }
   return new Promise((resolve) => {
@@ -936,9 +1347,7 @@ export function getNetworkInfo(): Promise<NetworkInfo> {
   });
 }
 
-export function runQuickSystemAction(
-  action: 'lock' | 'taskmgr' | 'settings' | 'start' | 'quicksettings' | 'desktop'
-): void {
+export function runQuickSystemAction(action: SystemAction): void {
   if (action === 'lock') {
     execFile('rundll32.exe', ['user32.dll,LockWorkStation']);
   } else if (action === 'taskmgr') {
@@ -955,6 +1364,36 @@ export function runQuickSystemAction(
     void win32Daemon.send('START');
   } else if (action === 'quicksettings') {
     void win32Daemon.send('QUICK');
+  } else if (action === 'network-settings') {
+    void shell.openExternal('ms-settings:network');
+  } else if (action === 'network-troubleshoot') {
+    void shell
+      .openExternal('ms-contact-support:///?ActivationType=NetworkDiagnostics')
+      .catch(() => {
+        void shell.openExternal('ms-settings:troubleshoot');
+      });
+  } else if (action === 'network-speedtest') {
+    void shell.openExternal('https://www.bing.com/search?q=speed+test');
+  } else if (action === 'sound-settings') {
+    void shell.openExternal('ms-settings:sound');
+  } else if (action === 'volume-mixer') {
+    void shell.openExternal('ms-settings:apps-volume');
+  } else if (action === 'sound-troubleshoot') {
+    void shell
+      .openExternal('ms-contact-support:///?ActivationType=AudioDiagnostics')
+      .catch(() => {
+        void shell.openExternal('ms-settings:troubleshoot');
+      });
+  } else if (action === 'date-time-settings') {
+    void shell.openExternal('ms-settings:dateandtime');
+  } else if (action === 'notifications-settings') {
+    void shell.openExternal('ms-settings:notifications');
+  } else if (action === 'bluetooth-settings') {
+    void shell.openExternal('ms-settings:bluetooth');
+  } else if (action === 'nightlight-settings') {
+    void shell.openExternal('ms-settings:nightlight');
+  } else if (action === 'power-settings') {
+    void shell.openExternal('ms-settings:powersleep');
   }
 }
 

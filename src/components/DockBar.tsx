@@ -3,10 +3,12 @@ import {
   Activity,
   ArrowLeft,
   ArrowRight,
+  Bell,
   ChevronUp,
+  Clock,
   ExternalLink,
   FolderOpen,
-  Lock,
+  Gauge,
   Music,
   Pause,
   Pin,
@@ -14,6 +16,8 @@ import {
   Play,
   SkipBack,
   SkipForward,
+  SlidersHorizontal,
+  Wrench,
   X,
   Zap
 } from 'lucide-react';
@@ -36,7 +40,7 @@ import type {
   VolumeInfo
 } from '../types';
 import { AppIconGlyph } from './IconMapper';
-import { VolumeSlider } from './VolumeSlider';
+import { ControlCenterFlyout, type ControlCenterView } from './ControlCenterFlyout';
 import { WindowPeek } from './WindowPeek';
 import {
   BatteryIcon,
@@ -49,6 +53,90 @@ import {
 } from './PremiumIcons';
 
 const RUNNING_ORDER_KEY = 'aurabar.runningOrder';
+const LEARNED_PROCS_KEY = 'aurabar.learnedProcs';
+
+const GENERIC_LAUNCHER_EXES = new Set([
+  'update',
+  'launcher',
+  'bootstrapper',
+  'setup',
+  'stub',
+  'installer',
+  'updater'
+]);
+
+function normalizeAppToken(s?: string): string {
+  if (!s) return '';
+  return s.toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g, '');
+}
+
+function readLearnedProcs(): Record<string, string> {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(LEARNED_PROCS_KEY) ?? '{}');
+    const out: Record<string, string> = {};
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && v.trim()) out[k] = v.toLowerCase();
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function pinnedMatchesWindow(
+  app: PinnedApp,
+  w: RunningWindow,
+  learnedProc?: string
+): boolean {
+  if (app.kind === 'group') return false;
+
+  // 1) Official Windows AppUserModelID / Store AUMID match (covers Store, Electron, Squirrel, PWAs)
+  const appId =
+    app.appId?.toLowerCase() ??
+    (app.target?.toLowerCase().startsWith('shell:appsfolder\\')
+      ? app.target.slice('shell:appsfolder\\'.length).toLowerCase()
+      : undefined);
+  if (appId) {
+    if (w.appId?.toLowerCase() === appId || w.aumid?.toLowerCase() === appId) return true;
+  }
+
+  const wProc = w.processName.toLowerCase();
+
+  // 2) Auto-learned process binding (for .url Steam/Epic games & multi-stage launchers)
+  if (learnedProc && wProc === learnedProc) return true;
+
+  // 3) Exact exeName match (ignoring generic Squirrel/launcher stubs like Update.exe)
+  const exe = app.exeName?.toLowerCase();
+  if (exe && !GENERIC_LAUNCHER_EXES.has(exe) && wProc === exe) return true;
+
+  // 4) Specific install directory match (e.g. Launcher.exe -> Binaries\Win64\Game-Win64-Shipping.exe)
+  if (app.installDir && w.executablePath) {
+    const wExe = w.executablePath.replace(/\//g, '\\').toLowerCase();
+    const dir = app.installDir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    if (dir && wExe.startsWith(`${dir}\\`)) return true;
+  }
+
+  // 5) Normalized name match ONLY when the pin has no concrete exe/appId (e.g. .url game shortcuts)
+  if (!appId && (!exe || GENERIC_LAUNCHER_EXES.has(exe))) {
+    const appTok = normalizeAppToken(app.name);
+    if (appTok.length >= 4) {
+      const procTok = normalizeAppToken(w.processName);
+      const dispTok = normalizeAppToken(w.displayName);
+      const titleTok = normalizeAppToken(w.title);
+      if (
+        (procTok && (procTok === appTok || procTok.startsWith(appTok))) ||
+        (dispTok && (dispTok === appTok || dispTok.includes(appTok))) ||
+        (titleTok && titleTok === appTok)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 // Where the user dropped each open, unpinned app: `anchors[key]` is how many pinned apps come
 // before it, `order` ranks apps that share the same anchor
@@ -78,7 +166,7 @@ function readRunningOrder(): RunningLayout {
 interface CtxMenuState {
   x: number;
   anchorOffset?: number;
-  kind: 'pinned' | 'running' | 'bg' | 'tray';
+  kind: 'pinned' | 'running' | 'bg' | 'tray' | 'network' | 'volume' | 'clock';
   pinned?: PinnedApp;
   pinnedIndex?: number;
   running?: RunningWindow;
@@ -89,7 +177,7 @@ function ctxKeyOf(payload: Omit<CtxMenuState, 'x'>): string {
   if (payload.kind === 'pinned') return `pinned:${payload.pinned?.id ?? ''}`;
   if (payload.kind === 'running') return `running:${payload.running?.hwnd ?? payload.running?.pid ?? ''}`;
   if (payload.kind === 'bg') return `bg:${payload.bg?.pid ?? ''}`;
-  return 'tray';
+  return payload.kind;
 }
 
 interface TooltipState {
@@ -165,7 +253,7 @@ export function DockBar({
   const [lyricsOn] = useLyricsPref();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; x: number } | null>(null);
-  const [ccFlyout, setCcFlyout] = useState<{ x: number } | null>(null);
+  const [ccFlyout, setCcFlyout] = useState<{ x: number; view: ControlCenterView } | null>(null);
   const [overflowTray, setOverflowTray] = useState<{ x: number } | null>(null);
   const [backgroundApps, setBackgroundApps] = useState<BackgroundApp[]>([]);
   const [hoveredOverflowLabel, setHoveredOverflowLabel] = useState<string | null>(null);
@@ -203,6 +291,13 @@ export function DockBar({
   const suppressNextClickRef = useRef(false);
   const runDragRef = useRef(false);
   const [runningLayout, setRunningLayout] = useState<RunningLayout>(readRunningOrder);
+  const [learnedProcs, setLearnedProcs] = useState<Record<string, string>>(readLearnedProcs);
+  const pendingLaunchRef = useRef<{
+    pinnedId: string;
+    appName: string;
+    at: number;
+    baselineHwnds: Set<string>;
+  } | null>(null);
   const dragCandidateRef = useRef<PointerDragState | null>(null);
   const dragSnapshotRef = useRef<DragSlotSnapshot | null>(null);
   const liveDragRef = useRef<LiveDragPlan | null>(null);
@@ -225,23 +320,36 @@ export function DockBar({
     );
   };
 
-  // Live sync tray Volume + Wi-Fi/Network state cleanly (primary monitor only)
+  // Live sync tray Volume + Wi-Fi/Network state cleanly (primary monitor only, paused when hidden)
   useEffect(() => {
     if (isSecondary) return;
     let alive = true;
+    let paused = false;
+    const stopSusp = dockBridge.onSuspended((s) => {
+      paused = s;
+    });
     const pollTray = async () => {
+      if (paused) return;
       const [v, n] = await Promise.all([dockBridge.getVolume(), dockBridge.getNetworkInfo()]);
       if (!alive) return;
-      setTrayVol(v);
-      setNetInfo(n);
+      setTrayVol((prev) => (prev.level === v.level && prev.muted === v.muted ? prev : v));
+      setNetInfo((prev) =>
+        prev.connected === n.connected &&
+        prev.kind === n.kind &&
+        prev.ssid === n.ssid &&
+        prev.signalPercent === n.signalPercent
+          ? prev
+          : n
+      );
     };
     void pollTray();
-    const id = setInterval(() => void pollTray(), ccFlyout ? 650 : 2800);
+    const id = setInterval(() => void pollTray(), ccFlyout ? 750 : 4000);
     return () => {
       alive = false;
+      stopSusp();
       clearInterval(id);
     };
-  }, [ccFlyout, isSecondary]);
+  }, [Boolean(ccFlyout), isSecondary]);
 
   // Poll background/tray running apps when the overflow chevron popover is open
   useEffect(() => {
@@ -329,7 +437,7 @@ export function DockBar({
     activePanel,
     activeFolderObj?.id,
     activeFolderObj?.children?.length,
-    ccFlyout,
+    ccFlyout?.view,
     overflowTray,
     backgroundApps.length,
     ctxMenu,
@@ -347,6 +455,8 @@ export function DockBar({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        dockBridge.stopWindowPeek();
+        dockBridge.clearLiveThumbs();
         setPeek(null);
         setCtxMenu(null);
         setOpenFolder(null);
@@ -361,6 +471,8 @@ export function DockBar({
       }
     };
     const onBlur = () => {
+      dockBridge.stopWindowPeek();
+      dockBridge.clearLiveThumbs();
       setPeek(null);
       setCtxMenu(null);
       setOpenFolder(null);
@@ -744,20 +856,20 @@ export function DockBar({
     onTogglePanel(activePanel === panel ? null : panel);
   };
 
-  const toggleControlCenter = () => {
+  const toggleControlCenter = (targetView: ControlCenterView = 'main', forceOpen = false) => {
     closePeekNow();
     setCtxMenu(null);
     setOpenFolder(null);
     setOverflowTray(null);
     setTooltip(null);
-    if (ccFlyout) {
+    if (ccFlyout && !forceOpen && ccFlyout.view === targetView) {
       setCcFlyout(null);
       return;
     }
     onTogglePanel(null);
     const rect = ccClusterRef.current?.getBoundingClientRect();
     const centerX = rect ? rect.left + rect.width / 2 : window.innerWidth - 200;
-    setCcFlyout({ x: centerX });
+    setCcFlyout({ x: centerX, view: targetView });
   };
 
   // Warm the background-apps list while the pointer is still travelling to the arrow, so the
@@ -794,21 +906,28 @@ export function DockBar({
     setTimeout(onRefreshMedia, 250);
   };
 
+  const allLeafPinnedApps: PinnedApp[] = [];
   const pinnedExeNames = new Set<string>();
   for (const p of pinnedApps) {
     if (p.kind === 'group' && p.children) {
       for (const c of p.children) {
+        allLeafPinnedApps.push(c);
         if (c.exeName) pinnedExeNames.add(c.exeName.toLowerCase());
       }
-    } else if (p.exeName) {
-      pinnedExeNames.add(p.exeName.toLowerCase());
+    } else {
+      allLeafPinnedApps.push(p);
+      if (p.exeName) pinnedExeNames.add(p.exeName.toLowerCase());
     }
   }
 
-  const findWindowForPinned = (exeName?: string): RunningWindow | undefined => {
-    if (!exeName) return undefined;
-    const target = exeName.toLowerCase();
-    const matches = runningWindows.filter((w) => w.processName.toLowerCase() === target);
+  const windowsForPinned = (app: PinnedApp): RunningWindow[] => {
+    if (app.kind === 'group') return [];
+    const learned = learnedProcs[app.id];
+    return runningWindows.filter((w) => pinnedMatchesWindow(app, w, learned));
+  };
+
+  const findWindowForPinned = (app: PinnedApp): RunningWindow | undefined => {
+    const matches = windowsForPinned(app);
     return matches.find((w) => w.isActive) ?? matches[0];
   };
 
@@ -816,6 +935,68 @@ export function DockBar({
     if (!processName) return [];
     const target = processName.toLowerCase();
     return runningWindows.filter((w) => w.processName.toLowerCase() === target);
+  };
+
+  // Auto-learn the running process for launcher/.url shortcuts (e.g. Steam/Epic games)
+  // when clicking the pinned icon spawns a brand-new unclaimed window shortly afterward.
+  useEffect(() => {
+    const pending = pendingLaunchRef.current;
+    if (!pending) return;
+    if (Date.now() - pending.at > 22_000) {
+      pendingLaunchRef.current = null;
+      return;
+    }
+    const freshUnclaimed = runningWindows.filter((w) => {
+      const key = w.hwnd ?? `${w.pid}`;
+      if (pending.baselineHwnds.has(key)) return false;
+      return !allLeafPinnedApps.some(
+        (p) => p.id !== pending.pinnedId && pinnedMatchesWindow(p, w, learnedProcs[p.id])
+      );
+    });
+    if (freshUnclaimed.length === 0) return;
+
+    const appTok = normalizeAppToken(pending.appName);
+    const chosen =
+      freshUnclaimed.find((w) => {
+        if (appTok.length < 3) return false;
+        const t = normalizeAppToken(`${w.displayName ?? ''} ${w.title} ${w.processName}`);
+        return t.includes(appTok);
+      }) ?? (freshUnclaimed.length === 1 && Date.now() - pending.at <= 14_000 ? freshUnclaimed[0] : undefined);
+
+    if (!chosen) return;
+    const proc = chosen.processName.toLowerCase();
+    pendingLaunchRef.current = null;
+    setLearnedProcs((prev) => {
+      if (prev[pending.pinnedId] === proc) return prev;
+      const next = { ...prev, [pending.pinnedId]: proc };
+      try {
+        window.localStorage.setItem(LEARNED_PROCS_KEY, JSON.stringify(next));
+      } catch {
+        // Best effort persistence
+      }
+      return next;
+    });
+  }, [runningWindows]);
+
+  const launchOrWakePinned = async (app: PinnedApp) => {
+    const woken = await dockBridge.wakeHiddenApp(
+      learnedProcs[app.id] ?? app.exeName,
+      app.installDir
+    );
+    if (woken) {
+      setTimeout(onRefreshWindows, 120);
+      return;
+    }
+    const exe = app.exeName?.toLowerCase();
+    if (!app.appId && (!exe || GENERIC_LAUNCHER_EXES.has(exe))) {
+      pendingLaunchRef.current = {
+        pinnedId: app.id,
+        appName: app.name,
+        at: Date.now(),
+        baselineHwnds: new Set(runningWindows.map((w) => w.hwnd ?? `${w.pid}`))
+      };
+    }
+    await dockBridge.launchTarget(app.target);
   };
 
   const clearPeekTimers = () => {
@@ -827,6 +1008,8 @@ export function DockBar({
 
   function closePeekNow() {
     clearPeekTimers();
+    dockBridge.stopWindowPeek();
+    dockBridge.clearLiveThumbs();
     setPeek(null);
   }
 
@@ -933,7 +1116,7 @@ export function DockBar({
   const findWindowForGroup = (children?: PinnedApp[]): RunningWindow | undefined => {
     if (!children) return undefined;
     for (const c of children) {
-      const m = findWindowForPinned(c.exeName);
+      const m = findWindowForPinned(c);
       if (m) return m;
     }
     return undefined;
@@ -943,7 +1126,10 @@ export function DockBar({
   const seenProcs = new Set<string>();
   for (const w of runningWindows) {
     const procKey = w.processName.toLowerCase();
-    if (pinnedExeNames.has(procKey)) continue;
+    const claimedByPinned = allLeafPinnedApps.some((p) =>
+      pinnedMatchesWindow(p, w, learnedProcs[p.id])
+    );
+    if (claimedByPinned) continue;
     if (!seenProcs.has(procKey)) {
       seenProcs.add(procKey);
       barWindows.push(w);
@@ -1097,10 +1283,15 @@ export function DockBar({
     closePeekNow();
     setTooltip(null);
     setOpenFolder(null);
+    setCcFlyout(null);
     if (!opts?.preserveOverflow) setOverflowTray(null);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const anchorX = rect.width > 240 ? e.clientX : rect.left;
-    const clampedX = Math.max(8, Math.min(window.innerWidth - 196, anchorX));
+    const menuWidth =
+      payload.kind === 'network' || payload.kind === 'volume' || payload.kind === 'clock'
+        ? 256
+        : 196;
+    const clampedX = Math.max(8, Math.min(window.innerWidth - menuWidth, anchorX));
     const anchorOffset = opts?.aboveTrigger
       ? settings.position === 'bottom'
         ? Math.min(350, Math.max(65, Math.round(window.innerHeight - rect.top + 6)))
@@ -1115,13 +1306,14 @@ export function DockBar({
     if (!win.aumid && win.processName.toLowerCase() === 'applicationframehost') return null;
     return {
       id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      name: win.processName,
+      name: win.displayName || win.processName,
       target,
       kind: 'app',
       icon: 'app',
       color: '#4CB3F0',
       iconDataUrl: win.iconDataUrl,
-      exeName: win.processName.toLowerCase()
+      exeName: win.processName.toLowerCase(),
+      appId: (win.appId || win.aumid)?.toLowerCase()
     };
   };
 
@@ -1143,30 +1335,18 @@ export function DockBar({
       icon: 'app',
       color: '#4CB3F0',
       iconDataUrl: bg.iconDataUrl,
-      exeName: bg.processName.toLowerCase()
+      exeName: bg.processName.toLowerCase(),
+      appId: bg.aumid?.toLowerCase()
     };
     onSavePinnedApps([...pinnedApps, next]);
   };
 
-  // Deduplicated list of all running apps (visible windows + silent tray/background apps)
-  const overflowOpenApps: RunningWindow[] = [];
-  const overflowSeenKeys = new Set<string>();
-  for (const w of runningWindows) {
-    const key = (w.executablePath || w.processName).toLowerCase();
-    if (!overflowSeenKeys.has(key)) {
-      overflowSeenKeys.add(key);
-      overflowOpenApps.push(w);
-    }
-  }
-  const overflowBgApps: BackgroundApp[] = [];
-  for (const b of backgroundApps) {
-    const key = (b.executablePath || b.processName).toLowerCase();
-    if (!overflowSeenKeys.has(key) && !overflowSeenKeys.has(b.processName.toLowerCase())) {
-      overflowSeenKeys.add(key);
-      overflowBgApps.push(b);
-    }
-  }
-  const overflowTotalCount = overflowOpenApps.length + overflowBgApps.length;
+  // Real Windows system tray icons (matching Windows 11's hidden-icons overflow)
+  const openExeSet = new Set(
+    runningWindows.map((w) => (w.executablePath || w.processName).toLowerCase())
+  );
+  const overflowBgApps = backgroundApps;
+  const overflowTotalCount = overflowBgApps.length;
 
   const movePinned = (index: number, delta: -1 | 1) => {
     const targetIdx = index + delta;
@@ -1368,7 +1548,7 @@ export function DockBar({
     if (peek.key.startsWith('pin:')) {
       const app = pinnedApps.find((p) => p.id === peek.key.slice(4));
       if (app && app.kind !== 'group') {
-        peekData = { windows: windowsForProcess(app.exeName), name: app.name, iconUrl: app.iconDataUrl };
+        peekData = { windows: windowsForPinned(app), name: app.name, iconUrl: app.iconDataUrl };
       }
     } else {
       const wins = windowsForProcess(peek.key.slice(5));
@@ -1413,14 +1593,16 @@ export function DockBar({
           windows={peekData.windows}
           appName={peekData.name}
           appIconUrl={peekData.iconUrl}
+          media={media}
           x={peek.x}
           position={settings.position}
           lang={settings.language}
           onMouseEnter={cancelPeekClose}
           onMouseLeave={schedulePeekClose}
+          onRefreshMedia={onRefreshMedia}
           onActivate={(win) => {
             closePeekNow();
-            void dockBridge.focusWindow(win.pid, win.hwnd).then((ok) => {
+            void dockBridge.activateWindow(win.pid, win.hwnd).then((ok) => {
               setTimeout(onRefreshWindows, 80);
               if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
             });
@@ -1471,7 +1653,7 @@ export function DockBar({
 
           <div className="folder-apps-grid">
             {(activeFolderObj.children ?? []).map((child) => {
-              const matchedWin = findWindowForPinned(child.exeName);
+              const matchedWin = findWindowForPinned(child);
               return (
                 <div
                   key={child.id}
@@ -1492,10 +1674,12 @@ export function DockBar({
                     if (matchedWin && !e.shiftKey) {
                       void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then((ok) => {
                         setTimeout(onRefreshWindows, 120);
-                        if (!ok) void dockBridge.launchTarget(child.target);
+                        if (!ok) void launchOrWakePinned(child);
                       });
-                    } else {
+                    } else if (e.shiftKey) {
                       void dockBridge.launchTarget(child.target);
+                    } else {
+                      void launchOrWakePinned(child);
                     }
                   }}
                 >
@@ -1528,170 +1712,26 @@ export function DockBar({
         </div>
       )}
 
-      {/* Apple Liquid Glass Control Center Flyout */}
+      {/* AuraBar Quick Settings / Control Center Flyout */}
       {ccFlyout && (
-        <div
+        <ControlCenterFlyout
           ref={ccFlyoutRef}
-          className="control-center-flyout"
-          style={{
-            left: Math.round(Math.max(12, Math.min(window.innerWidth - 332, ccFlyout.x - 160))),
-            ...(settings.position === 'bottom' ? { bottom: 65 } : { top: 65 })
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-        >
-          <div className="cc-bento-grid">
-            {/* Wi-Fi / Network Module — plain typographic layout, no colored circle badge */}
-            <button
-              type="button"
-              className="cc-module-card"
-              onClick={() => void dockBridge.systemAction('quicksettings')}
-              title="Open Windows Quick Settings"
-            >
-              <div className="row-between" style={{ width: '100%' }}>
-                <span style={{ color: 'var(--text-primary)', display: 'inline-flex' }}>
-                  <WifiIcon
-                    connected={netInfo.connected}
-                    signalPercent={netInfo.signalPercent}
-                    kind={netInfo.kind}
-                  />
-                </span>
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 999,
-                    background: netInfo.connected ? 'var(--emerald)' : 'var(--text-faint)'
-                  }}
-                />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <div className="cc-title">
-                  {netInfo.kind === 'ethernet'
-                    ? settings.language === 'ar'
-                      ? 'سلكي Ethernet'
-                      : 'Ethernet'
-                    : 'Wi-Fi'}
-                </div>
-                <div className="cc-sub">
-                  {!netInfo.connected
-                    ? settings.language === 'ar'
-                      ? 'غير متصل'
-                      : 'Not connected'
-                    : netInfo.kind === 'ethernet'
-                      ? settings.language === 'ar'
-                        ? 'متصل'
-                        : 'Connected'
-                      : `${netInfo.ssid ?? 'Connected'}${
-                          netInfo.signalPercent !== undefined ? ` · ${netInfo.signalPercent}%` : ''
-                        }`}
-                </div>
-              </div>
-            </button>
-
-            {/* Language + Power Stack */}
-            <div className="cc-mini-stack">
-              <button
-                type="button"
-                className="cc-mini-tile"
-                onClick={onSwitchKbdLang}
-                title="Switch Keyboard Language"
-              >
-                <span style={{ color: 'var(--text-muted)', display: 'inline-flex' }}>
-                  <GlobeLangIcon />
-                </span>
-                <div style={{ minWidth: 0 }}>
-                  <div className="cc-title">{kbdLang === 'AR' ? 'العربية' : kbdLang}</div>
-                  <div className="cc-sub">
-                    {settings.language === 'ar' ? 'لغة الإدخال' : 'Input'}
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                className="cc-mini-tile"
-                onClick={() => toggle('system')}
-                title={dict.system}
-              >
-                <span
-                  style={{
-                    color: stats.batteryCharging ? 'var(--emerald)' : 'var(--text-muted)',
-                    display: 'inline-flex'
-                  }}
-                >
-                  <Zap size={14} />
-                </span>
-                <div style={{ minWidth: 0 }}>
-                  <div className="cc-title tabular">
-                    {stats.batteryPercent !== null
-                      ? `${stats.batteryPercent}%`
-                      : settings.language === 'ar'
-                        ? 'كهرباء AC'
-                        : 'AC Power'}
-                  </div>
-                  <div className="cc-sub">
-                    {stats.batteryCharging
-                      ? settings.language === 'ar'
-                        ? 'قيد الشحن'
-                        : 'Charging'
-                      : settings.language === 'ar'
-                        ? 'الطاقة'
-                        : 'Power'}
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Sound Module */}
-          <div className="cc-sound-card">
-            <div className="row-between">
-              <span className="cc-title" style={{ fontSize: 12 }}>
-                {dict.volume}
-              </span>
-              <span className="cc-sub tabular">
-                {trayVol.muted
-                  ? settings.language === 'ar'
-                    ? 'مكتوم'
-                    : 'Muted'
-                  : `${trayVol.level}%`}
-              </span>
-            </div>
-            <VolumeSlider />
-          </div>
-
-          {/* Hardware Telemetry Footer */}
-          <div className="cc-footer-bar tabular">
-            <span>
-              CPU {stats.cpuPercent}% · RAM {stats.ramPercent}%
-              {stats.diskFreeGb !== null ? ` · C: ${stats.diskFreeGb}G` : ''}
-            </span>
-            <div className="row-gap" style={{ gap: 4 }}>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '3px 7px', fontSize: 11 }}
-                onClick={() => void dockBridge.systemAction('lock')}
-                title="Lock PC"
-              >
-                <Lock size={11} />
-              </button>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '3px 8px', fontSize: 11 }}
-                onClick={() => toggle('system')}
-              >
-                <Activity size={11} />
-                <span>{dict.system}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+          x={ccFlyout.x}
+          position={settings.position}
+          lang={settings.language}
+          view={ccFlyout.view}
+          onChangeView={(nextView) =>
+            setCcFlyout((prev) => (prev ? { ...prev, view: nextView } : null))
+          }
+          netInfo={netInfo}
+          trayVol={trayVol}
+          onVolumeChange={setTrayVol}
+          stats={stats}
+          kbdLang={kbdLang}
+          onSwitchKbdLang={onSwitchKbdLang}
+          onOpenPanel={toggle}
+          onClose={() => setCcFlyout(null)}
+        />
       )}
 
       {/* Hidden / Running Apps Tray Overflow Popover */}
@@ -1711,98 +1751,65 @@ export function DockBar({
         >
           <div className="tray-overflow-header">
             <span className="tray-overflow-title">
-              {settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
+              {settings.language === 'ar' ? 'الأيقونات المخفية' : 'Hidden icons'}
             </span>
             <span className="tray-overflow-count tabular">{overflowTotalCount}</span>
           </div>
 
           {overflowTotalCount === 0 ? (
             <div className="tray-overflow-empty">
-              {settings.language === 'ar' ? 'لا توجد تطبيقات شغالة' : 'No running apps'}
+              {settings.language === 'ar' ? 'لا توجد أيقونات مخفية' : 'No hidden tray icons'}
             </div>
           ) : (
             <div className="tray-overflow-grid">
-              {overflowOpenApps.map((win) => (
-                <button
-                  key={`ov-win-${win.hwnd ?? win.pid}`}
-                  type="button"
-                  className={`tray-overflow-tile ${win.isActive ? 'active' : ''}`}
-                  aria-label={win.title || win.processName}
-                  onMouseEnter={() => setHoveredOverflowLabel(win.title || win.processName)}
-                  onMouseLeave={() => setHoveredOverflowLabel(null)}
-                  onClick={() => {
-                    setCtxMenu(null);
-                    setOverflowTray(null);
-                    void dockBridge.openApp(win.pid, win.executablePath).then(() => {
-                      setTimeout(onRefreshWindows, 120);
-                    });
-                  }}
-                  onContextMenu={(e) =>
-                    openContextMenu(
-                      e,
-                      { kind: 'running', running: win },
-                      { preserveOverflow: true, aboveTrigger: true }
-                    )
-                  }
-                >
-                  {win.iconDataUrl ? (
-                    <img
-                      className="app-icon-img"
-                      src={win.iconDataUrl}
-                      alt={win.processName}
-                      draggable={false}
-                      style={{ width: 20, height: 20 }}
+              {overflowBgApps.map((bg) => {
+                const isOpen =
+                  openExeSet.has(bg.executablePath.toLowerCase()) ||
+                  openExeSet.has(bg.processName.toLowerCase());
+                return (
+                  <button
+                    key={`ov-bg-${bg.pid}`}
+                    type="button"
+                    className="tray-overflow-tile"
+                    aria-label={bg.displayName || bg.processName}
+                    onMouseEnter={() => setHoveredOverflowLabel(bg.displayName || bg.processName)}
+                    onMouseLeave={() => setHoveredOverflowLabel(null)}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      setOverflowTray(null);
+                      void dockBridge.openApp(bg.pid, bg.executablePath).then(() => {
+                        setTimeout(() => {
+                          onRefreshWindows();
+                          void dockBridge.getBackgroundApps().then(setBackgroundApps);
+                        }, 220);
+                      });
+                    }}
+                    onContextMenu={(e) =>
+                      openContextMenu(
+                        e,
+                        { kind: 'bg', bg },
+                        { preserveOverflow: true, aboveTrigger: true }
+                      )
+                    }
+                  >
+                    {bg.iconDataUrl ? (
+                      <img
+                        className="app-icon-img"
+                        src={bg.iconDataUrl}
+                        alt={bg.displayName}
+                        draggable={false}
+                        style={{ width: 20, height: 20 }}
+                      />
+                    ) : (
+                      <AppIconGlyph name="app" color="var(--text-muted)" size={17} />
+                    )}
+                    <span
+                      className={`tray-overflow-dot ${isOpen ? 'window' : 'bg'}`}
+                      aria-hidden="true"
                     />
-                  ) : (
-                    <AppIconGlyph name="app" color="var(--accent)" size={17} />
-                  )}
-                  <span
-                    className={`tray-overflow-dot ${win.isActive ? 'active' : 'window'}`}
-                    aria-hidden="true"
-                  />
-                </button>
-              ))}
-
-              {overflowBgApps.map((bg) => (
-                <button
-                  key={`ov-bg-${bg.pid}`}
-                  type="button"
-                  className="tray-overflow-tile"
-                  aria-label={bg.displayName || bg.processName}
-                  onMouseEnter={() => setHoveredOverflowLabel(bg.displayName || bg.processName)}
-                  onMouseLeave={() => setHoveredOverflowLabel(null)}
-                  onClick={() => {
-                    setCtxMenu(null);
-                    setOverflowTray(null);
-                    void dockBridge.openApp(bg.pid, bg.executablePath).then(() => {
-                      setTimeout(() => {
-                        onRefreshWindows();
-                        void dockBridge.getBackgroundApps().then(setBackgroundApps);
-                      }, 220);
-                    });
-                  }}
-                  onContextMenu={(e) =>
-                    openContextMenu(
-                      e,
-                      { kind: 'bg', bg },
-                      { preserveOverflow: true, aboveTrigger: true }
-                    )
-                  }
-                >
-                  {bg.iconDataUrl ? (
-                    <img
-                      className="app-icon-img"
-                      src={bg.iconDataUrl}
-                      alt={bg.displayName}
-                      draggable={false}
-                      style={{ width: 20, height: 20 }}
-                    />
-                  ) : (
-                    <AppIconGlyph name="app" color="var(--text-muted)" size={17} />
-                  )}
-                  <span className="tray-overflow-dot bg" aria-hidden="true" />
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -1855,6 +1862,116 @@ export function DockBar({
                   <span>{settings.language === 'ar' ? 'إعدادات الشريط' : 'Taskbar settings'}</span>
                 </button>
               )}
+            </>
+          )}
+          {ctxMenu.kind === 'network' && (
+            <>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('network-troubleshoot');
+                }}
+              >
+                <Wrench size={14} />
+                <span>
+                  {settings.language === 'ar' ? 'تشخيص مشاكل الشبكة' : 'Diagnose network problems'}
+                </span>
+              </button>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('network-speedtest');
+                }}
+              >
+                <Gauge size={14} />
+                <span>
+                  {settings.language === 'ar' ? 'اختبار سرعة الإنترنت' : 'Perform speed test'}
+                </span>
+              </button>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('network-settings');
+                }}
+              >
+                <SettingsIcon />
+                <span>
+                  {settings.language === 'ar'
+                    ? 'إعدادات الشبكة والإنترنت'
+                    : 'Network and Internet settings'}
+                </span>
+              </button>
+            </>
+          )}
+          {ctxMenu.kind === 'volume' && (
+            <>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('sound-troubleshoot');
+                }}
+              >
+                <Wrench size={14} />
+                <span>
+                  {settings.language === 'ar'
+                    ? 'استكشاف مشاكل الصوت وإصلاحها'
+                    : 'Troubleshoot sound problems'}
+                </span>
+              </button>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  toggleControlCenter('audio', true);
+                }}
+              >
+                <SlidersHorizontal size={14} style={{ color: 'var(--accent)' }} />
+                <span>
+                  {settings.language === 'ar' ? 'فتح مازج الصوت' : 'Open volume mixer'}
+                </span>
+              </button>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('sound-settings');
+                }}
+              >
+                <SettingsIcon />
+                <span>{settings.language === 'ar' ? 'إعدادات الصوت' : 'Sound settings'}</span>
+              </button>
+            </>
+          )}
+          {ctxMenu.kind === 'clock' && (
+            <>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('date-time-settings');
+                }}
+              >
+                <Clock size={14} />
+                <span>
+                  {settings.language === 'ar' ? 'ضبط التاريخ والوقت' : 'Adjust date and time'}
+                </span>
+              </button>
+              <button
+                className="taskbar-ctx-item"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void dockBridge.systemAction('notifications-settings');
+                }}
+              >
+                <Bell size={14} />
+                <span>
+                  {settings.language === 'ar' ? 'إعدادات الإشعارات' : 'Notifications settings'}
+                </span>
+              </button>
             </>
           )}
           {ctxMenu.kind === 'running' && ctxMenu.running && (
@@ -2207,10 +2324,10 @@ export function DockBar({
                 const isGroup = app.kind === 'group';
                 const matchedWin = isGroup
                   ? findWindowForGroup(app.children)
-                  : findWindowForPinned(app.exeName);
+                  : findWindowForPinned(app);
                 const isMergeTarget = isLiveDragging && liveDrag?.mergeTargetId === app.id;
                 const isBeingDragged = origDraggedIndex === index;
-                const appWindows = isGroup ? [] : windowsForProcess(app.exeName);
+                const appWindows = isGroup ? [] : windowsForPinned(app);
                 const peekKey = `pin:${app.id}`;
 
                 let shiftPx = 0;
@@ -2302,12 +2419,13 @@ export function DockBar({
                       if (matchedWin && !e.shiftKey) {
                         void dockBridge.focusWindow(matchedWin.pid, matchedWin.hwnd).then((ok) => {
                           setTimeout(onRefreshWindows, 80);
-                          // Could not bring the window forward: open the app the normal way, which
-                          // surfaces single-instance apps instead of leaving the click dead
-                          if (!ok) void dockBridge.launchTarget(app.target);
+                          // Only launch if the window literally closed/disappeared ('gone')
+                          if (!ok) void launchOrWakePinned(app);
                         });
-                      } else {
+                      } else if (e.shiftKey) {
                         void dockBridge.launchTarget(app.target);
+                      } else {
+                        void launchOrWakePinned(app);
                       }
                     }}
                   >
@@ -2438,7 +2556,7 @@ export function DockBar({
                 ref={overflowBtnRef}
                 type="button"
                 className={`tray-overflow-btn ${overflowTray ? 'active' : ''}`}
-                aria-label={settings.language === 'ar' ? 'التطبيقات قيد التشغيل' : 'Running apps'}
+                aria-label={settings.language === 'ar' ? 'إظهار الأيقونات المخفية' : 'Show hidden icons'}
                 aria-expanded={Boolean(overflowTray)}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2449,10 +2567,10 @@ export function DockBar({
                   prefetchBackgroundApps();
                   showTooltipFor(
                     e,
-                    settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'
+                    settings.language === 'ar' ? 'الأيقونات المخفية' : 'Hidden icons'
                   );
                 }}
-                title={settings.language === 'ar' ? 'التطبيقات الشغالة' : 'Running apps'}
+                title={settings.language === 'ar' ? 'الأيقونات المخفية' : 'Hidden icons'}
               >
                 <ChevronUp
                   size={14}
@@ -2490,6 +2608,7 @@ export function DockBar({
                     e.stopPropagation();
                     toggleControlCenter();
                   }}
+                  onContextMenu={(e) => openContextMenu(e, { kind: 'network' })}
                   title={
                     netInfo.connected
                       ? `${netInfo.ssid ?? 'Connected'}${
@@ -2516,6 +2635,7 @@ export function DockBar({
                     e.stopPropagation();
                     toggleControlCenter();
                   }}
+                  onContextMenu={(e) => openContextMenu(e, { kind: 'volume' })}
                   onWheel={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -2536,9 +2656,13 @@ export function DockBar({
                   <>
                     <span className="tray-cluster-sep" aria-hidden="true" />
                     <button
-                      className={`tray-cluster-btn tabular ${activePanel === 'system' ? 'active' : ''}`}
+                      className={`tray-cluster-btn cc-trigger-btn tabular ${ccFlyout ? 'active' : ''}`}
                       aria-label={`${dict.battery}: ${stats.batteryPercent}%`}
-                      onClick={() => toggle('system')}
+                      aria-expanded={Boolean(ccFlyout)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleControlCenter();
+                      }}
                       title={`${dict.battery}: ${stats.batteryPercent}%`}
                     >
                       <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
@@ -2555,7 +2679,7 @@ export function DockBar({
             aria-label={dict.calendar}
             aria-expanded={activePanel === 'calendar'}
             onClick={() => toggle('calendar')}
-            onContextMenu={(e) => openContextMenu(e, { kind: 'tray' })}
+            onContextMenu={(e) => openContextMenu(e, { kind: 'clock' })}
             title={dict.calendar}
           >
             <span className="tray-clock-time">{timeStr}</span>

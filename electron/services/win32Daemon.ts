@@ -4,10 +4,16 @@ import path from 'node:path';
 
 const COMMAND_TIMEOUT_MS = 3500;
 
-// Things the user just did (a click on a taskbar icon, a volume key...) must not wait behind
-// background refreshes such as window lists, thumbnails and icons that are already queued
+// Things the user just did (a click on a taskbar icon, a volume key, live hover previews...)
+// must not wait behind background refreshes such as window lists, thumbnails and icons
 const URGENT_COMMANDS = new Set([
   'TOGGLE',
+  'FOCUS',
+  'PEEK_START',
+  'PEEK_STOP',
+  'LIVE_THUMBS',
+  'LIVE_THUMBS_CLEAR',
+  'WAKE_HIDDEN',
   'CLOSE_WIN',
   'OPEN_APP',
   'QUIT_APP',
@@ -19,16 +25,52 @@ const URGENT_COMMANDS = new Set([
   'VOL_UP',
   'VOL_DOWN',
   'VOL_MUTE',
+  'AUDIO_SET_DEVICE',
+  'AUDIO_SESSION_VOL',
+  'AUDIO_SESSION_MUTE',
+  'BRIGHT_SET',
+  'NIGHTLIGHT_TOGGLE',
   'MEDIA_PLAYPAUSE',
   'MEDIA_NEXT',
   'MEDIA_PREV',
   'KBD_SWITCH',
-  'FULLSCREEN'
+  'FULLSCREEN',
+  'FULLSCREEN_OF'
 ]);
+
+// Commands where only the newest queued value matters — coalescing prevents backlog lag
+// while dragging sliders, sweeping across taskbar icons, or during background polling.
+const COALESCED_PREFIXES = new Set([
+  'VOL_SET',
+  'BRIGHT_SET',
+  'LIVE_THUMBS',
+  'LIVE_THUMBS_CLEAR',
+  'PEEK_START',
+  'PEEK_STOP',
+  'LIST',
+  'FULLSCREEN',
+  'FULLSCREEN_OF',
+  'KBD_LANG',
+  'VOL_GET'
+]);
+
+function coalesceKeyOf(command: string): string | null {
+  const sp = command.indexOf(' ');
+  const verb = sp === -1 ? command : command.slice(0, sp);
+  if (verb === 'AUDIO_SESSION_VOL') {
+    // Coalesce per app session id ("AUDIO_SESSION_VOL <pct> <id>")
+    const sp2 = command.indexOf(' ', sp + 1);
+    if (sp2 > 0) return `AUDIO_SESSION_VOL:${command.slice(sp2 + 1).trim().toLowerCase()}`;
+  }
+  if (verb === 'PEEK_START' || verb === 'PEEK_STOP') return 'PEEK';
+  if (verb === 'LIVE_THUMBS' || verb === 'LIVE_THUMBS_CLEAR') return 'LIVE_THUMBS';
+  return COALESCED_PREFIXES.has(verb) ? verb : null;
+}
 
 interface QueuedCommand {
   command: string;
   urgent: boolean;
+  coalesceKey: string | null;
   resolve: (value: string) => void;
 }
 
@@ -148,8 +190,22 @@ class Win32Daemon {
 
   send(command: string): Promise<string> {
     return new Promise<string>((resolve) => {
-      const urgent = URGENT_COMMANDS.has(command.split(' ', 1)[0]);
-      const job: QueuedCommand = { command, urgent, resolve };
+      const verb = command.split(' ', 1)[0];
+      const urgent = URGENT_COMMANDS.has(verb);
+      const coalesceKey = coalesceKeyOf(command);
+
+      // Drop any superseded queued command with the same coalesceKey so rapid drags/hovers
+      // never accumulate latency behind stale work
+      if (coalesceKey) {
+        for (let i = this.queue.length - 1; i >= 0; i--) {
+          if (this.queue[i].coalesceKey === coalesceKey) {
+            const stale = this.queue.splice(i, 1)[0];
+            stale.resolve('');
+          }
+        }
+      }
+
+      const job: QueuedCommand = { command, urgent, coalesceKey, resolve };
       if (urgent) {
         // After other urgent jobs (keeps their order), before everything background
         let at = 0;

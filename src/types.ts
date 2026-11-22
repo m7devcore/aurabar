@@ -5,6 +5,25 @@ export type Language = 'en' | 'ar';
 
 export type ActivePanel = 'apps' | 'media' | 'system' | 'calendar' | 'settings' | null;
 
+export type SystemAction =
+  | 'lock'
+  | 'taskmgr'
+  | 'settings'
+  | 'start'
+  | 'quicksettings'
+  | 'desktop'
+  | 'network-settings'
+  | 'network-troubleshoot'
+  | 'network-speedtest'
+  | 'sound-settings'
+  | 'volume-mixer'
+  | 'sound-troubleshoot'
+  | 'date-time-settings'
+  | 'notifications-settings'
+  | 'bluetooth-settings'
+  | 'nightlight-settings'
+  | 'power-settings';
+
 export interface PinnedApp {
   id: string;
   name: string;
@@ -14,6 +33,8 @@ export interface PinnedApp {
   color: string;
   iconDataUrl?: string;
   exeName?: string;
+  appId?: string;
+  installDir?: string;
   children?: PinnedApp[];
 }
 
@@ -31,6 +52,8 @@ export interface RunningWindow {
   title: string;
   executablePath?: string;
   aumid?: string;
+  appId?: string;
+  displayName?: string;
   iconDataUrl?: string;
   isMinimized?: boolean;
   isActive?: boolean;
@@ -87,6 +110,40 @@ export interface LyricsResult {
 export interface VolumeInfo {
   level: number;
   muted: boolean;
+}
+
+export interface AudioOutputDevice {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
+export interface AudioAppSession {
+  id: string;
+  name: string;
+  exePath?: string;
+  iconDataUrl?: string;
+  volume: number;
+  muted: boolean;
+  isSystem: boolean;
+  active: boolean;
+}
+
+export interface BrightnessInfo {
+  supported: boolean;
+  level: number;
+}
+
+export interface NightLightInfo {
+  supported: boolean;
+  enabled: boolean;
+}
+
+export interface WifiNetwork {
+  ssid: string;
+  signalPercent: number;
+  secured: boolean;
+  connected: boolean;
 }
 
 export interface NetworkInfo {

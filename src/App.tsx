@@ -48,6 +48,9 @@ export function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [kbdLang, setKbdLang] = useState('EN');
   const [now, setNow] = useState(() => new Date());
+  const [suspended, setSuspended] = useState(false);
+
+  useEffect(() => dockBridge.onSuspended(setSuspended), []);
 
   // Always merge edits into the newest config; render-time closures can be a save behind
   const configRef = useRef<AppConfig | null>(null);
@@ -145,28 +148,52 @@ export function App() {
     void dockBridge.setPopoverOpen(panel !== null);
   };
 
-  // System stats + clock + keyboard language tick
+  const activePanelRef = useRef<ActivePanel>(null);
+  activePanelRef.current = activePanel;
+
+  // System stats + clock + keyboard language tick (paused while hidden in fullscreen games)
   useEffect(() => {
-    if (VIEW_MODE === 'island') return;
+    if (VIEW_MODE === 'island' || suspended) return;
     if (VIEW_MODE === 'secondary-dock') {
-      const id = setInterval(() => setNow(new Date()), 2000);
+      const id = setInterval(() => {
+        const d = new Date();
+        setNow((prev) => (prev.getMinutes() === d.getMinutes() && prev.getHours() === d.getHours() ? prev : d));
+      }, 3000);
       return () => clearInterval(id);
     }
     const poll = async () => {
-      const s = await dockBridge.getSystemStats();
-      setStats(s);
-      setCpuHistory((prev) => [...prev.slice(-29), s.cpuPercent]);
-      setRamHistory((prev) => [...prev.slice(-29), s.ramPercent]);
-      const lang = await dockBridge.getKeyboardLang();
-      setKbdLang(lang);
+      const [s, lang] = await Promise.all([
+        dockBridge.getSystemStats(),
+        dockBridge.getKeyboardLang()
+      ]);
+      const showTelemetry = activePanelRef.current === 'system';
+      setStats((prev) => {
+        if (
+          prev.batteryPercent === s.batteryPercent &&
+          prev.batteryCharging === s.batteryCharging &&
+          (!showTelemetry ||
+            (prev.cpuPercent === s.cpuPercent &&
+              prev.ramPercent === s.ramPercent &&
+              prev.diskFreeGb === s.diskFreeGb))
+        ) {
+          return prev;
+        }
+        return s;
+      });
+      if (showTelemetry) {
+        setCpuHistory((prev) => [...prev.slice(-29), s.cpuPercent]);
+        setRamHistory((prev) => [...prev.slice(-29), s.ramPercent]);
+      }
+      setKbdLang((prev) => (prev === lang ? prev : lang));
     };
     void poll();
     const id = setInterval(() => {
-      setNow(new Date());
+      const d = new Date();
+      setNow((prev) => (prev.getMinutes() === d.getMinutes() && prev.getHours() === d.getHours() ? prev : d));
       void poll();
-    }, 2000);
+    }, 3000);
     return () => clearInterval(id);
-  }, []);
+  }, [suspended]);
 
   // Media polling
   const refreshMedia = useCallback(async () => {
@@ -179,9 +206,10 @@ export function App() {
   // inline player or the media panel is visible
   const musicPosition = config?.settings.musicPosition;
   const needsMedia =
-    VIEW_MODE === 'island'
+    !suspended &&
+    (VIEW_MODE === 'island'
       ? musicPosition === 'top' || islandPeekVisible
-      : VIEW_MODE === 'dock' && (musicPosition === 'taskbar' || activePanel === 'media');
+      : VIEW_MODE === 'dock' && (musicPosition === 'taskbar' || activePanel === 'media'));
 
   useEffect(() => {
     if (!needsMedia) return;
@@ -193,20 +221,42 @@ export function App() {
     return () => clearInterval(id);
   }, [needsMedia, musicPosition, refreshMedia]);
 
-  // Running windows polling
+  // Running windows polling — keep previous array reference when nothing visibly changed so
+  // DockBar doesn't re-render every 1.8s while the desktop is idle
   const refreshWindows = useCallback(async () => {
     const wins = await dockBridge.getRunningWindows();
-    setRunningWindows(wins);
+    setRunningWindows((prev) => {
+      if (prev.length === wins.length) {
+        let same = true;
+        for (let i = 0; i < wins.length; i++) {
+          const a = prev[i];
+          const b = wins[i];
+          if (
+            a.hwnd !== b.hwnd ||
+            a.pid !== b.pid ||
+            a.title !== b.title ||
+            a.isActive !== b.isActive ||
+            a.isMinimized !== b.isMinimized ||
+            Boolean(a.iconDataUrl) !== Boolean(b.iconDataUrl)
+          ) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return prev;
+      }
+      return wins;
+    });
   }, []);
 
   useEffect(() => {
-    if (VIEW_MODE === 'island') return;
+    if (VIEW_MODE === 'island' || suspended) return;
     void refreshWindows();
     const id = setInterval(() => {
       void refreshWindows();
     }, 1800);
     return () => clearInterval(id);
-  }, [refreshWindows]);
+  }, [refreshWindows, suspended]);
 
   if (VIEW_MODE === 'island') {
     return (
