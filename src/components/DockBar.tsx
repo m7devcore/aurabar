@@ -367,6 +367,8 @@ export function DockBar({
     };
   }, [overflowTray]);
 
+  const lastHitRectsKeyRef = useRef('');
+
   // Report exact interactive regions (with generous hover halo) to Main process
   useLayoutEffect(() => {
     const reportHitRects = () => {
@@ -405,6 +407,9 @@ export function DockBar({
       const popoverEl = document.querySelector<HTMLElement>('.popover-card');
       pushOverlay(popoverEl);
 
+      const sig = rects.map((rc) => `${rc.left},${rc.top},${rc.right},${rc.bottom}`).join(';');
+      if (sig === lastHitRectsKeyRef.current) return;
+      lastHitRectsKeyRef.current = sig;
       dockBridge.setHitRects('dock', rects);
     };
 
@@ -1342,9 +1347,6 @@ export function DockBar({
   };
 
   // Real Windows system tray icons (matching Windows 11's hidden-icons overflow)
-  const openExeSet = new Set(
-    runningWindows.map((w) => (w.executablePath || w.processName).toLowerCase())
-  );
   const overflowBgApps = backgroundApps;
   const overflowTotalCount = overflowBgApps.length;
 
@@ -1601,11 +1603,14 @@ export function DockBar({
           onMouseLeave={schedulePeekClose}
           onRefreshMedia={onRefreshMedia}
           onActivate={(win) => {
-            closePeekNow();
+            // Dispatch FOCUS *before* unmounting WindowPeek so FOCUS reaches Win32Bridge first
+            // (ActivateWindow already clears live peek & thumbs synchronously in one shot).
             void dockBridge.activateWindow(win.pid, win.hwnd).then((ok) => {
               setTimeout(onRefreshWindows, 80);
               if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
             });
+            clearPeekTimers();
+            setPeek(null);
           }}
           onCloseWindow={(win) => {
             if (!win.hwnd) return;
@@ -1763,9 +1768,14 @@ export function DockBar({
           ) : (
             <div className="tray-overflow-grid">
               {overflowBgApps.map((bg) => {
-                const isOpen =
-                  openExeSet.has(bg.executablePath.toLowerCase()) ||
-                  openExeSet.has(bg.processName.toLowerCase());
+                const bgExeLow = bg.executablePath.toLowerCase();
+                const bgProcLow = bg.processName.toLowerCase();
+                const openWin = runningWindows.find(
+                  (w) =>
+                    (w.executablePath && w.executablePath.toLowerCase() === bgExeLow) ||
+                    w.processName.toLowerCase() === bgProcLow
+                );
+                const isOpen = Boolean(openWin);
                 return (
                   <button
                     key={`ov-bg-${bg.pid}`}
@@ -1777,12 +1787,15 @@ export function DockBar({
                     onClick={() => {
                       setCtxMenu(null);
                       setOverflowTray(null);
-                      void dockBridge.openApp(bg.pid, bg.executablePath).then(() => {
-                        setTimeout(() => {
-                          onRefreshWindows();
-                          void dockBridge.getBackgroundApps().then(setBackgroundApps);
-                        }, 220);
-                      });
+                      if (openWin?.hwnd) {
+                        void dockBridge.activateWindow(openWin.pid, openWin.hwnd).then(() => {
+                          setTimeout(onRefreshWindows, 140);
+                        });
+                      } else {
+                        void dockBridge.openApp(bg.pid, bg.executablePath).then(() => {
+                          setTimeout(onRefreshWindows, 260);
+                        });
+                      }
                     }}
                     onContextMenu={(e) =>
                       openContextMenu(
@@ -2065,12 +2078,22 @@ export function DockBar({
                   const targetBg = ctxMenu.bg!;
                   setCtxMenu(null);
                   setOverflowTray(null);
-                  void dockBridge.openApp(targetBg.pid, targetBg.executablePath).then(() => {
-                    setTimeout(() => {
-                      onRefreshWindows();
-                      void dockBridge.getBackgroundApps().then(setBackgroundApps);
-                    }, 220);
-                  });
+                  const bgExeLow = targetBg.executablePath.toLowerCase();
+                  const bgProcLow = targetBg.processName.toLowerCase();
+                  const openWin = runningWindows.find(
+                    (w) =>
+                      (w.executablePath && w.executablePath.toLowerCase() === bgExeLow) ||
+                      w.processName.toLowerCase() === bgProcLow
+                  );
+                  if (openWin?.hwnd) {
+                    void dockBridge.activateWindow(openWin.pid, openWin.hwnd).then(() => {
+                      setTimeout(onRefreshWindows, 140);
+                    });
+                  } else {
+                    void dockBridge.openApp(targetBg.pid, targetBg.executablePath).then(() => {
+                      setTimeout(onRefreshWindows, 260);
+                    });
+                  }
                 }}
               >
                 <ExternalLink size={14} style={{ color: 'var(--accent)' }} />

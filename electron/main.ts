@@ -196,7 +196,10 @@ function getHwndNumber(win: BrowserWindow | null): string {
 
 function applyTopmost(win: BrowserWindow | null): void {
   if (!win || win.isDestroyed()) return;
-  win.setAlwaysOnTop(currentConfig?.settings.alwaysOnTop ?? true, 'screen-saver');
+  const wanted = currentConfig?.settings.alwaysOnTop ?? true;
+  if (win.isAlwaysOnTop() !== wanted) {
+    win.setAlwaysOnTop(wanted, 'screen-saver');
+  }
 }
 
 function syncKeepOnTop(settings: DockSettings): void {
@@ -259,14 +262,11 @@ function placeSecondaryDockPhysical(
 ): void {
   if (entry.win.isDestroyed()) return;
   const dipBounds = computeDockBoundsForDisplay(settings, display);
-  const cur = entry.win.getBounds();
-  if (
-    Math.abs(cur.x - dipBounds.x) > 1 ||
-    Math.abs(cur.y - dipBounds.y) > 1 ||
-    Math.abs(cur.width - dipBounds.width) > 1 ||
-    Math.abs(cur.height - dipBounds.height) > 1
-  ) {
-    entry.win.setBounds(dipBounds, false);
+  setBoundsIfChanged(entry.win, dipBounds);
+  const hwnd = getHwndNumber(entry.win);
+  if (hwnd !== '0') {
+    const phys = screen.dipToScreenRect(entry.win, dipBounds);
+    void win32Daemon.send(`PLACE_WIN ${hwnd} ${phys.x} ${phys.y} ${phys.width} ${phys.height}`);
   }
 }
 
@@ -319,6 +319,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     win.setBounds(targetBounds, false);
     win.setBounds(targetBounds, false);
     syncExtraHwndsToBridge();
+    placeSecondaryDockPhysical(entry, freshDisplay, currentConfig.settings);
     syncSecondaryWorkArea(entry, freshDisplay, currentConfig.settings);
     if (!dockManuallyHidden && !entry.fullscreenSuspended) {
       win.showInactive();
@@ -400,30 +401,34 @@ function lockDownNavigation(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 }
 
+function setBoundsIfChanged(win: BrowserWindow, next: Electron.Rectangle): void {
+  const cur = win.getBounds();
+  if (
+    Math.abs(cur.x - next.x) > 1 ||
+    Math.abs(cur.y - next.y) > 1 ||
+    Math.abs(cur.width - next.width) > 1 ||
+    Math.abs(cur.height - next.height) > 1
+  ) {
+    win.setBounds(next, false);
+  }
+}
+
 function placeDockPhysical(settings: DockSettings): void {
   if (!dockWindow || dockWindow.isDestroyed()) return;
-  const display = screen.getPrimaryDisplay();
-  const scale = display.scaleFactor || 1;
-  const area = settings.replaceWindowsTaskbar ? display.bounds : display.workArea;
-  const px = Math.round(area.x * scale);
-  const pw = Math.round(area.width * scale);
-  const ph = Math.round(DOCK_CANVAS_HEIGHT * scale);
-  const py =
-    settings.position === 'top'
-      ? Math.round(area.y * scale)
-      : Math.round((area.y + area.height) * scale) - ph;
-  void win32Daemon.send(`PLACE_DOCK ${px} ${py} ${pw} ${ph}`);
+  const dipBounds = computeDockBounds(settings);
+  const phys = screen.dipToScreenRect(dockWindow, dipBounds);
+  void win32Daemon.send(`PLACE_DOCK ${phys.x} ${phys.y} ${phys.width} ${phys.height}`);
 }
 
 function applyAllLayouts(settings: DockSettings): void {
   if (dockWindow && !dockWindow.isDestroyed()) {
     applyTopmost(dockWindow);
-    dockWindow.setBounds(computeDockBounds(settings), false);
+    setBoundsIfChanged(dockWindow, computeDockBounds(settings));
     placeDockPhysical(settings);
   }
   if (islandWindow && !islandWindow.isDestroyed()) {
     applyTopmost(islandWindow);
-    islandWindow.setBounds(computeIslandBounds(), false);
+    setBoundsIfChanged(islandWindow, computeIslandBounds());
     if (settings.musicPosition === 'top') {
       if (!islandWindow.isVisible() && !fullscreenSuspended) {
         islandWindow.showInactive();
@@ -504,7 +509,9 @@ function createWindows(): void {
     }
   });
   dockWindow.on('hide', () => {
-    if (fullscreenSuspended || isQuitting) return;
+    // Only restore the native Windows taskbar if the user explicitly hid the dock (never on
+    // transient OS hides or fullscreen suspension).
+    if (!dockManuallyHidden || fullscreenSuspended || isQuitting) return;
     if (taskbarWasAutoHidden) {
       taskbarWasAutoHidden = false;
       lastTaskbarLayoutKey = '';
@@ -665,24 +672,23 @@ function reassertLayoutAfterFullscreen(): void {
   const applyOnce = () => {
     if (fullscreenSuspended || isQuitting) return;
     const settings = currentConfig.settings;
-    // Windows can reset the reserved work area or display resolution when a fullscreen game
-    // (like 4:3 stretched CS2) exits; re-sync only when metrics actually drifted.
-    if (settings.replaceWindowsTaskbar && taskbarWasAutoHidden) {
-      const d = screen.getPrimaryDisplay();
-      const expectedHeight = d.bounds.height - getReservedHeightPx(settings);
-      if (Math.abs(d.workArea.height - expectedHeight) > 8) {
-        lastTaskbarLayoutKey = '';
-        syncTaskbarReplacement(settings);
-      }
-    }
+    // Re-place primary & secondary docks from fresh display metrics after a fullscreen
+    // display-mode change (e.g. 4:3 stretched CS2) without triggering SPI_SETWORKAREA loops.
     if (dockWindow && !dockWindow.isDestroyed()) {
       applyTopmost(dockWindow);
-      dockWindow.setBounds(computeDockBounds(settings), false);
+      setBoundsIfChanged(dockWindow, computeDockBounds(settings));
       placeDockPhysical(settings);
     }
     if (islandWindow && !islandWindow.isDestroyed()) {
       applyTopmost(islandWindow);
-      islandWindow.setBounds(computeIslandBounds(), false);
+      setBoundsIfChanged(islandWindow, computeIslandBounds());
+    }
+    const displays = screen.getAllDisplays();
+    for (const entry of secondaryDocks.values()) {
+      if (!entry.fullscreenSuspended && !entry.win.isDestroyed() && entry.ready) {
+        const disp = displays.find((d) => d.id === entry.displayId);
+        if (disp) placeSecondaryDockPhysical(entry, disp, settings);
+      }
     }
   };
   applyOnce();
@@ -1067,20 +1073,37 @@ function isPointInRects(x: number, y: number, rects: HitRect[]): boolean {
   return false;
 }
 
-function updateCursorHitTesting(): void {
+let lastCursorX = Number.NaN;
+let lastCursorY = Number.NaN;
+
+function updateCursorHitTesting(force = false): void {
   if (isQuitting) return;
   const dockVis = Boolean(dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible());
   const islandVis = Boolean(islandWindow && !islandWindow.isDestroyed() && islandWindow.isVisible());
   let secVis = false;
+  let anySecWaitingLeave = false;
   for (const entry of secondaryDocks.values()) {
     if (!entry.win.isDestroyed() && entry.win.isVisible()) {
       secVis = true;
-      break;
+      if (entry.interactiveState && !entry.popoverOpen && !entry.interactiveLock) {
+        anySecWaitingLeave = true;
+      }
     }
   }
   if (!dockVis && !islandVis && !secVis) return;
 
   const pt = screen.getCursorScreenPoint();
+  const anyWaitingLeave =
+    (dockInteractiveState && !isPopoverOpen && !dockInteractiveLock) ||
+    (islandInteractiveState && !isIslandExpanded && !islandInteractiveLock) ||
+    anySecWaitingLeave;
+  // When the cursor is stationary and nothing is pending the 90ms leave-grace timer, skip all
+  // getBounds() calls (cuts ~120 Win32 calls/sec down to 0 while idle or gaming).
+  if (!force && !anyWaitingLeave && pt.x === lastCursorX && pt.y === lastCursorY) {
+    return;
+  }
+  lastCursorX = pt.x;
+  lastCursorY = pt.y;
   const nowMs = Date.now();
 
   if (dockVis && dockWindow) {
@@ -1138,7 +1161,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:get-config', () => {
     if (!iconBackfillStarted) {
       iconBackfillStarted = true;
-      void backfillPinnedIcons();
+      // Defer icon/identity backfill slightly so startup taskbar hide & first paint are instant
+      setTimeout(() => void backfillPinnedIcons(), 2500);
     }
     return currentConfig;
   });
@@ -1182,7 +1206,7 @@ function registerIpcHandlers(): void {
         ensureOnTop(sec.win);
         sec.win.focus();
       } else {
-        updateCursorHitTesting();
+        updateCursorHitTesting(true);
       }
       return;
     }
@@ -1193,7 +1217,7 @@ function registerIpcHandlers(): void {
       ensureOnTop(dockWindow);
       dockWindow?.focus();
     } else {
-      updateCursorHitTesting();
+      updateCursorHitTesting(true);
     }
   });
 
@@ -1204,7 +1228,7 @@ function registerIpcHandlers(): void {
     } else {
       dockInteractiveLock = interactive;
     }
-    updateCursorHitTesting();
+    updateCursorHitTesting(true);
   });
 
   ipcMain.handle('aurabar:set-island-expanded', (_e, expanded: boolean) => {
@@ -1215,13 +1239,13 @@ function registerIpcHandlers(): void {
       ensureOnTop(islandWindow);
       islandWindow?.focus();
     } else {
-      updateCursorHitTesting();
+      updateCursorHitTesting(true);
     }
   });
 
   ipcMain.on('aurabar:set-island-interactive', (_e, interactive: boolean) => {
     islandInteractiveLock = interactive;
-    updateCursorHitTesting();
+    updateCursorHitTesting(true);
   });
 
   ipcMain.on('aurabar:set-hit-rects', (e, view: 'dock' | 'island', rects: HitRect[]) => {
@@ -1236,7 +1260,7 @@ function registerIpcHandlers(): void {
     } else {
       islandLocalHitRects = clean;
     }
-    updateCursorHitTesting();
+    updateCursorHitTesting(true);
   });
 
   ipcMain.handle('aurabar:get-system-stats', () => getSystemStats());
@@ -1408,7 +1432,14 @@ if (!singleInstance) {
     createWindows();
     setupTray();
     applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
-    syncFullscreenWatcher();
+    // Start fullscreen watcher only after the native bridge is ready and startup work-area
+    // settlement has finished, so launch never triggers a false suspend/resume bounce.
+    void win32Daemon.whenReady().then(() => {
+      if (isQuitting) return;
+      setTimeout(() => {
+        if (!isQuitting) syncFullscreenWatcher();
+      }, 1500);
+    });
     // If the native bridge ever has to be restarted, Windows has already dropped the work area it
     // had reserved (it reverts when the process that set it dies): reserve and place again
     win32Daemon.onRestart(() => {
@@ -1437,11 +1468,20 @@ if (!singleInstance) {
         await win32Daemon.send('TASKBAR_SHOW');
       }
     );
-    // Cheap safety net: re-send the dock's target rect from fresh display metrics, so a wrong
-    // reading taken during some display change can never stick
+    // Cheap safety net: re-sync dock bounds only if they actually drifted from display metrics
     setInterval(() => {
-      if (!fullscreenSuspended && dockWindow?.isVisible()) {
-        placeDockPhysical(currentConfig.settings);
+      if (!fullscreenSuspended && dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) {
+        const expected = computeDockBounds(currentConfig.settings);
+        const cur = dockWindow.getBounds();
+        if (
+          Math.abs(cur.x - expected.x) > 2 ||
+          Math.abs(cur.y - expected.y) > 2 ||
+          Math.abs(cur.width - expected.width) > 2 ||
+          Math.abs(cur.height - expected.height) > 2
+        ) {
+          dockWindow.setBounds(expected, false);
+          placeDockPhysical(currentConfig.settings);
+        }
       }
       if (secondaryDocks.size > 0) {
         const displays = screen.getAllDisplays();
@@ -1452,8 +1492,8 @@ if (!singleInstance) {
           }
         }
       }
-    }, 4000);
-    setInterval(updateCursorHitTesting, 25);
+    }, 10000);
+    setInterval(() => updateCursorHitTesting(false), 25);
 
     globalShortcut.register('Alt+Space', () => {
       toggleDockVisibility();

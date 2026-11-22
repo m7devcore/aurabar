@@ -276,11 +276,6 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
             role="menuitem"
             tabIndex={0}
             onMouseEnter={() => scheduleCardPeek(win.hwnd)}
-            onClick={() => {
-              stopLivePeekNow();
-              dockBridge.clearLiveThumbs();
-              onActivate(win);
-            }}
             onMouseDown={(e) => {
               if (e.button === 1 && win.hwnd) {
                 e.preventDefault();
@@ -288,13 +283,31 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
                 stopLivePeekNow();
                 dockBridge.clearLiveThumbs();
                 onCloseWindow(win);
+                return;
+              }
+              if (e.button === 0) {
+                const targetEl = e.target as HTMLElement | null;
+                if (
+                  targetEl?.closest('.peek-card-close') ||
+                  targetEl?.closest('.peek-card-mute') ||
+                  targetEl?.closest('.peek-media-bar')
+                ) {
+                  return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                if (peekTimerRef.current) {
+                  window.clearTimeout(peekTimerRef.current);
+                  peekTimerRef.current = null;
+                }
+                peekingRef.current = null;
+                onActivate(win);
               }
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                stopLivePeekNow();
-                dockBridge.clearLiveThumbs();
+                peekingRef.current = null;
                 onActivate(win);
               }
             }}

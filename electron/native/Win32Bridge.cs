@@ -407,6 +407,9 @@ namespace AuraBarNative {
     private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
 
     [DllImport("user32.dll")]
+    private static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+    [DllImport("user32.dll")]
     private static extern bool TranslateMessage(ref MSG lpMsg);
 
     [DllImport("user32.dll")]
@@ -785,6 +788,21 @@ namespace AuraBarNative {
       return hr == 0 && cloaked != 0;
     }
 
+    // Returns the true visible window bounds excluding invisible DWM resize/shadow borders
+    // (which overhang by 8-16px on 100%-200% DPI maximized windows and otherwise cause false
+    // fullscreen / work-area refit triggers).
+    private static bool GetVisibleWindowRect(IntPtr hWnd, out RECT r) {
+      if (DwmGetWindowRect(hWnd, 9, out r, Marshal.SizeOf(typeof(RECT))) == 0 &&
+          (r.right - r.left) > 0 && (r.bottom - r.top) > 0) {
+        return true;
+      }
+      return GetWindowRect(hWnd, out r);
+    }
+
+    private static volatile int lastWorkAreaChangeAt = 0;
+    private static int primaryWorkAreaLastSetAt = 0;
+    private static readonly Dictionary<IntPtr, int> secWorkAreaLastSetAt = new Dictionary<IntPtr, int>();
+
     private static bool IsExtraDockHwnd(IntPtr hWnd) {
       if (hWnd == IntPtr.Zero) return false;
       lock (extraHwndsLock) {
@@ -806,37 +824,12 @@ namespace AuraBarNative {
       return GetProcMeta(pid).isElectron;
     }
 
-    // The dock must sit exactly where PLACE_DOCK put it. Display changes (a full-screen app
-    // entering/leaving, resolution or work-area resets) can leave the window moved or resized by
-    // the system; this puts it back within one poll instead of leaving it floating above the
-    // bottom edge until the next restart.
-    // Puts the reserved work area back if Windows changed it, and re-fits maximized windows that
-    // now reach under the dock
-    private static void RefitMaximizedOnMonitor(IntPtr targetMon, RECT want) {
-      EnumWindows(delegate(IntPtr hWnd, IntPtr lp) {
-        if (!IsWindowVisible(hWnd) || !IsZoomed(hWnd)) return true;
-        // Never un-maximize/re-maximize borderless games or fullscreen players (including YouTube F11)
-        if ((GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0) return true;
-        IntPtr mon = MonitorFromWindow(hWnd, 2);
-        if (targetMon != IntPtr.Zero && mon != targetMon) return true;
-        if (IsFullscreenWindowOnMonitor(hWnd, mon)) return true;
-        RECT wr;
-        if (!GetWindowRect(hWnd, out wr)) return true;
-        // A maximized window overhangs its work area by the frame (about 8px); more than that
-        // means it was sized for the old, larger work area
-        if (wr.bottom > want.bottom + 14 || wr.top < want.top - 14) {
-          ShowWindowAsync(hWnd, 9);
-          Thread.Sleep(25);
-          ShowWindowAsync(hWnd, 3);
-        }
-        return true;
-      }, IntPtr.Zero);
-    }
-
+    // Never call SW_RESTORE + SW_MAXIMIZE on user windows (that makes every open window visibly
+    // shrink and grow / bounce on both monitors). Silently reserving the work area with fWinIni=0
+    // lets Windows apply it cleanly without waking explorer.exe to overwrite it back.
     private static void EnforceWorkArea() {
       if (!taskbarHiddenByUs) return;
-      // Never broadcast SPI_SETWORKAREA / WM_SETTINGCHANGE while ANY monitor has an active
-      // fullscreen game or video — it stalls DirectX/Vulkan games and causes system-wide stutters.
+      // Never touch work area while ANY monitor has an active fullscreen game or video.
       if (IsAnyMonitorFullscreen()) return;
 
       int now = Environment.TickCount;
@@ -848,18 +841,21 @@ namespace AuraBarNative {
           bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
                          Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
           if (drifted) {
-            SystemParametersInfo(0x002F, 0, ref want, 0);
-            RECT after = new RECT();
-            if (SystemParametersInfo(0x0030, 0, ref after, 0)) {
-              bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
-                                  Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
-              if (stillDrifted) {
-                // Windows rejected/clamped the rect (e.g. display mode change): back off 30s
-                primaryWorkAreaBackoffUntil = unchecked(now + 30000);
-              } else {
-                POINT origin = new POINT();
-                IntPtr primaryMon = MonitorFromPoint(origin, 1);
-                RefitMaximizedOnMonitor(primaryMon, want);
+            // If Windows/Explorer reverted our work area within 8s of us setting it, back off 60s
+            // so we never enter a tug-of-war bounce loop.
+            if (primaryWorkAreaLastSetAt != 0 && unchecked(now - primaryWorkAreaLastSetAt) < 8000) {
+              primaryWorkAreaBackoffUntil = unchecked(now + 60000);
+            } else {
+              lastWorkAreaChangeAt = now;
+              primaryWorkAreaLastSetAt = now;
+              SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: do NOT broadcast WM_SETTINGCHANGE to explorer.exe!
+              RECT after = new RECT();
+              if (SystemParametersInfo(0x0030, 0, ref after, 0)) {
+                bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
+                                    Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
+                if (stillDrifted) {
+                  primaryWorkAreaBackoffUntil = unchecked(now + 60000);
+                }
               }
             }
           }
@@ -876,11 +872,13 @@ namespace AuraBarNative {
         for (int i = 0; i < secList.Count; i++) {
           IntPtr mon = secList[i].Key;
           int backoffUntil;
+          int lastSetAt = 0;
           bool backedOff = false;
           lock (extraHwndsLock) {
             if (secWorkAreaBackoffUntil.TryGetValue(mon, out backoffUntil) && unchecked(now - backoffUntil) < 0) {
               backedOff = true;
             }
+            secWorkAreaLastSetAt.TryGetValue(mon, out lastSetAt);
           }
           if (backedOff) continue;
           RECT want = secList[i].Value;
@@ -891,7 +889,17 @@ namespace AuraBarNative {
           bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
                          Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
           if (!drifted) continue;
-          SystemParametersInfo(0x002F, 0, ref want, 0);
+          if (lastSetAt != 0 && unchecked(now - lastSetAt) < 8000) {
+            lock (extraHwndsLock) {
+              secWorkAreaBackoffUntil[mon] = unchecked(now + 60000);
+            }
+            continue;
+          }
+          lastWorkAreaChangeAt = now;
+          lock (extraHwndsLock) {
+            secWorkAreaLastSetAt[mon] = now;
+          }
+          SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: never wake explorer.exe AppBar!
           MONITORINFO afterMi = new MONITORINFO();
           afterMi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
           if (GetMonitorInfo(mon, ref afterMi)) {
@@ -899,12 +907,9 @@ namespace AuraBarNative {
             bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
                                 Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
             if (stillDrifted) {
-              // Avoid infinite WM_SETTINGCHANGE storm if Windows rejects secondary work area
               lock (extraHwndsLock) {
-                secWorkAreaBackoffUntil[mon] = unchecked(now + 30000);
+                secWorkAreaBackoffUntil[mon] = unchecked(now + 60000);
               }
-            } else {
-              RefitMaximizedOnMonitor(mon, want);
             }
           }
         }
@@ -917,8 +922,9 @@ namespace AuraBarNative {
       RECT r;
       if (!GetWindowRect(dockHwnd, out r)) return;
       RECT t = dockTargetRect;
-      if (Math.Abs(r.left - t.left) <= 1 && Math.Abs(r.top - t.top) <= 1 &&
-          Math.Abs(r.right - t.right) <= 1 && Math.Abs(r.bottom - t.bottom) <= 1) {
+      // Allow +-3px tolerance for fractional DPI rounding so we never ping-pong with Electron setBounds
+      if (Math.Abs(r.left - t.left) <= 3 && Math.Abs(r.top - t.top) <= 3 &&
+          Math.Abs(r.right - t.right) <= 3 && Math.Abs(r.bottom - t.bottom) <= 3) {
         return;
       }
       SetWindowPos(
@@ -932,33 +938,29 @@ namespace AuraBarNative {
       );
     }
 
-    private static void EnforceExtraDockPlacements() {
-      List<KeyValuePair<IntPtr, RECT>> items = new List<KeyValuePair<IntPtr, RECT>>();
+    private static void EnforceExtraDockPlacement(IntPtr h) {
+      if (h == IntPtr.Zero || !IsWindow(h) || !IsWindowVisible(h)) return;
+      RECT t;
+      bool hasRect = false;
       lock (extraHwndsLock) {
-        foreach (KeyValuePair<IntPtr, RECT> kv in extraDockRects) {
-          items.Add(kv);
-        }
+        hasRect = extraDockRects.TryGetValue(h, out t);
       }
-      for (int i = 0; i < items.Count; i++) {
-        IntPtr h = items[i].Key;
-        if (h == IntPtr.Zero || !IsWindow(h) || !IsWindowVisible(h)) continue;
-        RECT r;
-        if (!GetWindowRect(h, out r)) continue;
-        RECT t = items[i].Value;
-        if (Math.Abs(r.left - t.left) <= 1 && Math.Abs(r.top - t.top) <= 1 &&
-            Math.Abs(r.right - t.right) <= 1 && Math.Abs(r.bottom - t.bottom) <= 1) {
-          continue;
-        }
-        SetWindowPos(
-          h,
-          new IntPtr(-1),
-          t.left,
-          t.top,
-          t.right - t.left,
-          t.bottom - t.top,
-          keepOnTop ? 0x0010u : 0x0014u
-        );
+      if (!hasRect) return;
+      RECT r;
+      if (!GetWindowRect(h, out r)) return;
+      if (Math.Abs(r.left - t.left) <= 3 && Math.Abs(r.top - t.top) <= 3 &&
+          Math.Abs(r.right - t.right) <= 3 && Math.Abs(r.bottom - t.bottom) <= 3) {
+        return;
       }
+      SetWindowPos(
+        h,
+        new IntPtr(-1),
+        t.left,
+        t.top,
+        t.right - t.left,
+        t.bottom - t.top,
+        keepOnTop ? 0x0010u : 0x0014u
+      );
     }
 
     private static void KeepOnTopIfDemoted(IntPtr hWnd) {
@@ -1106,6 +1108,7 @@ namespace AuraBarNative {
                 if (eFs) {
                   anyFs = true;
                 } else {
+                  EnforceExtraDockPlacement(eh);
                   KeepOnTopIfDemoted(eh);
                 }
               }
@@ -1362,7 +1365,7 @@ namespace AuraBarNative {
       MONITORINFO mi = new MONITORINFO();
       mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
       RECT r;
-      if (!GetMonitorInfo(monitor, ref mi) || !GetWindowRect(hWnd, out r)) return false;
+      if (!GetMonitorInfo(monitor, ref mi) || !GetVisibleWindowRect(hWnd, out r)) return false;
 
       // Allow +-2px tolerance for borderless game engines / DWM frame rounding
       bool covers = r.left <= mi.rcMonitor.left + 2 && r.top <= mi.rcMonitor.top + 2 &&
@@ -1370,13 +1373,19 @@ namespace AuraBarNative {
       if (!covers) return false;
 
       bool hasCaption = (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
-      // If a taskbar reserves space on this monitor, a regular maximized window stops at rcWork,
-      // whereas a true fullscreen video/game (YouTube F11, VLC, CS2...) extends all the way past
-      // rcWork to rcMonitor edge even if Chromium/UWP kept WS_CAPTION + IsZoomed.
+      if (!hasCaption || !IsZoomed(hWnd)) return true;
+
+      // During the brief 1.5s settle window right after AuraBar changes work area, a normal
+      // maximized window might still be resizing from the old work area — never misclassify it.
+      int sinceWa = unchecked(Environment.TickCount - lastWorkAreaChangeAt);
+      if (lastWorkAreaChangeAt != 0 && sinceWa >= 0 && sinceWa < 1500) return false;
+
+      // True fullscreen video/browser (YouTube F11, VLC, UWP) covers the entire monitor edge-to-edge
+      // past rcWork even if Chromium/UWP kept WS_CAPTION + IsZoomed.
       bool exceedsWorkArea =
         ((mi.rcMonitor.bottom - mi.rcWork.bottom) >= 24 && r.bottom >= mi.rcMonitor.bottom - 2) ||
         ((mi.rcWork.top - mi.rcMonitor.top) >= 24 && r.top <= mi.rcMonitor.top + 2);
-      return !hasCaption || !IsZoomed(hWnd) || exceedsWorkArea;
+      return exceedsWorkArea;
     }
 
     // Finds the topmost real visible application window on a specific monitor by walking Z-order
@@ -1543,7 +1552,9 @@ namespace AuraBarNative {
       WaitUntil(restored, 150);
     }
 
-    // Brings the window to the front and reports whether it really got there
+    // Brings the window to the front and reports whether it really got there.
+    // Works reliably for multi-window apps (VS Code #1 <-> #2), minimized apps, and elevated
+    // windows (Task Manager) even when called from our helper daemon process.
     private static bool ForceFocus(IntPtr hWnd) {
       RestoreIfMinimized(hWnd);
 
@@ -1559,47 +1570,39 @@ namespace AuraBarNative {
       if (IsForegroundTarget(hWnd)) return true;
 
       Condition isFront = delegate() { return IsForegroundTarget(hWnd); };
+      bool targetProtected = IsProtectedWindow(target);
 
-      if (IsProtectedWindow(target)) {
-        SwitchToThisWindow(target, true);
-        if (WaitUntil(isFront, 150)) return true;
-      }
-
+      // 1) Fast direct path (succeeds immediately if we already hold foreground rights)
       BringWindowToTop(target);
       if (SetForegroundWindow(target) && WaitUntil(isFront, 16)) return true;
 
-      // Attach only to current foreground thread (typically our own responsive dockWindow) to unlock SetForegroundWindow
+      // 2) Attach our message-queued thread to the current foreground thread (typically our own
+      // dockWindow which just received the user's click!) so we inherit its foreground lock.
       IntPtr fg = GetForegroundWindow();
       uint dummy;
-      uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
       uint curThread = GetCurrentThreadId();
-      bool attachedFg = false;
-
-      if (fgThread != 0 && fgThread != curThread) {
-        attachedFg = AttachThreadInput(curThread, fgThread, true);
-      }
-      BringWindowToTop(target);
-      SetForegroundWindow(target);
-      if (attachedFg) {
-        AttachThreadInput(curThread, fgThread, false);
-      }
-      if (WaitUntil(isFront, 16)) return true;
-
+      uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
       uint targetThread = GetWindowThreadProcessId(target, out dummy);
-      bool attachedTarget = targetThread != 0 && targetThread != curThread
-        ? AttachThreadInput(curThread, targetThread, true)
-        : false;
-      BringWindowToTop(target);
-      SetForegroundWindow(target);
-      if (attachedTarget) {
-        AttachThreadInput(curThread, targetThread, false);
-      }
-      if (WaitUntil(isFront, 16)) return true;
 
-      // Last resort, the same call Alt+Tab makes: works on elevated windows and past the
-      // foreground lock. Games restoring from minimized fullscreen can need ~250-320ms.
+      bool attachedFg = fgThread != 0 && fgThread != curThread && AttachThreadInput(curThread, fgThread, true);
+      bool attachedTarget = !targetProtected && targetThread != 0 && targetThread != curThread && targetThread != fgThread &&
+                            AttachThreadInput(curThread, targetThread, true);
+      try {
+        AllowSetForegroundWindow(-1);
+        SetWindowPos(target, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040); // HWND_TOP | NOSIZE | NOMOVE | SHOWWINDOW
+        BringWindowToTop(target);
+        SetForegroundWindow(target);
+      } finally {
+        if (attachedTarget) AttachThreadInput(curThread, targetThread, false);
+        if (attachedFg) AttachThreadInput(curThread, fgThread, false);
+      }
+      if (WaitUntil(isFront, 28)) return true;
+
+      // 3) Last resort (same call Alt+Tab makes): handles elevated windows (Task Manager) &
+      // fullscreen games without synthesizing any Alt keyboard events that could interfere with
+      // AR/EN keyboard layouts or app menus during rapid switching.
       SwitchToThisWindow(target, true);
-      return WaitUntil(isFront, 320);
+      return WaitUntil(isFront, targetProtected ? 140 : 180);
     }
 
     private static bool MinimizeWindow(IntPtr hWnd) {
@@ -1616,7 +1619,7 @@ namespace AuraBarNative {
     }
 
     private static string ToggleWindow(long hwndVal) {
-      StopLivePeek();
+      StopLivePeek(true);
       ClearLiveThumbs();
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "gone";
@@ -1665,7 +1668,7 @@ namespace AuraBarNative {
     }
 
     private static string ActivateWindow(long hwndVal) {
-      StopLivePeek();
+      StopLivePeek(true);
       ClearLiveThumbs();
       IntPtr hWnd = new IntPtr(hwndVal);
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return "gone";
@@ -1970,9 +1973,13 @@ namespace AuraBarNative {
       }
     }
 
-    private static void StopLivePeek() {
+    private static void StopLivePeek(bool sync = false) {
       IntPtr ov = peekOverlayHwnd;
-      if (ov != IntPtr.Zero) {
+      if (ov == IntPtr.Zero) return;
+      if (sync) {
+        IntPtr res;
+        SendMessageTimeoutRaw(ov, WM_PEEK_STOP, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 60, out res);
+      } else {
         PostMessage(ov, WM_PEEK_STOP, IntPtr.Zero, IntPtr.Zero);
       }
     }
@@ -2173,10 +2180,17 @@ namespace AuraBarNative {
 
       Dictionary<string, string> registeredTray = GetRegisteredTrayIconExes();
       if (registeredTray.Count > 0) {
+        HashSet<string> registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string exe in registeredTray.Keys) {
+          string baseName = Path.GetFileNameWithoutExtension(exe);
+          if (!string.IsNullOrEmpty(baseName)) registeredNames.Add(baseName);
+        }
+
         Process[] procs = Process.GetProcesses();
         for (int i = 0; i < procs.Length; i++) {
           Process p = procs[i];
           try {
+            if (!registeredNames.Contains(p.ProcessName)) continue;
             if (p.SessionId != mySession) continue;
             uint pid = (uint)p.Id;
             ProcMeta meta = GetProcMeta(pid);
@@ -2287,17 +2301,29 @@ namespace AuraBarNative {
       }
 
       string targetExe = targetMeta.exePath;
+      string targetName = targetMeta.name;
+      if (string.IsNullOrEmpty(targetExe) && string.IsNullOrEmpty(targetName)) return pids;
+
       Process[] procs = Process.GetProcesses();
       for (int i = 0; i < procs.Length; i++) {
         Process p = procs[i];
         try {
           uint pid = (uint)p.Id;
-          if (pid <= 4 || IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+          if (pid <= 4 || pid == (uint)seedPid) continue;
+          // Pre-filter by already-loaded ProcessName so we never call OpenProcess/GetProcessById
+          // on 250+ unrelated system/protected processes (cuts ~1850ms freeze down to ~15ms).
+          if (!string.IsNullOrEmpty(targetName) &&
+              !string.Equals(p.ProcessName, targetName, StringComparison.OrdinalIgnoreCase)) {
+            continue;
+          }
+          if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
           if (!string.IsNullOrEmpty(targetExe)) {
             ProcMeta pm = QueryProcMeta(pid);
             if (string.Equals(pm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
               pids.Add(pid);
             }
+          } else {
+            pids.Add(pid);
           }
         } catch {
         } finally {
@@ -2325,24 +2351,49 @@ namespace AuraBarNative {
 
     private static string OpenAppFromPid(int pid) {
       if (pid <= 4) return "false";
-      ProcMeta targetMeta;
-      HashSet<uint> pids = CollectMatchingPids(pid, out targetMeta);
+      uint seedPid = (uint)pid;
+      ProcMeta targetMeta = GetProcMeta(seedPid);
+      if (string.IsNullOrEmpty(targetMeta.exePath)) {
+        targetMeta = QueryProcMeta(seedPid);
+      }
+      string targetExe = targetMeta.exePath ?? "";
+      string targetName = targetMeta.name ?? "";
 
-      // 1) Look for an already-taskbar-visible window across all processes of this app
+      // 1) Look for an already-taskbar-visible window (or real hidden main window) directly via
+      // EnumWindows + cached ProcMeta — zero Process.GetProcesses() stall!
       IntPtr visibleWin = IntPtr.Zero;
       IntPtr hiddenRealWin = IntPtr.Zero;
       EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
         uint wPid;
         GetWindowThreadProcessId(hWnd, out wPid);
-        bool matchesPid = pids.Contains(wPid);
-        if (!matchesPid && wPid > 4) {
+        if (wPid <= 4) return true;
+
+        bool matches = (wPid == seedPid);
+        if (!matches) {
           ProcMeta wm = GetProcMeta(wPid);
           if (wm.name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) {
             uint realPid = ResolveRealUwpPid(hWnd, wPid);
-            if (realPid != wPid && pids.Contains(realPid)) matchesPid = true;
+            if (realPid != wPid) {
+              if (realPid == seedPid) {
+                matches = true;
+              } else {
+                ProcMeta rm = GetProcMeta(realPid);
+                if (!string.IsNullOrEmpty(targetExe) &&
+                    string.Equals(rm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
+                  matches = true;
+                }
+              }
+            }
+          } else if (!string.IsNullOrEmpty(targetExe)) {
+            if (string.Equals(wm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
+              matches = true;
+            }
+          } else if (!string.IsNullOrEmpty(targetName) &&
+                     string.Equals(wm.name, targetName, StringComparison.OrdinalIgnoreCase)) {
+            matches = true;
           }
         }
-        if (!matchesPid) return true;
+        if (!matches) return true;
 
         if (IsTaskbarWindow(hWnd)) {
           visibleWin = hWnd;
@@ -2350,16 +2401,22 @@ namespace AuraBarNative {
         }
 
         if (hiddenRealWin == IntPtr.Zero && IsWindow(hWnd) && !IsCloaked(hWnd)) {
+          int style = GetWindowLong(hWnd, GWL_STYLE);
+          int exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
+          if ((style & 0x08000000) != 0) return true; // WS_DISABLED
+          if ((exStyle & WS_EX_NOACTIVATE) != 0) return true;
+          if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
+          if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return true;
           int len = GetWindowTextLength(hWnd);
           RECT rc;
           if (len > 0 && GetWindowRect(hWnd, out rc)) {
             int w = rc.right - rc.left;
             int h = rc.bottom - rc.top;
-            if (w >= 160 && h >= 100) {
+            if (w >= 260 && h >= 160 && rc.right > -10000 && rc.bottom > -10000) {
               StringBuilder cls = new StringBuilder(64);
               GetClassName(hWnd, cls, cls.Capacity);
               string c = cls.ToString();
-              if (!c.Contains("Tooltip") && c != "MSCTFIME UI" && c != "IME") {
+              if (!c.Contains("Tooltip") && c != "MSCTFIME UI" && c != "IME" && c != "Chrome_WidgetWin_0") {
                 hiddenRealWin = hWnd;
               }
             }
@@ -2373,8 +2430,6 @@ namespace AuraBarNative {
         if (!IsWindowVisible(toOpen)) {
           ShowWindowAsync(toOpen, 5); // SW_SHOW
         }
-        // Only claim success when the window really came to the front; otherwise fall through
-        // to launching it, which surfaces single-instance apps the normal way
         if (ForceFocus(toOpen)) {
           lastExternalForeground = toOpen;
           return "focused";
@@ -2382,16 +2437,14 @@ namespace AuraBarNative {
       }
 
       // 2) Packaged Microsoft Store / UWP / MSIX app -> return shell:AppsFolder AUMID
-      foreach (uint id in pids) {
-        string aumid = TryGetAumid(id);
-        if (!string.IsNullOrEmpty(aumid)) {
-          return "aumid:" + aumid;
-        }
+      string aumid = GetCachedAumid(seedPid);
+      if (!string.IsNullOrEmpty(aumid)) {
+        return "aumid:" + aumid;
       }
 
       // 3) Fallback to exe path launch in main process
-      if (!string.IsNullOrEmpty(targetMeta.exePath)) {
-        return "exe:" + targetMeta.exePath;
+      if (!string.IsNullOrEmpty(targetExe)) {
+        return "exe:" + targetExe;
       }
       return "false";
     }
@@ -3437,10 +3490,20 @@ namespace AuraBarNative {
       desiredWorkArea = rc;
       hasDesiredWorkArea = true;
       primaryWorkAreaBackoffUntil = 0;
-      SystemParametersInfo(0x002F, 0, ref rc, 0);
-      POINT origin = new POINT();
-      IntPtr primaryMon = MonitorFromPoint(origin, 1);
-      RefitMaximizedOnMonitor(primaryMon, rc);
+
+      RECT curWa = new RECT();
+      bool waChanged = true;
+      if (SystemParametersInfo(0x0030, 0, ref curWa, 0)) {
+        waChanged = Math.Abs(curWa.left - rc.left) > 6 || Math.Abs(curWa.top - rc.top) > 6 ||
+                    Math.Abs(curWa.right - rc.right) > 6 || Math.Abs(curWa.bottom - rc.bottom) > 6;
+      }
+      if (waChanged) {
+        lastWorkAreaChangeAt = Environment.TickCount;
+        primaryWorkAreaLastSetAt = lastWorkAreaChangeAt;
+        // fWinIni=0: update work area silently without sending WM_SETTINGCHANGE to explorer.exe
+        // (broadcasting SPIF_SENDCHANGE wakes explorer's AppBar, which immediately overwrites rcWork back!)
+        SystemParametersInfo(0x002F, 0, ref rc, 0);
+      }
     }
 
     private static void RestoreWindowsTaskbar() {
@@ -3532,12 +3595,16 @@ namespace AuraBarNative {
       }
 
       RECT cur = mi.rcWork;
-      bool changed = Math.Abs(cur.left - want.left) > 4 || Math.Abs(cur.top - want.top) > 4 ||
-                     Math.Abs(cur.right - want.right) > 4 || Math.Abs(cur.bottom - want.bottom) > 4;
+      bool changed = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
+                     Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
       if (changed) {
-        SystemParametersInfo(0x002F, 0, ref want, 0);
+        int nowTick = Environment.TickCount;
+        lastWorkAreaChangeAt = nowTick;
+        lock (extraHwndsLock) {
+          secWorkAreaLastSetAt[mon] = nowTick;
+        }
+        SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: never wake explorer.exe AppBar!
       }
-      RefitMaximizedOnMonitor(mon, want);
     }
 
     private static void ReleaseSecondaryWorkAreaForHwnd(IntPtr h) {
@@ -3595,6 +3662,10 @@ namespace AuraBarNative {
         int.TryParse(args[0], out parentElectronPid);
       }
 
+      // Ensure Main's thread has a Win32 message queue so AttachThreadInput in ForceFocus works!
+      MSG initMsg;
+      PeekMessage(out initMsg, IntPtr.Zero, 0, 0, 0);
+
       Thread pollThread = new Thread(PollForegroundLoop);
       pollThread.IsBackground = true;
       pollThread.Start();
@@ -3606,6 +3677,8 @@ namespace AuraBarNative {
 
       Console.InputEncoding = Encoding.UTF8;
       Console.OutputEncoding = Encoding.UTF8;
+      Console.WriteLine("READY");
+      Console.Out.Flush();
 
       string line;
       while ((line = Console.ReadLine()) != null) {
@@ -3797,7 +3870,13 @@ namespace AuraBarNative {
               extraDockRects[h] = tr;
             }
             if (h != IntPtr.Zero && IsWindow(h)) {
-              SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+              RECT curR;
+              bool needMove = !GetWindowRect(h, out curR) ||
+                Math.Abs(curR.left - px) > 3 || Math.Abs(curR.top - py) > 3 ||
+                Math.Abs(curR.right - (px + pw)) > 3 || Math.Abs(curR.bottom - (py + ph)) > 3;
+              if (needMove) {
+                SetWindowPos(h, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+              }
             }
             Reply("ok");
           } else if (line.StartsWith("SEC_RESERVE ")) {
@@ -3828,8 +3907,14 @@ namespace AuraBarNative {
             int ph = int.Parse(parts[3]);
             dockTargetRect = new RECT { left = px, top = py, right = px + pw, bottom = py + ph };
             hasDockTargetRect = true;
-            if (dockHwnd != IntPtr.Zero) {
-              SetWindowPos(dockHwnd, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+            if (dockHwnd != IntPtr.Zero && IsWindow(dockHwnd)) {
+              RECT curR;
+              bool needMove = !GetWindowRect(dockHwnd, out curR) ||
+                Math.Abs(curR.left - px) > 3 || Math.Abs(curR.top - py) > 3 ||
+                Math.Abs(curR.right - (px + pw)) > 3 || Math.Abs(curR.bottom - (py + ph)) > 3;
+              if (needMove) {
+                SetWindowPos(dockHwnd, new IntPtr(-1), px, py, pw, ph, keepOnTop ? 0x0010u : 0x0014u);
+              }
             }
             Reply("ok");
           } else if (line.StartsWith("TOPMOST ")) {

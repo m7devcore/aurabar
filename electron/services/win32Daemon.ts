@@ -3,10 +3,20 @@ import type { Readable, Writable } from 'node:stream';
 import path from 'node:path';
 
 const COMMAND_TIMEOUT_MS = 3500;
+const STARTUP_READY_TIMEOUT_MS = 15000;
 
 // Things the user just did (a click on a taskbar icon, a volume key, live hover previews...)
-// must not wait behind background refreshes such as window lists, thumbnails and icons
+// and critical startup layout commands must not wait behind background refreshes
 const URGENT_COMMANDS = new Set([
+  'SET_HWNDS',
+  'SET_EXTRA_HWNDS',
+  'KEEP_TOP',
+  'TASKBAR_HIDE',
+  'TASKBAR_SHOW',
+  'PLACE_DOCK',
+  'PLACE_WIN',
+  'SEC_RESERVE',
+  'SEC_RELEASE',
   'TOGGLE',
   'FOCUS',
   'PEEK_START',
@@ -83,9 +93,32 @@ class Win32Daemon {
   private nextId = 1;
   private queue: QueuedCommand[] = [];
   private busy = false;
+  private ready = false;
+  private readyTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyWaiters: Array<() => void> = [];
 
   private hasStarted = false;
   private restartListener: (() => void) | null = null;
+
+  whenReady(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.readyWaiters.push(resolve);
+    });
+  }
+
+  private markReady(): void {
+    if (this.ready) return;
+    this.ready = true;
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
+    const waiters = this.readyWaiters;
+    this.readyWaiters = [];
+    for (const w of waiters) w();
+    this.pump();
+  }
 
   /**
    * Called when the native process had to be started again after dying. Whatever it had set up
@@ -123,6 +156,11 @@ class Win32Daemon {
     );
     this.proc = proc;
     this.buffer = '';
+    this.ready = false;
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => {
+      if (this.proc === proc) this.markReady();
+    }, STARTUP_READY_TIMEOUT_MS);
 
     // Writing to a pipe whose reader died emits EPIPE asynchronously; unhandled it crashes main
     proc.stdin.on('error', () => undefined);
@@ -145,6 +183,11 @@ class Win32Daemon {
       if (this.proc !== proc) return;
       this.proc = null;
       this.buffer = '';
+      this.ready = false;
+      if (this.readyTimer) {
+        clearTimeout(this.readyTimer);
+        this.readyTimer = null;
+      }
       this.rejectAllPending();
     });
 
@@ -156,6 +199,13 @@ class Win32Daemon {
   }
 
   private handleLine(line: string): void {
+    if (line === 'READY') {
+      this.markReady();
+      return;
+    }
+    if (!this.ready) {
+      this.markReady();
+    }
     const match = /^#(\d+) ?(.*)$/s.exec(line);
     if (!match) return;
     const resolve = this.pending.get(Number(match[1]));
@@ -220,6 +270,11 @@ class Win32Daemon {
 
   private pump(): void {
     if (this.busy) return;
+    if (!this.proc || this.proc.killed) {
+      if (this.queue.length > 0) this.start();
+      return;
+    }
+    if (!this.ready) return;
     const job = this.queue.shift();
     if (!job) return;
     this.busy = true;

@@ -195,11 +195,34 @@ export function App() {
     return () => clearInterval(id);
   }, [suspended]);
 
-  // Media polling
+  // Media polling — ignore linear playback progression so DockBar doesn't re-render every 1.5s
+  const mediaPlayingRef = useRef(false);
   const refreshMedia = useCallback(async () => {
     const m = await dockBridge.getMediaInfo();
-    // Identical polls keep the same object, so the island/dock don't re-render for nothing
-    setMedia((prev) => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m));
+    mediaPlayingRef.current = m?.status === 'Playing';
+    setMedia((prev) => {
+      if (!prev && !m) return prev;
+      if (!prev || !m) return m;
+      if (
+        prev.title === m.title &&
+        prev.artist === m.artist &&
+        prev.album === m.album &&
+        prev.appId === m.appId &&
+        prev.status === m.status &&
+        prev.endSec === m.endSec
+      ) {
+        if (m.status !== 'Playing') {
+          return prev.posSec === m.posSec ? prev : m;
+        }
+        // While playing, only re-render on a real seek (> 1.6s drift from linear extrapolation)
+        const prevPosMs = (prev.posMs ?? (prev.posSec ?? 0) * 1000) + Math.max(0, (m.posAt ?? Date.now()) - (prev.posAt ?? Date.now()));
+        const curPosMs = m.posMs ?? (m.posSec ?? 0) * 1000;
+        if (Math.abs(curPosMs - prevPosMs) < 1600) {
+          return prev;
+        }
+      }
+      return m;
+    });
   }, []);
 
   // Only poll where music is actually on screen: the island when it is shown, the dock when the
@@ -214,7 +237,7 @@ export function App() {
   useEffect(() => {
     if (!needsMedia) return;
     void refreshMedia();
-    const intervalMs = VIEW_MODE === 'island' || musicPosition === 'taskbar' ? 1500 : 2500;
+    const intervalMs = VIEW_MODE === 'island' || musicPosition === 'taskbar' ? 2000 : 3000;
     const id = setInterval(() => {
       void refreshMedia();
     }, intervalMs);

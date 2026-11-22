@@ -685,7 +685,27 @@ export async function importTaskbarPinnedApps(): Promise<PinnedApp[]> {
   }
 }
 
-export async function listRunningWindows(): Promise<RunningWindow[]> {
+let runningWinsInFlight: Promise<RunningWindow[]> | null = null;
+let runningWinsCache: { at: number; list: RunningWindow[] } | null = null;
+const RUNNING_WINS_TTL_MS = 550;
+
+export function listRunningWindows(): Promise<RunningWindow[]> {
+  if (runningWinsCache && Date.now() - runningWinsCache.at < RUNNING_WINS_TTL_MS) {
+    return Promise.resolve(runningWinsCache.list);
+  }
+  if (runningWinsInFlight) return runningWinsInFlight;
+  runningWinsInFlight = fetchRunningWindows()
+    .then((list) => {
+      runningWinsCache = { at: Date.now(), list };
+      return list;
+    })
+    .finally(() => {
+      runningWinsInFlight = null;
+    });
+  return runningWinsInFlight;
+}
+
+async function fetchRunningWindows(): Promise<RunningWindow[]> {
   const raw = await win32Daemon.send('LIST');
   if (!raw || !raw.startsWith('[')) return [];
   try {
@@ -889,7 +909,29 @@ export async function closeWindowByHwnd(hwnd: string): Promise<boolean> {
   return res === 'ok';
 }
 
+function openKnownTrayHelper(candidateExe: string): Promise<boolean> | null {
+  if (/\\lghub_system_tray\.exe$/i.test(candidateExe)) {
+    const parentUi = path.resolve(path.dirname(candidateExe), '..', 'lghub.exe');
+    if (fs.existsSync(parentUi)) return launchTarget(parentUi);
+  }
+  if (/\\securityhealthsystray\.exe$/i.test(candidateExe)) {
+    return launchTarget('windowsdefender:');
+  }
+  if (/\\(nvcontainer|nvdisplay\.container)\.exe$/i.test(candidateExe)) {
+    const nvApp = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\CEF\\NVIDIA App.exe';
+    if (fs.existsSync(nvApp)) return launchTarget(nvApp);
+    return launchTarget('nvcplui.exe');
+  }
+  return null;
+}
+
 export async function openAppByPid(pid: number, executablePath?: string): Promise<boolean> {
+  // Fast-path known headless tray helpers whose UI lives in a separate binary/URI
+  if (executablePath) {
+    const direct = openKnownTrayHelper(executablePath);
+    if (direct) return direct;
+  }
+
   if (Number.isInteger(pid) && pid > 4) {
     const res = await win32Daemon.send(`OPEN_APP ${pid}`);
     if (res === 'focused') return true;
@@ -907,19 +949,8 @@ export async function openAppByPid(pid: number, executablePath?: string): Promis
     }
     const candidateExe = res.startsWith('exe:') ? res.slice(4).trim() : executablePath;
     if (candidateExe) {
-      // Handle tray helper binaries whose interactive UI lives elsewhere
-      if (/\\lghub_system_tray\.exe$/i.test(candidateExe)) {
-        const parentUi = path.resolve(path.dirname(candidateExe), '..', 'lghub.exe');
-        if (fs.existsSync(parentUi)) return launchTarget(parentUi);
-      }
-      if (/\\securityhealthsystray\.exe$/i.test(candidateExe)) {
-        return launchTarget('windowsdefender:');
-      }
-      if (/\\(nvcontainer|nvdisplay\.container)\.exe$/i.test(candidateExe)) {
-        const nvApp = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\CEF\\NVIDIA App.exe';
-        if (fs.existsSync(nvApp)) return launchTarget(nvApp);
-        return launchTarget('nvcplui.exe');
-      }
+      const helper = openKnownTrayHelper(candidateExe);
+      if (helper) return helper;
       return launchTarget(candidateExe);
     }
   }
@@ -1136,7 +1167,26 @@ export async function setDefaultAudioDevice(deviceId: string): Promise<AudioOutp
   }
 }
 
-export async function listAudioSessions(): Promise<AudioAppSession[]> {
+let audioSessionsCache: { at: number; list: AudioAppSession[] } | null = null;
+let audioSessionsInFlight: Promise<AudioAppSession[]> | null = null;
+
+export function listAudioSessions(): Promise<AudioAppSession[]> {
+  if (audioSessionsCache && Date.now() - audioSessionsCache.at < 2500) {
+    return Promise.resolve(audioSessionsCache.list);
+  }
+  if (audioSessionsInFlight) return audioSessionsInFlight;
+  audioSessionsInFlight = fetchAudioSessions()
+    .then((list) => {
+      audioSessionsCache = { at: Date.now(), list };
+      return list;
+    })
+    .finally(() => {
+      audioSessionsInFlight = null;
+    });
+  return audioSessionsInFlight;
+}
+
+async function fetchAudioSessions(): Promise<AudioAppSession[]> {
   const raw = await win32Daemon.send('AUDIO_SESSIONS');
   if (!raw || !raw.startsWith('[')) return [];
   try {
@@ -1155,12 +1205,14 @@ export async function listAudioSessions(): Promise<AudioAppSession[]> {
 
 export async function setAudioSessionVolume(sessionId: string, level: number): Promise<void> {
   if (!sessionId) return;
+  audioSessionsCache = null;
   const clamped = Math.max(0, Math.min(100, Math.round(level)));
   await win32Daemon.send(`AUDIO_SESSION_VOL ${clamped} ${sessionId}`);
 }
 
 export async function toggleAudioSessionMute(sessionId: string): Promise<void> {
   if (!sessionId) return;
+  audioSessionsCache = null;
   await win32Daemon.send(`AUDIO_SESSION_MUTE ${sessionId}`);
 }
 
