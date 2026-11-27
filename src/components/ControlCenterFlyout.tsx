@@ -199,12 +199,15 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
   const [wifiLoading, setWifiLoading] = useState(false);
   const [connectingSsid, setConnectingSsid] = useState<string | null>(null);
 
+  const aliveRef = useRef(true);
   const volSendAtRef = useRef(0);
   const volTimerRef = useRef<number | null>(null);
   const brightSendAtRef = useRef(0);
   const brightTimerRef = useRef<number | null>(null);
   const brightDraggingRef = useRef(false);
   const brightLockUntilRef = useRef(0);
+  const audioSelectTimerRef = useRef<number | null>(null);
+  const wifiConnectTimerRef = useRef<number | null>(null);
   const sessionSendAtRef = useRef<Record<string, number>>({});
   const sessionTimerRef = useRef<Record<string, number>>({});
   const sessionDraggingRef = useRef<Set<string>>(new Set());
@@ -212,21 +215,23 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
 
   // Load brightness & night light immediately when Control Center opens
   useEffect(() => {
-    let alive = true;
+    aliveRef.current = true;
     void Promise.all([dockBridge.getBrightness(), dockBridge.getNightLight()]).then(([b, nl]) => {
       cachedBrightness = b;
       cachedNightLight = nl;
-      if (!alive) return;
+      if (!aliveRef.current) return;
       if (!brightDraggingRef.current && Date.now() >= brightLockUntilRef.current) {
         setBrightness(b);
       }
       setNightLight(nl);
     });
     return () => {
-      alive = false;
+      aliveRef.current = false;
       onVolumeDragChange?.(false);
       if (volTimerRef.current) window.clearTimeout(volTimerRef.current);
       if (brightTimerRef.current) window.clearTimeout(brightTimerRef.current);
+      if (audioSelectTimerRef.current) window.clearTimeout(audioSelectTimerRef.current);
+      if (wifiConnectTimerRef.current) window.clearTimeout(wifiConnectTimerRef.current);
       for (const id of Object.values(sessionTimerRef.current)) window.clearTimeout(id);
     };
   }, []);
@@ -280,6 +285,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
   const refreshWifi = useCallback(async () => {
     setWifiLoading(true);
     const list = await dockBridge.listWifiNetworks();
+    if (!aliveRef.current) return;
     setWifiList(list);
     setWifiLoading(false);
   }, []);
@@ -376,16 +382,32 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
   const handleSelectDevice = async (deviceId: string) => {
     setDevices((prev) => prev.map((d) => ({ ...d, isDefault: d.id === deviceId })));
     const nextDevs = await dockBridge.setDefaultAudioDevice(deviceId);
+    if (!aliveRef.current) return;
     if (nextDevs.length > 0) setDevices(nextDevs);
-    setTimeout(() => void refreshAudio(), 160);
+    if (audioSelectTimerRef.current) window.clearTimeout(audioSelectTimerRef.current);
+    audioSelectTimerRef.current = window.setTimeout(() => {
+      audioSelectTimerRef.current = null;
+      if (aliveRef.current) void refreshAudio();
+    }, 160);
   };
 
   const handleConnectWifi = async (ssid: string) => {
     setConnectingSsid(ssid);
-    await dockBridge.connectWifiNetwork(ssid);
-    setTimeout(async () => {
-      await refreshWifi();
+    const ok = await dockBridge.connectWifiNetwork(ssid);
+    if (!aliveRef.current) return;
+    if (!ok) {
+      // Unsaved or password-protected network: hand off cleanly to Windows Network Settings
       setConnectingSsid(null);
+      onClose();
+      void dockBridge.systemAction('network-settings');
+      return;
+    }
+    if (wifiConnectTimerRef.current) window.clearTimeout(wifiConnectTimerRef.current);
+    wifiConnectTimerRef.current = window.setTimeout(async () => {
+      wifiConnectTimerRef.current = null;
+      if (!aliveRef.current) return;
+      await refreshWifi();
+      if (aliveRef.current) setConnectingSsid(null);
     }, 900);
   };
 

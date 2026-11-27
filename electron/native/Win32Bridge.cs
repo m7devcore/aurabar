@@ -1098,6 +1098,8 @@ namespace GlassyNative {
             if (!IsParentAlive()) {
               if (taskbarHiddenByUs) {
                 try { RestoreWindowsTaskbar(); } catch { }
+              } else {
+                try { ReleaseAllSecondaryWorkAreas(); } catch { }
               }
               Environment.Exit(0);
               return;
@@ -1121,7 +1123,19 @@ namespace GlassyNative {
                 if (taskbarHiddenByUs) {
                   SetAllNativeTaskbarsVisible(false);
                 }
-                if (dockHwnd != IntPtr.Zero && !IsWindowVisible(dockHwnd)) {
+                bool anyDockHidden = dockHwnd != IntPtr.Zero && !IsWindowVisible(dockHwnd);
+                if (!anyDockHidden) {
+                  lock (extraHwndsLock) {
+                    for (int ei = 0; ei < extraDockHwnds.Count; ei++) {
+                      IntPtr eh = extraDockHwnds[ei];
+                      if (eh != IntPtr.Zero && IsWindow(eh) && !IsWindowVisible(eh)) {
+                        anyDockHidden = true;
+                        break;
+                      }
+                    }
+                  }
+                }
+                if (anyDockHidden) {
                   EmitEvent("FS_WAKE");
                 }
               }
@@ -3570,6 +3584,17 @@ namespace GlassyNative {
       if (!fresh) SnapshotThumb(hWnd);
     }
 
+    private static readonly ImageCodecInfo cachedJpegCodec = FindJpegCodec();
+
+    private static ImageCodecInfo FindJpegCodec() {
+      try {
+        foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders()) {
+          if (c.MimeType == "image/jpeg") return c;
+        }
+      } catch { }
+      return null;
+    }
+
     private static string CaptureWindowThumb(IntPtr hWnd, int maxW, int maxH) {
       if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || IsIconic(hWnd)) return "";
       // WM_PRINT to a hung window would block the whole command loop
@@ -3611,10 +3636,7 @@ namespace GlassyNative {
             g2.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighSpeed;
             g2.DrawImage(full, new Rectangle(0, 0, tw, th), crop, GraphicsUnit.Pixel);
 
-            ImageCodecInfo jpeg = null;
-            foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders()) {
-              if (c.MimeType == "image/jpeg") { jpeg = c; break; }
-            }
+            ImageCodecInfo jpeg = cachedJpegCodec;
             if (jpeg == null) {
               thumb.Save(ms, ImageFormat.Png);
               return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
@@ -3704,7 +3726,10 @@ namespace GlassyNative {
         SystemParametersInfo(0x002F, 0, ref wa, 2);
       }
       SetAllNativeTaskbarsVisible(true);
-      // Restore any secondary monitor work areas we reserved
+      ReleaseAllSecondaryWorkAreas();
+    }
+
+    private static void ReleaseAllSecondaryWorkAreas() {
       List<RECT> toRestore = new List<RECT>();
       lock (extraHwndsLock) {
         foreach (RECT orig in savedSecWorkAreas.Values) toRestore.Add(orig);
@@ -4125,6 +4150,7 @@ namespace GlassyNative {
             StopLivePeek();
             ClearLiveThumbs();
             if (taskbarHiddenByUs) RestoreWindowsTaskbar();
+            else ReleaseAllSecondaryWorkAreas();
             Reply("bye");
             break;
           } else {

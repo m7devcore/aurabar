@@ -19,12 +19,23 @@ import type {
 } from '../../src/types';
 import { win32Daemon } from './win32Daemon';
 
+const MAX_ICON_CACHE = 250;
 const iconCache = new Map<string, string>();
+const iconInFlight = new Map<string, Promise<string | undefined>>();
 const winIconCache = new Map<string, string>();
 // Targets with no extractable icon; retried after a while since a failure can also be a
 // transient daemon timeout (e.g. while it is still compiling at startup)
 const iconMissAt = new Map<string, number>();
 const ICON_MISS_RETRY_MS = 60000;
+
+function setIconCache(key: string, val: string): void {
+  if (iconCache.has(key)) iconCache.delete(key);
+  iconCache.set(key, val);
+  if (iconCache.size > MAX_ICON_CACHE) {
+    const oldest = iconCache.keys().next().value;
+    if (oldest !== undefined) iconCache.delete(oldest);
+  }
+}
 
 function stripQuotes(s: string): string {
   return s.trim().replace(/^"+|"+$/g, '');
@@ -242,21 +253,38 @@ function resolveKnownSystemPath(target: string): string | null {
   return null;
 }
 
-export async function getIconDataUrl(
+export function getIconDataUrl(
   target: string,
   strictExe = false
 ): Promise<string | undefined> {
   const cleaned = stripQuotes(target || '');
-  if (!cleaned) return undefined;
+  if (!cleaned) return Promise.resolve(undefined);
   const isShellPath = /^shell:/i.test(cleaned);
   if (!isShellPath && isProtocolUri(cleaned)) {
-    return undefined;
+    return Promise.resolve(undefined);
   }
   const key = (strictExe ? 'strict:' : '') + cleaned.toLowerCase();
-  if (iconCache.has(key)) return iconCache.get(key);
+  if (iconCache.has(key)) return Promise.resolve(iconCache.get(key));
   const missAt = iconMissAt.get(key);
-  if (missAt !== undefined && Date.now() - missAt < ICON_MISS_RETRY_MS) return undefined;
+  if (missAt !== undefined && Date.now() - missAt < ICON_MISS_RETRY_MS) {
+    return Promise.resolve(undefined);
+  }
+  const pending = iconInFlight.get(key);
+  if (pending) return pending;
 
+  const work = fetchIconDataUrl(cleaned, isShellPath, strictExe, key).finally(() => {
+    iconInFlight.delete(key);
+  });
+  iconInFlight.set(key, work);
+  return work;
+}
+
+async function fetchIconDataUrl(
+  cleaned: string,
+  isShellPath: boolean,
+  strictExe: boolean,
+  key: string
+): Promise<string | undefined> {
   let resolved = isShellPath ? cleaned : resolveKnownSystemPath(cleaned) ?? cleaned;
 
   // If a Squirrel app auto-updated and deleted the old app-<ver> folder, pull the icon from the newest one
@@ -295,7 +323,7 @@ export async function getIconDataUrl(
   const iconCmd = strictExe ? 'ICON_STRICT' : 'ICON';
   const shellIcon = await win32Daemon.send(`${iconCmd} ${resolved}`);
   if (shellIcon.startsWith('data:image/png;base64,')) {
-    iconCache.set(key, shellIcon);
+    setIconCache(key, shellIcon);
     return shellIcon;
   }
 
@@ -303,7 +331,7 @@ export async function getIconDataUrl(
   if (resolved !== cleaned) {
     const origIcon = await win32Daemon.send(`${iconCmd} ${cleaned}`);
     if (origIcon.startsWith('data:image/png;base64,')) {
-      iconCache.set(key, origIcon);
+      setIconCache(key, origIcon);
       return origIcon;
     }
   }
@@ -314,7 +342,7 @@ export async function getIconDataUrl(
     if (aumid) {
       const appIcon = await win32Daemon.send(`ICON shell:AppsFolder\\${aumid}`);
       if (appIcon.startsWith('data:image/png;base64,')) {
-        iconCache.set(key, appIcon);
+        setIconCache(key, appIcon);
         return appIcon;
       }
     }
@@ -326,7 +354,7 @@ export async function getIconDataUrl(
       const img = await app.getFileIcon(resolved, { size: 'normal' });
       if (!img.isEmpty()) {
         const url = img.toDataURL();
-        iconCache.set(key, url);
+        setIconCache(key, url);
         return url;
       }
     } catch {

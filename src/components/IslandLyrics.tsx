@@ -34,8 +34,14 @@ export function IslandLyrics({ state, active, dict, className = '' }: Props) {
   useEffect(() => {
     setAnimate(false);
     if (!synced) return;
-    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setAnimate(true)));
-    return () => cancelAnimationFrame(raf);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setAnimate(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
   }, [synced]);
 
   if (state.status !== 'ready') {

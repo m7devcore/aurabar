@@ -1795,6 +1795,10 @@ export function DockBar({
           }}
           onCloseWindow={(win) => {
             if (!win.hwnd) return;
+            if (peekData && peekData.windows.length <= 1) {
+              clearPeekTimers();
+              setPeek(null);
+            }
             void dockBridge.closeWindow(win.hwnd).then(() => {
               setTimeout(onRefreshWindows, 150);
               setTimeout(onRefreshWindows, 500);
