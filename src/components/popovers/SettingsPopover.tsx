@@ -246,6 +246,17 @@ export function SettingsPopover({
             onToggle={() => onUpdateSettings({ hideInFullscreen: !settings.hideInFullscreen })}
           />
 
+          {settings.musicPosition === 'top' && (
+            <ToggleSwitch
+              checked={Boolean(settings.autoHideIdleIsland)}
+              title={dict.autoHideIdleIsland}
+              desc={dict.autoHideIdleIslandDesc}
+              onToggle={() =>
+                onUpdateSettings({ autoHideIdleIsland: !settings.autoHideIdleIsland })
+              }
+            />
+          )}
+
           <ToggleSwitch
             checked={settings.showOnAllDisplays}
             title={dict.showOnAllDisplays}

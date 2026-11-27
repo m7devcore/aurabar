@@ -298,6 +298,7 @@ export function App() {
         lang={config?.settings.language ?? 'en'}
         media={suspended ? null : media}
         expanded={suspended ? false : islandExpanded}
+        autoHideIdle={Boolean(config?.settings.autoHideIdleIsland)}
         onToggleExpand={(open) => {
           setIslandExpanded(open);
           void dockBridge.setIslandExpanded(open);
@@ -333,6 +334,7 @@ export function App() {
             runningWindows={runningWindows}
             onSavePinnedApps={(pinnedApps) => patchConfig({ pinnedApps })}
             onRefreshWindows={() => void refreshWindows()}
+            onClose={() => handleTogglePanel(null)}
           />
         )}
 

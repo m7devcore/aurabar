@@ -73,6 +73,8 @@ const RESPAWN_BACKOFF_MS = 30000;
 
 let worker: ChildProcessByStdio<Writable, Readable, null> | null = null;
 let workerBuffer = '';
+let workerSpawnedAt = 0;
+let consecutiveTimeouts = 0;
 let nextRequestId = 1;
 let lastSpawnFailedAt = 0;
 const pendingRequests = new Map<number, (line: string) => void>();
@@ -80,6 +82,21 @@ const pendingRequests = new Map<number, (line: string) => void>();
 let inFlight: Promise<MediaInfo | null> | null = null;
 let lastResult: MediaInfo | null = null;
 let lastResultAt = 0;
+
+function killStalledWorker(proc: ChildProcessByStdio<Writable, Readable, null>): void {
+  if (worker !== proc) return;
+  worker = null;
+  workerBuffer = '';
+  consecutiveTimeouts = 0;
+  const waiters = Array.from(pendingRequests.values());
+  pendingRequests.clear();
+  for (const resolve of waiters) resolve('');
+  try {
+    proc.kill();
+  } catch {
+    // Ignore kill errors
+  }
+}
 
 function ensureWorker(): ChildProcessByStdio<Writable, Readable, null> | null {
   if (worker && !worker.killed) return worker;
@@ -94,10 +111,13 @@ function ensureWorker(): ChildProcessByStdio<Writable, Readable, null> | null {
   );
   worker = proc;
   workerBuffer = '';
+  workerSpawnedAt = spawnedAt;
+  consecutiveTimeouts = 0;
 
   proc.stdin.on('error', () => undefined);
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (chunk: string) => {
+    if (worker !== proc) return;
     workerBuffer += chunk;
     let idx = workerBuffer.indexOf('\n');
     while (idx !== -1) {
@@ -107,6 +127,7 @@ function ensureWorker(): ChildProcessByStdio<Writable, Readable, null> | null {
       const id = Number(sp === -1 ? line : line.slice(0, sp));
       const resolve = pendingRequests.get(id);
       if (resolve) {
+        consecutiveTimeouts = 0;
         pendingRequests.delete(id);
         resolve(sp === -1 ? '' : line.slice(sp + 1));
       }
@@ -116,6 +137,8 @@ function ensureWorker(): ChildProcessByStdio<Writable, Readable, null> | null {
   proc.on('exit', () => {
     if (worker !== proc) return;
     worker = null;
+    workerBuffer = '';
+    consecutiveTimeouts = 0;
     // A worker that dies right away (e.g. WinRT media API unavailable) should not be respawned
     // on every poll
     if (Date.now() - spawnedAt < 5000) lastSpawnFailedAt = Date.now();
@@ -136,6 +159,13 @@ function queryWorker(): Promise<string> {
     const id = nextRequestId++;
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
+      // Only treat as hung after cold PowerShell+WinRT startup has had time to settle
+      if (worker === proc && Date.now() - workerSpawnedAt > 6500) {
+        consecutiveTimeouts += 1;
+        if (consecutiveTimeouts >= 2) {
+          killStalledWorker(proc);
+        }
+      }
       resolve('');
     }, REQUEST_TIMEOUT_MS);
     pendingRequests.set(id, (line) => {

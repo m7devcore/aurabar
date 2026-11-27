@@ -173,6 +173,7 @@ export interface DockSettings {
   dockMagnification: boolean;
   launchAtStartup: boolean;
   hideInFullscreen: boolean;
+  autoHideIdleIsland: boolean;
   showOnAllDisplays: boolean;
 }
 

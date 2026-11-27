@@ -5,36 +5,60 @@ import type { VolumeInfo } from '../types';
 
 interface Props {
   compact?: boolean;
+  surface?: 'dock' | 'island';
 }
 
-export function VolumeSlider({ compact = false }: Props) {
+export function VolumeSlider({ compact = false, surface = 'dock' }: Props) {
   const [vol, setVol] = useState<VolumeInfo>({ level: 65, muted: false });
   const [dragging, setDragging] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
+  const lockUntilRef = useRef(0);
   const lastSendRef = useRef(0);
   const pendingRef = useRef<number | null>(null);
 
+  const setSurfaceInteractive = (interactive: boolean) => {
+    if (surface === 'island') {
+      dockBridge.setIslandInteractive(interactive);
+    } else {
+      dockBridge.setDockInteractive(interactive);
+    }
+  };
+
   useEffect(() => {
     let alive = true;
+    let paused = false;
+    const stopSusp = dockBridge.onSuspended((s) => {
+      paused = s;
+    });
     const sync = async () => {
-      if (draggingRef.current) return;
+      if (paused || draggingRef.current || Date.now() < lockUntilRef.current) return;
       const next = await dockBridge.getVolume();
-      if (alive && !draggingRef.current) {
-        setVol(next);
+      if (alive && !draggingRef.current && Date.now() >= lockUntilRef.current) {
+        setVol((prev) => (prev.level === next.level && prev.muted === next.muted ? prev : next));
       }
     };
     void sync();
     const id = setInterval(() => void sync(), 1200);
     return () => {
       alive = false;
+      stopSusp();
       clearInterval(id);
+      if (pendingRef.current) {
+        window.clearTimeout(pendingRef.current);
+        pendingRef.current = null;
+      }
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        setSurfaceInteractive(false);
+      }
     };
-  }, []);
+  }, [surface]);
 
   const commitLevel = (nextLevel: number, force = false) => {
     const clamped = Math.max(0, Math.min(100, Math.round(nextLevel)));
-    setVol({ level: clamped, muted: clamped === 0 ? true : false });
+    lockUntilRef.current = Date.now() + 900;
+    setVol({ level: clamped, muted: clamped === 0 });
 
     const now = performance.now();
     if (force || now - lastSendRef.current >= 36) {
@@ -84,6 +108,7 @@ export function VolumeSlider({ compact = false }: Props) {
         aria-pressed={vol.muted}
         onClick={(e) => {
           e.stopPropagation();
+          lockUntilRef.current = Date.now() + 900;
           void dockBridge.toggleMute().then(setVol);
         }}
         title={vol.muted ? 'Unmute' : 'Mute'}
@@ -93,6 +118,7 @@ export function VolumeSlider({ compact = false }: Props) {
 
       <div
         ref={trackRef}
+        dir="ltr"
         role="slider"
         tabIndex={0}
         aria-label="Master Volume"
@@ -124,6 +150,7 @@ export function VolumeSlider({ compact = false }: Props) {
           e.currentTarget.setPointerCapture(e.pointerId);
           draggingRef.current = true;
           setDragging(true);
+          setSurfaceInteractive(true);
           commitLevel(levelFromClientX(e.clientX), true);
         }}
         onPointerMove={(e) => {
@@ -136,6 +163,7 @@ export function VolumeSlider({ compact = false }: Props) {
           e.stopPropagation();
           draggingRef.current = false;
           setDragging(false);
+          setSurfaceInteractive(false);
           commitLevel(levelFromClientX(e.clientX), true);
           if (e.currentTarget.hasPointerCapture(e.pointerId)) {
             e.currentTarget.releasePointerCapture(e.pointerId);
@@ -144,6 +172,7 @@ export function VolumeSlider({ compact = false }: Props) {
         onPointerCancel={() => {
           draggingRef.current = false;
           setDragging(false);
+          setSurfaceInteractive(false);
         }}
       >
         <div className="vol-track-bg">

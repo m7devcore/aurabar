@@ -13,6 +13,7 @@ interface Props {
   lang: Language;
   media: MediaInfo | null;
   expanded: boolean;
+  autoHideIdle?: boolean;
   onToggleExpand: (next: boolean) => void;
   onRefreshMedia: () => void;
 }
@@ -38,14 +39,26 @@ function cleanSourceLabel(appId?: string): string | null {
   return head.length > 20 ? `${head.slice(0, 18)}…` : head;
 }
 
-export function DynamicIsland({ lang, media, expanded, onToggleExpand, onRefreshMedia }: Props) {
+export function DynamicIsland({
+  lang,
+  media,
+  expanded,
+  autoHideIdle = false,
+  onToggleExpand,
+  onRefreshMedia
+}: Props) {
   const dict = t(lang);
   const artworkUrl = useMediaArtwork(media);
   const [lyricsOn, toggleLyrics] = useLyricsPref();
   const islandRef = useRef<HTMLDivElement | null>(null);
+  const hiddenIdle = autoHideIdle && !media && !expanded;
 
   useLayoutEffect(() => {
     const report = () => {
+      if (hiddenIdle) {
+        dockBridge.setHitRects('island', []);
+        return;
+      }
       const el = islandRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
@@ -63,7 +76,7 @@ export function DynamicIsland({ lang, media, expanded, onToggleExpand, onRefresh
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(report) : null;
     if (ro && islandRef.current) ro.observe(islandRef.current);
     return () => ro?.disconnect();
-  }, [expanded, media?.title, artworkUrl, Boolean(media), lyricsOn]);
+  }, [expanded, media?.title, artworkUrl, Boolean(media), lyricsOn, hiddenIdle]);
 
   const isPlaying = media?.status === 'Playing';
   const lyrics = useLyrics(media, lyricsOn);
@@ -100,7 +113,10 @@ export function DynamicIsland({ lang, media, expanded, onToggleExpand, onRefresh
         ref={islandRef}
         className={`dynamic-island ${expanded ? 'expanded' : ''} ${isPlaying ? 'is-playing' : ''} ${
           isIdle ? 'is-idle' : ''
-        } ${showLyricsPanel ? 'with-lyrics' : ''} ${compactLyric ? 'has-lyric' : ''}`}
+        } ${hiddenIdle ? 'is-hidden-idle' : ''} ${showLyricsPanel ? 'with-lyrics' : ''} ${
+          compactLyric ? 'has-lyric' : ''
+        }`}
+        aria-hidden={hiddenIdle || undefined}
         onClick={() => {
           if (!expanded) onToggleExpand(true);
         }}
@@ -245,7 +261,7 @@ export function DynamicIsland({ lang, media, expanded, onToggleExpand, onRefresh
               </button>
             </div>
 
-            <VolumeSlider compact />
+            <VolumeSlider compact surface="island" />
           </div>
         )}
       </div>

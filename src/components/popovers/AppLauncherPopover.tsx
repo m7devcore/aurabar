@@ -11,6 +11,7 @@ interface Props {
   runningWindows: RunningWindow[];
   onSavePinnedApps: (apps: PinnedApp[]) => void;
   onRefreshWindows: () => void;
+  onClose: () => void;
 }
 
 export function AppLauncherPopover({
@@ -18,9 +19,11 @@ export function AppLauncherPopover({
   pinnedApps,
   runningWindows,
   onSavePinnedApps,
-  onRefreshWindows
+  onRefreshWindows,
+  onClose
 }: Props) {
   const dict = t(lang);
+  const isAr = lang === 'ar';
   const [search, setSearch] = useState('');
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
   const [loadingInstalled, setLoadingInstalled] = useState(true);
@@ -31,10 +34,18 @@ export function AppLauncherPopover({
   const requestedIconsRef = useRef(new Set<string>());
 
   useEffect(() => {
+    let alive = true;
     void dockBridge
       .getInstalledApps()
-      .then(setInstalledApps)
-      .finally(() => setLoadingInstalled(false));
+      .then((apps) => {
+        if (alive) setInstalledApps(apps);
+      })
+      .finally(() => {
+        if (alive) setLoadingInstalled(false);
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const query = search.trim().toLowerCase();
@@ -60,15 +71,19 @@ export function AppLauncherPopover({
     .map((a) => a.target)
     .join('|');
   useEffect(() => {
+    let alive = true;
     const targets = visibleIconKey ? visibleIconKey.split('|') : [];
     for (const target of targets) {
       if (requestedIconsRef.current.has(target)) continue;
       requestedIconsRef.current.add(target);
       // Results are kept even if the filter changed meanwhile; the row may scroll back into view
       void dockBridge.getAppIcon(target).then((url) => {
-        if (url) setLazyIcons((prev) => ({ ...prev, [target]: url }));
+        if (alive && url) setLazyIcons((prev) => ({ ...prev, [target]: url }));
       });
     }
+    return () => {
+      alive = false;
+    };
   }, [visibleIconKey]);
   const iconFor = (app: InstalledApp) => app.iconDataUrl ?? lazyIcons[app.target];
 
@@ -194,17 +209,18 @@ export function AppLauncherPopover({
             size={14}
             style={{
               position: 'absolute',
-              left: 10,
+              insetInlineStart: 10,
               top: '50%',
               transform: 'translateY(-50%)',
-              color: 'var(--text-muted)'
+              color: 'var(--text-muted)',
+              pointerEvents: 'none'
             }}
           />
           <input
             className="input"
-            style={{ paddingLeft: 32 }}
+            style={{ paddingInlineStart: 32 }}
             placeholder={
-              lang === 'ar'
+              isAr
                 ? 'ابحث عن أي برنامج لتثبيته أو فتحه...'
                 : 'Search installed apps, pinned, or open windows...'
             }
@@ -245,7 +261,10 @@ export function AppLauncherPopover({
                   flex: 1,
                   textAlign: 'start'
                 }}
-                onClick={() => void dockBridge.launchTarget(app.target)}
+                onClick={() => {
+                  onClose();
+                  void dockBridge.launchTarget(app.target);
+                }}
               >
                 {app.iconDataUrl ? (
                   <img className="app-icon-img" src={app.iconDataUrl} alt={app.name} />
@@ -268,7 +287,7 @@ export function AppLauncherPopover({
                 className="btn btn-icon"
                 style={{ width: 24, height: 24, borderColor: 'transparent' }}
                 onClick={() => handleRemove(app.id)}
-                title="Unpin"
+                title={isAr ? 'إلغاء التثبيت' : 'Unpin'}
               >
                 <Trash2 size={13} />
               </button>
@@ -304,7 +323,10 @@ export function AppLauncherPopover({
                       flex: 1,
                       textAlign: 'start'
                     }}
-                    onClick={() => void dockBridge.launchTarget(app.target)}
+                    onClick={() => {
+                      onClose();
+                      void dockBridge.launchTarget(app.target);
+                    }}
                   >
                     {appIcon ? (
                       <img className="app-icon-img" src={appIcon} alt={app.name} />
@@ -327,7 +349,15 @@ export function AppLauncherPopover({
                     className={`btn btn-icon ${pinned ? 'btn-primary' : ''}`}
                     style={{ width: 25, height: 25 }}
                     onClick={() => togglePinInstalled(app)}
-                    title={pinned ? 'Unpin' : 'Pin to Taskbar'}
+                    title={
+                      pinned
+                        ? isAr
+                          ? 'إلغاء التثبيت'
+                          : 'Unpin'
+                        : isAr
+                          ? 'تثبيت في الشريط'
+                          : 'Pin to Taskbar'
+                    }
                   >
                     {pinned ? <PinOff size={12} /> : <Pin size={12} />}
                   </button>
@@ -373,11 +403,12 @@ export function AppLauncherPopover({
                       minWidth: 0,
                       flex: 1
                     }}
-                    onClick={() =>
+                    onClick={() => {
+                      onClose();
                       void dockBridge.focusWindow(win.pid, win.hwnd).then((ok) => {
                         if (!ok) void dockBridge.openApp(win.pid, win.executablePath);
-                      })
-                    }
+                      });
+                    }}
                   >
                     {win.iconDataUrl ? (
                       <img className="app-icon-img" src={win.iconDataUrl} alt={win.processName} />
@@ -406,7 +437,15 @@ export function AppLauncherPopover({
                       className={`btn btn-icon ${pinned ? 'btn-primary' : ''}`}
                       style={{ width: 26, height: 26 }}
                       onClick={() => pinRunningWindow(win)}
-                      title={pinned ? 'Unpin' : 'Pin to Taskbar'}
+                      title={
+                        pinned
+                          ? isAr
+                            ? 'إلغاء التثبيت'
+                            : 'Unpin'
+                          : isAr
+                            ? 'تثبيت في الشريط'
+                            : 'Pin to Taskbar'
+                      }
                     >
                       {pinned ? <PinOff size={13} /> : <Pin size={13} />}
                     </button>
@@ -423,14 +462,16 @@ export function AppLauncherPopover({
         <input
           className="input"
           style={{ flex: 1 }}
-          placeholder="Name (e.g. YouTube)"
+          placeholder={isAr ? 'الاسم (مثلاً YouTube)' : 'Name (e.g. YouTube)'}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <input
           className="input"
           style={{ flex: 1.6 }}
-          placeholder="URL or command (e.g. https://youtube.com)"
+          placeholder={
+            isAr ? 'رابط أو أمر (مثلاً https://youtube.com)' : 'URL or command (e.g. https://youtube.com)'
+          }
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
@@ -440,11 +481,11 @@ export function AppLauncherPopover({
           value={icon}
           onChange={(e) => setIcon(e.target.value)}
         >
-          <option value="globe">Web</option>
-          <option value="terminal">Terminal</option>
-          <option value="code">Code</option>
-          <option value="folder">Folder</option>
-          <option value="app">App</option>
+          <option value="globe">{isAr ? 'ويب' : 'Web'}</option>
+          <option value="terminal">{isAr ? 'طرفية' : 'Terminal'}</option>
+          <option value="code">{isAr ? 'كود' : 'Code'}</option>
+          <option value="folder">{isAr ? 'مجلد' : 'Folder'}</option>
+          <option value="app">{isAr ? 'تطبيق' : 'App'}</option>
         </select>
         <button className="btn btn-primary" type="submit">
           <Plus size={14} />

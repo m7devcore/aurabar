@@ -47,6 +47,8 @@ export interface Translations {
   launchAtStartupDesc: string;
   hideInFullscreen: string;
   hideInFullscreenDesc: string;
+  autoHideIdleIsland: string;
+  autoHideIdleIslandDesc: string;
   showOnAllDisplays: string;
   showOnAllDisplaysDesc: string;
   updateReady: string;
@@ -126,6 +128,8 @@ const EN: Translations = {
   launchAtStartupDesc: 'Open Glassy automatically when you sign in',
   hideInFullscreen: 'Hide in full screen',
   hideInFullscreenDesc: 'Tuck the bar and island away while a game or video is full screen',
+  autoHideIdleIsland: 'Auto-hide Island when idle',
+  autoHideIdleIslandDesc: 'Hide the top music island automatically when nothing is playing',
   showOnAllDisplays: 'Show on all monitors',
   showOnAllDisplaysDesc: 'Display a streamlined bar with apps and clock on secondary monitors',
   updateReady: 'Update ready',
@@ -205,6 +209,8 @@ const AR: Translations = {
   launchAtStartupDesc: 'فتح Glassy تلقائياً عند تسجيل الدخول',
   hideInFullscreen: 'الإخفاء في ملء الشاشة',
   hideInFullscreenDesc: 'إخفاء الشريط والجزيرة أثناء لعبة أو فيديو بملء الشاشة',
+  autoHideIdleIsland: 'إخفاء الجزيرة عند عدم التشغيل',
+  autoHideIdleIslandDesc: 'إخفاء الجزيرة العلوية تلقائياً لما ما يكون في أغنية أو صوت شغّال',
   showOnAllDisplays: 'إظهار على جميع الشاشات',
   showOnAllDisplaysDesc: 'عرض شريط أنيق بالتطبيقات والساعة على الشاشات الإضافية',
   updateReady: 'التحديث جاهز',

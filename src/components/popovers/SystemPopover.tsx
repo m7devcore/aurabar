@@ -56,6 +56,7 @@ function formatUptime(sec: number): string {
 
 export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
   const dict = t(lang);
+  const isAr = lang === 'ar';
 
   return (
     <div className="stack-md">
@@ -81,7 +82,13 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
             {stats.diskFreeGb !== null ? `${stats.diskFreeGb} GB` : '—'}
           </span>
           <span className="telemetry-sub tabular">
-            {stats.diskUsedPercent !== null ? `${stats.diskUsedPercent}% used` : 'Free'}
+            {stats.diskUsedPercent !== null
+              ? isAr
+                ? `${stats.diskUsedPercent}% مستخدم`
+                : `${stats.diskUsedPercent}% used`
+              : isAr
+                ? 'متاح'
+                : 'Free'}
           </span>
         </div>
 
@@ -92,17 +99,23 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
           </span>
           <span className="telemetry-sub">
             {stats.batteryPercent === null
-              ? 'Desktop'
+              ? isAr
+                ? 'مكتبي'
+                : 'Desktop'
               : stats.batteryCharging
-                ? 'Charging'
-                : 'On battery'}
+                ? isAr
+                  ? 'يشحن'
+                  : 'Charging'
+                : isAr
+                  ? 'على البطارية'
+                  : 'On battery'}
           </span>
         </div>
 
         <div className="telemetry-cell">
           <span className="telemetry-label">{dict.uptime}</span>
           <span className="telemetry-value tabular">{formatUptime(stats.uptimeSeconds)}</span>
-          <span className="telemetry-sub">Session</span>
+          <span className="telemetry-sub">{isAr ? 'الجلسة' : 'Session'}</span>
         </div>
       </div>
 
@@ -110,7 +123,7 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
       <div className="chart-panel">
         <div className="row-between">
           <span className="telemetry-label" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-            Processor &amp; Memory Load
+            {isAr ? 'استهلاك المعالج والذاكرة' : 'Processor & Memory Load'}
           </span>
           <div className="row-gap" style={{ gap: 14, fontSize: 11.5, color: 'var(--text-muted)' }}>
             <span className="row-gap" style={{ gap: 5 }}>
@@ -140,13 +153,13 @@ export function SystemPopover({ lang, stats, cpuHistory, ramHistory }: Props) {
           </span>
           <div className="row-gap">
             <button className="btn" onClick={() => void dockBridge.systemAction('taskmgr')}>
-              <Activity size={13} /> Task Manager
+              <Activity size={13} /> {isAr ? 'مدير المهام' : 'Task Manager'}
             </button>
             <button className="btn" onClick={() => void dockBridge.systemAction('settings')}>
-              <Settings2 size={13} /> Settings
+              <Settings2 size={13} /> {isAr ? 'إعدادات ويندوز' : 'Settings'}
             </button>
             <button className="btn" onClick={() => void dockBridge.systemAction('lock')}>
-              <Lock size={13} /> Lock
+              <Lock size={13} /> {isAr ? 'قفل' : 'Lock'}
             </button>
           </div>
         </div>

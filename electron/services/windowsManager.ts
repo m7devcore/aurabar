@@ -1501,8 +1501,8 @@ export function runQuickSystemAction(action: SystemAction): void {
 }
 
 export async function getKeyboardLayoutCode(): Promise<string> {
-  const res = await win32Daemon.send('KBD_LANG');
-  return res === 'AR' || res === 'EN' || res === 'FR' || res === 'DE' ? res : 'EN';
+  const res = (await win32Daemon.send('KBD_LANG')).trim().toUpperCase();
+  return /^[A-Z]{2,3}$/.test(res) ? res : 'EN';
 }
 
 export async function switchKeyboardLayout(): Promise<void> {

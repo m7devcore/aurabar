@@ -16,6 +16,7 @@ const DEFAULT_CONFIG: AppConfig = {
     dockMagnification: true,
     launchAtStartup: false,
     hideInFullscreen: true,
+    autoHideIdleIsland: false,
     showOnAllDisplays: true
   },
   pinnedApps: [
@@ -103,6 +104,10 @@ export function loadConfig(): AppConfig {
           typeof rawSettings.hideInFullscreen === 'boolean'
             ? rawSettings.hideInFullscreen
             : DEFAULT_CONFIG.settings.hideInFullscreen,
+        autoHideIdleIsland:
+          typeof rawSettings.autoHideIdleIsland === 'boolean'
+            ? rawSettings.autoHideIdleIsland
+            : DEFAULT_CONFIG.settings.autoHideIdleIsland,
         showOnAllDisplays:
           typeof rawSettings.showOnAllDisplays === 'boolean'
             ? rawSettings.showOnAllDisplays

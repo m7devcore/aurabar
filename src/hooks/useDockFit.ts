@@ -36,6 +36,9 @@ export function useDockFit(
       bar.removeAttribute('data-scroll');
     };
 
+    let lastRoom = Number.NaN;
+    let lastChildCount = -1;
+
     const measure = () => {
       // Mid-drag the strip is padded and re-ordered; the next measure after the drop catches up
       if (strip.classList.contains('is-live-dragging')) return;
@@ -62,6 +65,33 @@ export function useDockFit(
         }
         return hostWidth - used - gap * count;
       };
+
+      const childCount = strip.children.length;
+      const isFitted =
+        bar.hasAttribute('data-fit') ||
+        bar.hasAttribute('data-tight') ||
+        bar.hasAttribute('data-scroll');
+      const currentRoom = roomForStrip();
+
+      // Fast-path when already unfitted and strip comfortably fits: zero DOM writes
+      if (!isFitted && strip.offsetWidth > 0 && strip.offsetWidth <= currentRoom + 0.5) {
+        lastRoom = currentRoom;
+        lastChildCount = childCount;
+        return;
+      }
+
+      // Skip full reset+refit flicker on 1px tray jitter (e.g. clock/volume digit width)
+      if (
+        isFitted &&
+        childCount === lastChildCount &&
+        Number.isFinite(lastRoom) &&
+        Math.abs(currentRoom - lastRoom) < 2
+      ) {
+        return;
+      }
+
+      lastRoom = currentRoom;
+      lastChildCount = childCount;
 
       reset();
       const natural = strip.offsetWidth;
@@ -106,9 +136,9 @@ export function useDockFit(
     for (const child of Array.from(bar.children)) {
       if (child !== strip) resizeObserver.observe(child);
     }
-    // Apps opening/closing or being pinned change the strip's children, never its attributes
+    // Direct children only (apps added/removed): ignore internal badge/dot mutations
     const mutationObserver = new MutationObserver(schedule);
-    mutationObserver.observe(strip, { childList: true, subtree: true });
+    mutationObserver.observe(strip, { childList: true });
 
     return () => {
       cancelAnimationFrame(raf);

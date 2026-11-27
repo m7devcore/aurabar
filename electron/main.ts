@@ -360,9 +360,12 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     }
     applyTopmost(win);
   });
+  win.on('show', syncCursorHitTestTimer);
+  win.on('hide', syncCursorHitTestTimer);
   win.on('closed', () => {
     secondaryDocks.delete(display.id);
     syncExtraHwndsToBridge();
+    syncCursorHitTestTimer();
   });
   return entry;
 }
@@ -535,7 +538,9 @@ function createWindows(): void {
       rebuildTrayMenu();
     }
   });
+  dockWindow.on('show', syncCursorHitTestTimer);
   dockWindow.on('hide', () => {
+    syncCursorHitTestTimer();
     // Only restore the native Windows taskbar if the user explicitly hid the dock (never on
     // transient OS hides or fullscreen suspension).
     if (!dockManuallyHidden || fullscreenSuspended || isQuitting) return;
@@ -588,6 +593,8 @@ function createWindows(): void {
       ensureOnTop(islandWindow);
     }
   });
+  islandWindow.on('show', syncCursorHitTestTimer);
+  islandWindow.on('hide', syncCursorHitTestTimer);
   islandWindow.on('blur', () => {
     islandInteractiveLock = false;
     if (isIslandExpanded) {
@@ -655,8 +662,8 @@ function setFullscreenSuspended(next: boolean): void {
   fullscreenSuspended = next;
   clearReassertTimer();
   if (next) {
-    stopLiveWindowPeek();
-    clearLiveThumbnails();
+    stopLivePeekIfOwner(dockWindow?.webContents);
+    clearLiveThumbsIfOwner(dockWindow?.webContents);
     suspendedDockWasVisible = !dockManuallyHidden;
     suspendedIslandWasVisible = islandWindow?.isVisible() ?? false;
     islandFullscreenPeek = false;
@@ -742,8 +749,8 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
   if (next === entry.fullscreenSuspended || entry.win.isDestroyed()) return;
   entry.fullscreenSuspended = next;
   if (next) {
-    stopLiveWindowPeek();
-    clearLiveThumbnails();
+    stopLivePeekIfOwner(entry.win.webContents);
+    clearLiveThumbsIfOwner(entry.win.webContents);
     entry.popoverOpen = false;
     entry.interactiveLock = false;
     entry.interactiveState = false;
@@ -1158,6 +1165,27 @@ function isPointInRects(x: number, y: number, rects: HitRect[]): boolean {
 
 let lastCursorX = Number.NaN;
 let lastCursorY = Number.NaN;
+let cursorHitTimer: ReturnType<typeof setInterval> | null = null;
+
+function hasAnyVisibleOverlay(): boolean {
+  if (isQuitting) return false;
+  if (dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) return true;
+  if (islandWindow && !islandWindow.isDestroyed() && islandWindow.isVisible()) return true;
+  for (const entry of secondaryDocks.values()) {
+    if (!entry.win.isDestroyed() && entry.win.isVisible()) return true;
+  }
+  return false;
+}
+
+function syncCursorHitTestTimer(): void {
+  const needed = hasAnyVisibleOverlay();
+  if (needed && !cursorHitTimer) {
+    cursorHitTimer = setInterval(() => updateCursorHitTesting(false), 25);
+  } else if (!needed && cursorHitTimer) {
+    clearInterval(cursorHitTimer);
+    cursorHitTimer = null;
+  }
+}
 
 function updateCursorHitTesting(force = false): void {
   if (isQuitting) return;
@@ -1173,7 +1201,10 @@ function updateCursorHitTesting(force = false): void {
       }
     }
   }
-  if (!dockVis && !islandVis && !secVis) return;
+  if (!dockVis && !islandVis && !secVis) {
+    syncCursorHitTestTimer();
+    return;
+  }
 
   const pt = screen.getCursorScreenPoint();
   const anyWaitingLeave =
@@ -1553,16 +1584,53 @@ if (!singleInstance) {
       }
       applyAllLayouts(currentConfig.settings);
     });
+    const releaseAllReservedWorkAreas = async (): Promise<void> => {
+      const tasks: Promise<unknown>[] = [];
+      for (const entry of secondaryDocks.values()) {
+        if (entry.lastReserveKey && !entry.win.isDestroyed()) {
+          const hwnd = getHwndNumber(entry.win);
+          entry.lastReserveKey = '';
+          if (hwnd !== '0') tasks.push(win32Daemon.send(`SEC_RELEASE ${hwnd}`));
+        }
+      }
+      if (taskbarWasAutoHidden) {
+        taskbarWasAutoHidden = false;
+        lastTaskbarLayoutKey = '';
+        tasks.push(win32Daemon.send('TASKBAR_SHOW'));
+      }
+      if (tasks.length === 0) return;
+      await Promise.race([
+        Promise.allSettled(tasks),
+        new Promise<void>((r) => setTimeout(r, 1500))
+      ]);
+    };
+
     startUpdater(
       () => {
         rebuildTrayMenu();
         broadcastUpdateInfo();
       },
       async () => {
-        if (!taskbarWasAutoHidden) return;
-        taskbarWasAutoHidden = false;
-        lastTaskbarLayoutKey = '';
-        await win32Daemon.send('TASKBAR_SHOW');
+        isQuitting = true;
+        clearReassertTimer();
+        if (fullscreenPollTimer) {
+          clearInterval(fullscreenPollTimer);
+          fullscreenPollTimer = null;
+        }
+        if (cursorHitTimer) {
+          clearInterval(cursorHitTimer);
+          cursorHitTimer = null;
+        }
+        stopLivePeekIfOwner();
+        clearLiveThumbsIfOwner();
+        stopMediaWorker();
+        dockWindow?.hide();
+        islandWindow?.hide();
+        for (const entry of secondaryDocks.values()) {
+          if (!entry.win.isDestroyed()) entry.win.hide();
+        }
+        await releaseAllReservedWorkAreas();
+        win32Daemon.stop();
       }
     );
     // Cheap safety net: re-sync dock bounds only if they actually drifted from display metrics
@@ -1591,7 +1659,7 @@ if (!singleInstance) {
         }
       }
     }, 10000);
-    setInterval(() => updateCursorHitTesting(false), 25);
+    syncCursorHitTestTimer();
 
     globalShortcut.register('Alt+Space', () => {
       toggleDockVisibility();
@@ -1658,18 +1726,44 @@ if (!singleInstance) {
   app.on('before-quit', (e) => {
     if (isQuitting) return;
     isQuitting = true;
+    clearReassertTimer();
+    if (fullscreenPollTimer) {
+      clearInterval(fullscreenPollTimer);
+      fullscreenPollTimer = null;
+    }
+    if (cursorHitTimer) {
+      clearInterval(cursorHitTimer);
+      cursorHitTimer = null;
+    }
+    stopLivePeekIfOwner();
+    clearLiveThumbsIfOwner();
     stopMediaWorker();
     stopUpdater();
+    const secHwnds: string[] = [];
+    for (const entry of secondaryDocks.values()) {
+      if (!entry.win.isDestroyed()) {
+        if (entry.lastReserveKey) {
+          const hwnd = getHwndNumber(entry.win);
+          if (hwnd !== '0') secHwnds.push(hwnd);
+          entry.lastReserveKey = '';
+        }
+        entry.win.hide();
+      }
+    }
     dockWindow?.hide();
     islandWindow?.hide();
-    for (const entry of secondaryDocks.values()) {
-      if (!entry.win.isDestroyed()) entry.win.hide();
-    }
-    if (taskbarWasAutoHidden) {
+    if (taskbarWasAutoHidden || secHwnds.length > 0) {
       e.preventDefault();
-      taskbarWasAutoHidden = false;
-      lastTaskbarLayoutKey = '';
-      void win32Daemon.send('TASKBAR_SHOW').finally(() => {
+      const tasks: Promise<unknown>[] = secHwnds.map((h) => win32Daemon.send(`SEC_RELEASE ${h}`));
+      if (taskbarWasAutoHidden) {
+        taskbarWasAutoHidden = false;
+        lastTaskbarLayoutKey = '';
+        tasks.push(win32Daemon.send('TASKBAR_SHOW'));
+      }
+      void Promise.race([
+        Promise.allSettled(tasks),
+        new Promise<void>((r) => setTimeout(r, 1500))
+      ]).finally(() => {
         win32Daemon.stop();
         app.exit(0);
       });

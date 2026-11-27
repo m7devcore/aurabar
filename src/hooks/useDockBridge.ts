@@ -20,6 +20,7 @@ const FALLBACK_CONFIG: AppConfig = {
     dockMagnification: true,
     launchAtStartup: false,
     hideInFullscreen: true,
+    autoHideIdleIsland: false,
     showOnAllDisplays: true
   },
   pinnedApps: [],

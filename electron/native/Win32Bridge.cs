@@ -3362,6 +3362,14 @@ namespace AuraBarNative {
       uint dummy;
       uint tid = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
       int lang = (int)(GetKeyboardLayout(tid).ToInt64() & 0xFFFF);
+      if (lang > 0) {
+        try {
+          string code = new System.Globalization.CultureInfo(lang).TwoLetterISOLanguageName;
+          if (!string.IsNullOrEmpty(code) && code.Length >= 2) {
+            return code.Substring(0, 2).ToUpperInvariant();
+          }
+        } catch { }
+      }
       int primary = lang & 0x3FF;
       if (primary == 0x01) return "AR";
       if (primary == 0x09) return "EN";
@@ -3441,9 +3449,9 @@ namespace AuraBarNative {
     }
 
     private static string GetShellItemIconDataUrl(string filePath, int size) {
+      IShellItemImageFactory factory = null;
       try {
         Guid iid = typeof(IShellItemImageFactory).GUID;
-        IShellItemImageFactory factory;
         if (SHCreateItemFromParsingName(filePath, IntPtr.Zero, ref iid, out factory) != 0 || factory == null) {
           return "";
         }
@@ -3461,6 +3469,8 @@ namespace AuraBarNative {
         }
       } catch {
         return "";
+      } finally {
+        SafeReleaseCom(factory);
       }
     }
 
