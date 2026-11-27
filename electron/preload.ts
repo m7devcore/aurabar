@@ -12,7 +12,9 @@ import type {
   NetworkInfo,
   NightLightInfo,
   PinnedApp,
+  PrivacyStatus,
   RunningWindow,
+  ShelfItem,
   SystemAction,
   SystemStats,
   VolumeInfo,
@@ -42,6 +44,7 @@ export interface GlassyApi {
   setDockInteractive: (interactive: boolean) => void;
   setIslandExpanded: (expanded: boolean) => Promise<void>;
   setIslandInteractive: (interactive: boolean) => void;
+  openIslandTray: () => void;
   setHitRects: (view: 'dock' | 'island', rects: HitRect[]) => void;
   getSystemStats: () => Promise<SystemStats>;
   getRunningWindows: () => Promise<RunningWindow[]>;
@@ -77,6 +80,14 @@ export interface GlassyApi {
   getVolume: () => Promise<VolumeInfo>;
   setVolume: (level: number) => Promise<VolumeInfo>;
   toggleMute: () => Promise<VolumeInfo>;
+  getPrivacyStatus: () => Promise<PrivacyStatus>;
+  toggleMicMute: () => Promise<PrivacyStatus>;
+  inspectShelfPaths: (paths: string[]) => Promise<ShelfItem[]>;
+  saveShelfBlob: (name: string, base64Data: string, kind?: 'file' | 'text') => Promise<ShelfItem | null>;
+  pickShelfFiles: () => Promise<ShelfItem[]>;
+  startShelfDrag: (paths: string[], iconDataUrl?: string) => void;
+  openShelfItem: (filePath: string) => Promise<boolean>;
+  revealShelfItem: (filePath: string) => Promise<boolean>;
   getAudioDevices: () => Promise<AudioOutputDevice[]>;
   setDefaultAudioDevice: (deviceId: string) => Promise<AudioOutputDevice[]>;
   getAudioSessions: () => Promise<AudioAppSession[]>;
@@ -95,7 +106,9 @@ export interface GlassyApi {
   hideDock: () => Promise<void>;
   quitApp: () => Promise<void>;
   onDockBlurred: (cb: () => void) => () => void;
+  onToggleNookPopover: (cb: () => void) => () => void;
   onIslandBlurred: (cb: () => void) => () => void;
+  onIslandOpenTray: (cb: () => void) => () => void;
   onIslandVisibility: (cb: (visible: boolean) => void) => () => void;
   onSuspended: (cb: (suspended: boolean) => void) => () => void;
   onConfigUpdated: (cb: (cfg: AppConfig) => void) => () => void;
@@ -114,6 +127,7 @@ const api: GlassyApi = {
   setIslandExpanded: (expanded) => ipcRenderer.invoke('glassy:set-island-expanded', expanded),
   setIslandInteractive: (interactive) =>
     ipcRenderer.send('glassy:set-island-interactive', interactive),
+  openIslandTray: () => ipcRenderer.send('glassy:open-island-tray'),
   setHitRects: (view, rects) => ipcRenderer.send('glassy:set-hit-rects', view, rects),
   getSystemStats: () => ipcRenderer.invoke('glassy:get-system-stats'),
   getRunningWindows: () => ipcRenderer.invoke('glassy:get-running-windows'),
@@ -145,6 +159,16 @@ const api: GlassyApi = {
   getVolume: () => ipcRenderer.invoke('glassy:get-volume'),
   setVolume: (level) => ipcRenderer.invoke('glassy:set-volume', level),
   toggleMute: () => ipcRenderer.invoke('glassy:toggle-mute'),
+  getPrivacyStatus: () => ipcRenderer.invoke('glassy:get-privacy-status'),
+  toggleMicMute: () => ipcRenderer.invoke('glassy:toggle-mic-mute'),
+  inspectShelfPaths: (paths) => ipcRenderer.invoke('glassy:shelf-inspect', paths),
+  saveShelfBlob: (name, base64Data, kind) =>
+    ipcRenderer.invoke('glassy:shelf-save-blob', name, base64Data, kind),
+  pickShelfFiles: () => ipcRenderer.invoke('glassy:shelf-pick-files'),
+  startShelfDrag: (paths, iconDataUrl) =>
+    ipcRenderer.send('glassy:shelf-start-drag', paths, iconDataUrl),
+  openShelfItem: (filePath) => ipcRenderer.invoke('glassy:shelf-open', filePath),
+  revealShelfItem: (filePath) => ipcRenderer.invoke('glassy:shelf-reveal', filePath),
   getAudioDevices: () => ipcRenderer.invoke('glassy:get-audio-devices'),
   setDefaultAudioDevice: (deviceId) => ipcRenderer.invoke('glassy:set-audio-device', deviceId),
   getAudioSessions: () => ipcRenderer.invoke('glassy:get-audio-sessions'),
@@ -169,10 +193,20 @@ const api: GlassyApi = {
     ipcRenderer.on('glassy:blurred', handler);
     return () => ipcRenderer.removeListener('glassy:blurred', handler);
   },
+  onToggleNookPopover: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('glassy:toggle-nook-popover', handler);
+    return () => ipcRenderer.removeListener('glassy:toggle-nook-popover', handler);
+  },
   onIslandBlurred: (cb) => {
     const handler = () => cb();
     ipcRenderer.on('glassy:island-blurred', handler);
     return () => ipcRenderer.removeListener('glassy:island-blurred', handler);
+  },
+  onIslandOpenTray: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('glassy:island-open-tray', handler);
+    return () => ipcRenderer.removeListener('glassy:island-open-tray', handler);
   },
   onIslandVisibility: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, visible: boolean) => cb(visible);

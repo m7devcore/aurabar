@@ -1,9 +1,10 @@
 export type DockPosition = 'top' | 'bottom';
 export type MusicPosition = 'top' | 'taskbar';
+export type NotchPlacement = 'top' | 'taskbar' | 'off';
 export type ThemeId = 'obsidian' | 'platinum' | 'frost';
 export type Language = 'en' | 'ar';
 
-export type ActivePanel = 'apps' | 'media' | 'system' | 'calendar' | 'settings' | null;
+export type ActivePanel = 'apps' | 'media' | 'system' | 'calendar' | 'settings' | 'nook' | null;
 
 export type SystemAction =
   | 'lock'
@@ -112,6 +113,26 @@ export interface VolumeInfo {
   muted: boolean;
 }
 
+export interface PrivacyStatus {
+  micActive: boolean;
+  micApps: string[];
+  micMuted: boolean;
+  hasMic: boolean;
+  camActive: boolean;
+  camApps: string[];
+}
+
+export interface ShelfItem {
+  id: string;
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  isDir: boolean;
+  isImage: boolean;
+  previewDataUrl?: string;
+}
+
 export interface AudioOutputDevice {
   id: string;
   name: string;
@@ -174,6 +195,8 @@ export interface DockSettings {
   launchAtStartup: boolean;
   hideInFullscreen: boolean;
   autoHideIdleIsland: boolean;
+  notchNookEnabled: boolean;
+  notchPlacement: NotchPlacement;
   showOnAllDisplays: boolean;
 }
 

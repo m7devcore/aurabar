@@ -1593,12 +1593,608 @@ body,
 
 .dynamic-island.expanded {
   width: 404px;
-  height: 214px;
+  height: 242px;
   border-radius: 26px;
-  padding: 16px 18px;
+  padding: 14px 16px 16px;
   justify-content: space-between;
   box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow-pop);
   cursor: default;
+}
+
+.dynamic-island.expanded.is-tray-view {
+  width: 422px;
+  height: 248px;
+}
+
+.dynamic-island.expanded.is-tray-view.is-tray-many {
+  height: 318px;
+}
+
+.dynamic-island.expanded.has-privacy-bar {
+  height: 278px;
+}
+
+.dynamic-island.expanded.is-tray-view.is-tray-many.has-privacy-bar {
+  height: 348px;
+}
+
+.dynamic-island.is-nook-only {
+  width: 164px;
+}
+
+.dynamic-island.is-drag-over {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    0 0 0 2px var(--accent-soft),
+    var(--shadow-pop);
+}
+
+.island-edge-trigger {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 8px;
+  z-index: 20;
+  background: transparent;
+}
+
+.island-compact-indicators {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.island-art-sm.is-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.privacy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
+}
+
+button.privacy-pill {
+  cursor: pointer;
+}
+
+button.privacy-pill:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.privacy-pill.is-mic {
+  color: var(--amber);
+}
+
+.privacy-pill.is-mic.is-muted {
+  color: var(--rose);
+  background: rgba(229, 86, 111, 0.16);
+}
+
+.privacy-pill.is-cam {
+  color: var(--emerald);
+}
+
+.privacy-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.privacy-dot.mic {
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(229, 169, 59, 0.75);
+  animation: privacyPulse 1.8s ease-in-out infinite;
+}
+
+.privacy-dot.muted {
+  background: var(--rose);
+}
+
+.privacy-dot.cam {
+  background: var(--emerald);
+  box-shadow: 0 0 6px rgba(63, 192, 122, 0.75);
+  animation: privacyPulse 2.1s ease-in-out infinite;
+}
+
+@keyframes privacyPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+.island-tray-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.island-tray-badge:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.nook-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.nook-heading-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.nook-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+}
+
+.nook-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.nook-tab:hover {
+  color: var(--text-primary);
+}
+
+.nook-tab.active {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.nook-tab-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.island-mini-action.is-live-mic {
+  color: var(--amber);
+  background: rgba(229, 169, 59, 0.14);
+}
+
+.island-mini-action.is-danger {
+  color: var(--rose);
+  background: rgba(229, 86, 111, 0.16);
+}
+
+.nook-privacy-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.nook-privacy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+  font-family: var(--font-text);
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 0;
+  max-width: 100%;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+button.nook-privacy-chip {
+  cursor: pointer;
+}
+
+button.nook-privacy-chip:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.nook-privacy-chip.is-mic {
+  color: var(--amber);
+}
+
+.nook-privacy-chip.is-muted {
+  color: var(--rose);
+  background: rgba(229, 86, 111, 0.14);
+  border-color: rgba(229, 86, 111, 0.28);
+}
+
+.nook-privacy-chip.is-cam {
+  color: var(--emerald);
+}
+
+.nook-privacy-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nook-tray-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+}
+
+.nook-empty-drop {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1.5px dashed var(--border-strong);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.nook-empty-drop:hover,
+.nook-tray-panel.is-drag-over .nook-empty-drop {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.nook-empty-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nook-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.nook-empty-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 280px;
+  line-height: 1.35;
+}
+
+.nook-files-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+  padding: 2px 6px 6px 2px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.nook-files-grid::-webkit-scrollbar {
+  width: 5px;
+}
+
+.nook-files-grid::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 2px;
+}
+
+.nook-files-grid::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.nook-files-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+.nook-file-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 6px 6px;
+  border-radius: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  cursor: grab;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+}
+
+.nook-file-card:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.nook-file-card:active {
+  cursor: grabbing;
+}
+
+.nook-file-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  background: var(--art-bg);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.nook-file-thumb img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.nook-file-thumb.is-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.nook-file-name {
+  width: 100%;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nook-file-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.nook-file-card:hover .nook-file-actions {
+  opacity: 1;
+}
+
+.nook-file-action-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(13, 13, 15, 0.85);
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.nook-file-action-btn:hover {
+  color: var(--text-primary);
+  background: rgba(13, 13, 15, 0.96);
+}
+
+.nook-file-action-btn.is-remove:hover {
+  color: var(--rose);
+}
+
+.nook-tray-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.nook-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: var(--font-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.nook-pill-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.nook-pill-btn.is-primary {
+  flex: 1;
+  background: var(--accent-soft);
+  border-color: rgba(76, 179, 240, 0.3);
+  color: var(--accent);
+  cursor: grab;
+}
+
+.nook-pill-btn.is-primary:hover {
+  background: rgba(76, 179, 240, 0.22);
+}
+
+.nook-pill-btn.is-primary:active {
+  cursor: grabbing;
+}
+
+.nook-pill-btn.is-danger:hover {
+  color: var(--rose);
+  border-color: rgba(229, 86, 111, 0.35);
+}
+
+/* Taskbar Right NotchNook Button & Popover */
+.tray-nook-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.tray-nook-btn:hover,
+.tray-nook-btn.active {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border-color: var(--border-hairline);
+}
+
+.tray-nook-btn.is-drop-ready {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.06);
+}
+
+.tray-nook-btn.is-mic-live {
+  color: var(--amber);
+  background: rgba(229, 169, 59, 0.12);
+}
+
+.tray-nook-btn.is-muted {
+  color: var(--rose);
+  background: rgba(229, 86, 111, 0.14);
+}
+
+.tray-nook-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nook-popover-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 220px;
+  max-height: 340px;
+  overflow: hidden;
+}
+
+.nook-popover-privacy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.nook-popover-grid {
+  max-height: 230px;
 }
 
 .island-compact-text {
@@ -1660,6 +2256,9 @@ body,
   flex-direction: column;
   justify-content: space-between;
   flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   animation: islandFadeIn 0.2s ease both;
 }
 

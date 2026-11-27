@@ -35,6 +35,7 @@ const URGENT_COMMANDS = new Set([
   'VOL_UP',
   'VOL_DOWN',
   'VOL_MUTE',
+  'MIC_MUTE_TOGGLE',
   'AUDIO_SET_DEVICE',
   'AUDIO_SESSION_VOL',
   'AUDIO_SESSION_MUTE',
@@ -61,7 +62,8 @@ const COALESCED_PREFIXES = new Set([
   'FULLSCREEN',
   'FULLSCREEN_OF',
   'KBD_LANG',
-  'VOL_GET'
+  'VOL_GET',
+  'PRIVACY_GET'
 ]);
 
 function coalesceKeyOf(command: string): string | null {

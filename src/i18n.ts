@@ -6,6 +6,7 @@ export interface Translations {
   system: string;
   calendar: string;
   settings: string;
+  nook: string;
   settingsSubtitle: string;
   pinnedApps: string;
   runningWindows: string;
@@ -49,6 +50,11 @@ export interface Translations {
   hideInFullscreenDesc: string;
   autoHideIdleIsland: string;
   autoHideIdleIslandDesc: string;
+  notchNook: string;
+  notchNookDesc: string;
+  notchPlaceTop: string;
+  notchPlaceTaskbar: string;
+  notchPlaceOff: string;
   showOnAllDisplays: string;
   showOnAllDisplaysDesc: string;
   updateReady: string;
@@ -79,6 +85,22 @@ export interface Translations {
   lyricsLoading: string;
   noLyrics: string;
   instrumental: string;
+  nookMediaTab: string;
+  nookTrayTab: string;
+  nookDropTitle: string;
+  nookDropHint: string;
+  nookDropHere: string;
+  nookAddFiles: string;
+  nookDragAll: string;
+  nookClearAll: string;
+  nookReveal: string;
+  nookRemove: string;
+  nookFilesCount: string;
+  nookMicActive: string;
+  nookMicMuted: string;
+  nookCamActive: string;
+  nookMuteMic: string;
+  nookUnmuteMic: string;
 }
 
 const EN: Translations = {
@@ -87,6 +109,7 @@ const EN: Translations = {
   system: 'System & Audio',
   calendar: 'Calendar',
   settings: 'Glassy Settings',
+  nook: 'NotchNook — Drop Tray & Privacy',
   settingsSubtitle: 'Customize your taskbar, music player, and theme',
   pinnedApps: 'Pinned Apps',
   runningWindows: 'Open Windows',
@@ -130,6 +153,11 @@ const EN: Translations = {
   hideInFullscreenDesc: 'Tuck the bar and island away while a game or video is full screen',
   autoHideIdleIsland: 'Auto-hide Island when idle',
   autoHideIdleIslandDesc: 'Hide the top music island automatically when nothing is playing',
+  notchNook: 'NotchNook Placement (Alt+N)',
+  notchNookDesc: 'Show Drop Tray & live mic/camera indicators in Top Island, Taskbar Right, or Off',
+  notchPlaceTop: 'Top Island',
+  notchPlaceTaskbar: 'Taskbar (Right)',
+  notchPlaceOff: 'Off',
   showOnAllDisplays: 'Show on all monitors',
   showOnAllDisplaysDesc: 'Display a streamlined bar with apps and clock on secondary monitors',
   updateReady: 'Update ready',
@@ -159,7 +187,23 @@ const EN: Translations = {
   lyrics: 'Lyrics',
   lyricsLoading: 'Finding lyrics…',
   noLyrics: 'No lyrics found for this track',
-  instrumental: 'Instrumental'
+  instrumental: 'Instrumental',
+  nookMediaTab: 'Media',
+  nookTrayTab: 'Tray',
+  nookDropTitle: 'Drop Tray',
+  nookDropHint: 'Drop files, images, or text here — drag them out into any app',
+  nookDropHere: 'Release to park in Tray',
+  nookAddFiles: 'Add',
+  nookDragAll: 'Drag all',
+  nookClearAll: 'Clear',
+  nookReveal: 'Show in Explorer',
+  nookRemove: 'Remove',
+  nookFilesCount: '{n} parked',
+  nookMicActive: 'Mic live',
+  nookMicMuted: 'Mic muted',
+  nookCamActive: 'Camera live',
+  nookMuteMic: 'Mute microphone',
+  nookUnmuteMic: 'Unmute microphone'
 };
 
 const AR: Translations = {
@@ -168,6 +212,7 @@ const AR: Translations = {
   system: 'النظام والصوت',
   calendar: 'التقويم',
   settings: 'إعدادات Glassy',
+  nook: 'NotchNook — رفّ الملفات والخصوصية',
   settingsSubtitle: 'تخصيص شريط المهام ومشغل الأغاني والمظهر',
   pinnedApps: 'التطبيقات المثبتة',
   runningWindows: 'النوافذ المفتوحة',
@@ -211,6 +256,11 @@ const AR: Translations = {
   hideInFullscreenDesc: 'إخفاء الشريط والجزيرة أثناء لعبة أو فيديو بملء الشاشة',
   autoHideIdleIsland: 'إخفاء الجزيرة عند عدم التشغيل',
   autoHideIdleIslandDesc: 'إخفاء الجزيرة العلوية تلقائياً لما ما يكون في أغنية أو صوت شغّال',
+  notchNook: 'مكان NotchNook (اختصار Alt+N)',
+  notchNookDesc: 'إظهار رفّ الملفات ومؤشر المايك/الكاميرا في الجزيرة العلوية أو يمين التاسك بار أو إخفاؤه',
+  notchPlaceTop: 'الجزيرة العلوية',
+  notchPlaceTaskbar: 'يمين التاسك بار',
+  notchPlaceOff: 'مخفي',
   showOnAllDisplays: 'إظهار على جميع الشاشات',
   showOnAllDisplaysDesc: 'عرض شريط أنيق بالتطبيقات والساعة على الشاشات الإضافية',
   updateReady: 'التحديث جاهز',
@@ -240,7 +290,23 @@ const AR: Translations = {
   lyrics: 'كلمات الأغنية',
   lyricsLoading: 'جاري البحث عن الكلمات…',
   noLyrics: 'ما في كلمات لهالأغنية',
-  instrumental: 'موسيقى بدون كلمات'
+  instrumental: 'موسيقى بدون كلمات',
+  nookMediaTab: 'الموسيقى',
+  nookTrayTab: 'الرفّ',
+  nookDropTitle: 'رفّ الملفات',
+  nookDropHint: 'اسحب ملفات أو صور أو نص هنا — وارجع اسحبهم لأي برنامج',
+  nookDropHere: 'أفلت الملفات هنا',
+  nookAddFiles: 'إضافة',
+  nookDragAll: 'سحب الكل',
+  nookClearAll: 'مسح',
+  nookReveal: 'عرض في المجلد',
+  nookRemove: 'إزالة',
+  nookFilesCount: '{n} ملفات',
+  nookMicActive: 'المايك شغّال',
+  nookMicMuted: 'المايك مكتوم',
+  nookCamActive: 'الكاميرا شغّالة',
+  nookMuteMic: 'كتم المايكروفون',
+  nookUnmuteMic: 'إلغاء كتم المايكروفون'
 };
 
 export function t(lang: Language): Translations {

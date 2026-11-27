@@ -5,19 +5,31 @@ import { DynamicIsland } from './components/DynamicIsland';
 import { AppLauncherPopover } from './components/popovers/AppLauncherPopover';
 import { CalendarPopover } from './components/popovers/CalendarPopover';
 import { MediaPopover } from './components/popovers/MediaPopover';
+import { NotchNookPopover } from './components/popovers/NotchNookPopover';
 import { SettingsPopover } from './components/popovers/SettingsPopover';
 import { SystemPopover } from './components/popovers/SystemPopover';
 import { dockBridge } from './hooks/useDockBridge';
+import { useShelfItems } from './hooks/useShelfItems';
 import { panelTitleLabel } from './i18n';
 import type {
   ActivePanel,
   AppConfig,
   DockSettings,
   MediaInfo,
+  PrivacyStatus,
   UpdateInfo,
   RunningWindow,
   SystemStats
 } from './types';
+
+const DEFAULT_PRIVACY: PrivacyStatus = {
+  micActive: false,
+  micApps: [],
+  micMuted: false,
+  hasMic: false,
+  camActive: false,
+  camApps: []
+};
 
 const rawView = new URLSearchParams(window.location.search).get('view');
 const VIEW_MODE: 'island' | 'secondary-dock' | 'dock' =
@@ -45,6 +57,7 @@ export function App() {
   const [ramHistory, setRamHistory] = useState<number[]>([0]);
   const [runningWindows, setRunningWindows] = useState<RunningWindow[]>([]);
   const [media, setMedia] = useState<MediaInfo | null>(null);
+  const [privacy, setPrivacy] = useState<PrivacyStatus>(DEFAULT_PRIVACY);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [kbdLang, setKbdLang] = useState('EN');
   const [now, setNow] = useState(() => new Date());
@@ -292,11 +305,67 @@ export function App() {
     return () => clearInterval(id);
   }, [refreshWindows, suspended]);
 
+  // Live Mic / Camera privacy polling (active inside whichever surface hosts NotchNook)
+  const notchPlacement =
+    config?.settings.notchPlacement ?? (config?.settings.notchNookEnabled === false ? 'off' : 'top');
+  const nookInIsland = notchPlacement === 'top';
+  const nookInTaskbar = notchPlacement === 'taskbar';
+  const shouldPollPrivacy =
+    !suspended &&
+    ((VIEW_MODE === 'island' && nookInIsland) || (VIEW_MODE === 'dock' && nookInTaskbar));
+
+  const dockShelf = useShelfItems(VIEW_MODE === 'dock' && notchPlacement !== 'off');
+
+  useEffect(() => {
+    if (VIEW_MODE !== 'dock') return;
+    return dockBridge.onToggleNookPopover(() => {
+      const next: ActivePanel = activePanelRef.current === 'nook' ? null : 'nook';
+      setActivePanel(next);
+      void dockBridge.setPopoverOpen(next !== null);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!shouldPollPrivacy) return;
+    let alive = true;
+    const pollPrivacy = async () => {
+      const next = await dockBridge.getPrivacyStatus();
+      if (!alive) return;
+      setPrivacy((prev) => {
+        if (
+          prev.micActive === next.micActive &&
+          prev.micMuted === next.micMuted &&
+          prev.hasMic === next.hasMic &&
+          prev.camActive === next.camActive &&
+          prev.micApps.join('|') === next.micApps.join('|') &&
+          prev.camApps.join('|') === next.camApps.join('|')
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+    void pollPrivacy();
+    const id = setInterval(() => void pollPrivacy(), 1500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [shouldPollPrivacy]);
+
+  const handleToggleMicMute = useCallback(async () => {
+    const next = await dockBridge.toggleMicMute();
+    setPrivacy(next);
+  }, []);
+
   if (VIEW_MODE === 'island') {
     return (
       <DynamicIsland
         lang={config?.settings.language ?? 'en'}
         media={suspended ? null : media}
+        musicInIsland={(config?.settings.musicPosition ?? 'top') === 'top'}
+        notchNookEnabled={nookInIsland}
+        privacy={privacy}
         expanded={suspended ? false : islandExpanded}
         autoHideIdle={Boolean(config?.settings.autoHideIdleIsland)}
         onToggleExpand={(open) => {
@@ -304,6 +373,7 @@ export function App() {
           void dockBridge.setIslandExpanded(open);
         }}
         onRefreshMedia={() => void refreshMedia()}
+        onToggleMicMute={() => void handleToggleMicMute()}
       />
     );
   }
@@ -371,6 +441,19 @@ export function App() {
             onOpenAppsManager={() => handleTogglePanel('apps')}
           />
         )}
+
+        {activePanel === 'nook' && (
+          <NotchNookPopover
+            lang={settings.language}
+            privacy={privacy}
+            shelfItems={dockShelf.shelfItems}
+            onToggleMicMute={() => void handleToggleMicMute()}
+            onAddFiles={dockShelf.addFilesViaPicker}
+            onRemoveItem={dockShelf.removeShelfItem}
+            onClearAll={dockShelf.clearShelf}
+            onIngestDrop={dockShelf.ingestDataTransfer}
+          />
+        )}
       </div>
     </div>
   ) : null;
@@ -392,6 +475,8 @@ export function App() {
         activePanel={activePanel}
         stats={stats}
         media={media}
+        privacy={privacy}
+        shelfCount={dockShelf.shelfItems.length}
         runningWindows={runningWindows}
         kbdLang={kbdLang}
         now={now}
@@ -399,6 +484,17 @@ export function App() {
         onSavePinnedApps={(pinnedApps) => patchConfig({ pinnedApps })}
         onRefreshMedia={() => void refreshMedia()}
         onRefreshWindows={() => void refreshWindows()}
+        onToggleMicMute={() => void handleToggleMicMute()}
+        onDropToNook={async (dt) => {
+          const added = await dockShelf.ingestDataTransfer(dt);
+          if (added > 0) {
+            if (nookInTaskbar) {
+              handleTogglePanel('nook');
+            } else if (nookInIsland) {
+              dockBridge.openIslandTray();
+            }
+          }
+        }}
         onSwitchKbdLang={() => {
           void dockBridge.switchKeyboardLang().then(() => {
             setTimeout(() => void dockBridge.getKeyboardLang().then(setKbdLang), 150);

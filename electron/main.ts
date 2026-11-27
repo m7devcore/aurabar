@@ -24,6 +24,14 @@ import {
 } from './services/updater';
 import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
+import {
+  inspectShelfPaths,
+  openShelfItem,
+  pickShelfFiles,
+  revealShelfItem,
+  saveShelfBlob,
+  startNativeShelfDrag
+} from './services/shelfService';
 import { win32Daemon } from './services/win32Daemon';
 import {
   activateWindowByPid,
@@ -37,6 +45,7 @@ import {
   getKeyboardLayoutCode,
   getNetworkInfo,
   getNightLightStatus,
+  getPrivacyStatus,
   getScreenBrightness,
   getSystemVolume,
   getWindowThumbnail,
@@ -65,6 +74,7 @@ import {
   stopLiveWindowPeek,
   switchKeyboardLayout,
   toggleAudioSessionMute,
+  toggleMicMute,
   toggleNightLight,
   toggleSystemMute,
   wakeHiddenApp,
@@ -104,6 +114,8 @@ let tray: Tray | null = null;
 let currentConfig: AppConfig;
 let isPopoverOpen = false;
 let isIslandExpanded = false;
+let islandDialogOpen = false;
+let dockDialogOpen = false;
 let dockInteractiveState = false;
 let islandInteractiveState = false;
 let dockInteractiveLock = false;
@@ -146,11 +158,15 @@ function computeDockBounds(settings: DockSettings) {
   return computeDockBoundsForDisplay(settings, screen.getPrimaryDisplay());
 }
 
+function shouldShowTopIsland(settings: DockSettings): boolean {
+  return settings.musicPosition === 'top' || settings.notchPlacement === 'top';
+}
+
 function computeIslandBounds() {
   const display = screen.getPrimaryDisplay();
   const width = 440;
-  // Tall enough for the expanded island with lyrics; the window is click-through outside it
-  const height = 360;
+  // Tall enough for the expanded island (lyrics + NotchNook tray); click-through outside it
+  const height = 380;
   const x = Math.round(display.bounds.x + (display.bounds.width - width) / 2);
   const topOffset =
     currentConfig?.settings.position === 'top' ? getReservedHeightPx(currentConfig.settings) + 4 : 4;
@@ -459,7 +475,7 @@ function applyAllLayouts(settings: DockSettings): void {
   if (islandWindow && !islandWindow.isDestroyed()) {
     applyTopmost(islandWindow);
     setBoundsIfChanged(islandWindow, computeIslandBounds());
-    if (settings.musicPosition === 'top') {
+    if (shouldShowTopIsland(settings)) {
       if (!islandWindow.isVisible() && !fullscreenSuspended) {
         islandWindow.showInactive();
         ensureOnTop(islandWindow);
@@ -551,6 +567,7 @@ function createWindows(): void {
     }
   });
   dockWindow.on('blur', () => {
+    if (dockDialogOpen) return;
     dockInteractiveLock = false;
     stopLivePeekIfOwner(dockWindow?.webContents);
     clearLiveThumbsIfOwner(dockWindow?.webContents);
@@ -588,7 +605,7 @@ function createWindows(): void {
   loadView(islandWindow, 'island');
   islandWindow.once('ready-to-show', () => {
     void win32Daemon.send(`SET_HWNDS ${getHwndNumber(dockWindow)} ${getHwndNumber(islandWindow)}`);
-    if (currentConfig.settings.musicPosition === 'top') {
+    if (shouldShowTopIsland(currentConfig.settings)) {
       islandWindow?.showInactive();
       ensureOnTop(islandWindow);
     }
@@ -596,6 +613,7 @@ function createWindows(): void {
   islandWindow.on('show', syncCursorHitTestTimer);
   islandWindow.on('hide', syncCursorHitTestTimer);
   islandWindow.on('blur', () => {
+    if (islandDialogOpen) return;
     islandInteractiveLock = false;
     if (isIslandExpanded) {
       isIslandExpanded = false;
@@ -692,13 +710,13 @@ function setFullscreenSuspended(next: boolean): void {
       suspendedIslandWasVisible &&
       islandWindow &&
       !islandWindow.isDestroyed() &&
-      currentConfig.settings.musicPosition === 'top'
+      shouldShowTopIsland(currentConfig.settings)
     ) {
       islandWindow.webContents.send('glassy:suspended', false);
       islandWindow.showInactive();
       ensureOnTop(islandWindow);
     } else if (
-      currentConfig.settings.musicPosition !== 'top' &&
+      !shouldShowTopIsland(currentConfig.settings) &&
       islandWindow &&
       !islandWindow.isDestroyed() &&
       islandWindow.isVisible()
@@ -892,6 +910,8 @@ function layoutKeyOf(s: DockSettings): string {
     s.position,
     s.compactMode,
     s.musicPosition,
+    s.notchNookEnabled,
+    s.notchPlacement,
     s.alwaysOnTop,
     s.showOnAllDisplays
   ].join('|');
@@ -1034,6 +1054,50 @@ function setupTray(): void {
           }
         },
         {
+          label: 'NotchNook (Drop Tray & Privacy)',
+          submenu: [
+            {
+              label:
+                currentConfig.settings.notchPlacement === 'top'
+                  ? '✓ Top Island (Alt+N)'
+                  : 'Top Island (Alt+N)',
+              click: () => {
+                currentConfig.settings.notchPlacement = 'top';
+                currentConfig.settings.notchNookEnabled = true;
+                saveConfig(currentConfig);
+                applyAllLayouts(currentConfig.settings);
+                broadcastConfig(currentConfig);
+                rebuildTrayMenu();
+              }
+            },
+            {
+              label:
+                currentConfig.settings.notchPlacement === 'taskbar'
+                  ? '✓ Taskbar Right (Alt+N)'
+                  : 'Taskbar Right (Alt+N)',
+              click: () => {
+                currentConfig.settings.notchPlacement = 'taskbar';
+                currentConfig.settings.notchNookEnabled = true;
+                saveConfig(currentConfig);
+                applyAllLayouts(currentConfig.settings);
+                broadcastConfig(currentConfig);
+                rebuildTrayMenu();
+              }
+            },
+            {
+              label: currentConfig.settings.notchPlacement === 'off' ? '✓ Off' : 'Off',
+              click: () => {
+                currentConfig.settings.notchPlacement = 'off';
+                currentConfig.settings.notchNookEnabled = false;
+                saveConfig(currentConfig);
+                applyAllLayouts(currentConfig.settings);
+                broadcastConfig(currentConfig);
+                rebuildTrayMenu();
+              }
+            }
+          ]
+        },
+        {
           label: currentConfig.settings.replaceWindowsTaskbar
             ? '✓ Replace Windows Taskbar'
             : 'Replace Windows Taskbar',
@@ -1128,11 +1192,11 @@ function toggleDockVisibility(): void {
 
 function toggleIslandVisibility(): void {
   if (!islandWindow || islandWindow.isDestroyed()) return;
-  if (currentConfig.settings.musicPosition !== 'top' && !fullscreenSuspended) {
+  if (!shouldShowTopIsland(currentConfig.settings) && !fullscreenSuspended) {
     return;
   }
   if (islandWindow.isVisible()) {
-    if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
+    if (fullscreenSuspended && !shouldShowTopIsland(currentConfig.settings)) {
       islandFullscreenPeek = false;
     }
     isIslandExpanded = false;
@@ -1142,7 +1206,7 @@ function toggleIslandVisibility(): void {
     islandWindow.hide();
     islandWindow.webContents.send('glassy:island-visibility', false);
   } else {
-    if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
+    if (fullscreenSuspended && !shouldShowTopIsland(currentConfig.settings)) {
       islandFullscreenPeek = true;
     }
     islandWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -1364,6 +1428,21 @@ function registerIpcHandlers(): void {
     updateCursorHitTesting(true);
   });
 
+  ipcMain.on('glassy:open-island-tray', () => {
+    if (!islandWindow || islandWindow.isDestroyed()) return;
+    if (!shouldShowTopIsland(currentConfig.settings)) return;
+    isIslandExpanded = true;
+    islandInteractiveState = true;
+    islandWindow.setBounds(computeIslandBounds(), false);
+    if (!islandWindow.isVisible()) {
+      islandWindow.showInactive();
+    }
+    islandWindow.setIgnoreMouseEvents(false);
+    ensureOnTop(islandWindow);
+    islandWindow.webContents.send('glassy:island-open-tray');
+    islandWindow.focus();
+  });
+
   ipcMain.on('glassy:set-hit-rects', (e, view: 'dock' | 'island', rects: HitRect[]) => {
     const clean = Array.isArray(rects) ? rects : [];
     if (view === 'dock') {
@@ -1464,6 +1543,41 @@ function registerIpcHandlers(): void {
   ipcMain.handle('glassy:get-volume', () => getSystemVolume());
   ipcMain.handle('glassy:set-volume', (_e, level: number) => setSystemVolume(level));
   ipcMain.handle('glassy:toggle-mute', () => toggleSystemMute());
+  ipcMain.handle('glassy:get-privacy-status', () => getPrivacyStatus());
+  ipcMain.handle('glassy:toggle-mic-mute', () => toggleMicMute());
+  ipcMain.handle('glassy:shelf-inspect', (_e, paths: string[]) => inspectShelfPaths(paths));
+  ipcMain.handle(
+    'glassy:shelf-save-blob',
+    (_e, name: string, base64Data: string, kind?: 'file' | 'text') =>
+      saveShelfBlob(name, base64Data, kind)
+  );
+  ipcMain.handle('glassy:shelf-pick-files', async (e) => {
+    const fromIsland = Boolean(islandWindow && !islandWindow.isDestroyed() && e.sender === islandWindow.webContents);
+    if (fromIsland) islandDialogOpen = true;
+    else dockDialogOpen = true;
+    try {
+      return await pickShelfFiles(fromIsland ? islandWindow : dockWindow);
+    } finally {
+      if (fromIsland) {
+        islandDialogOpen = false;
+        if (isIslandExpanded && islandWindow && !islandWindow.isDestroyed()) {
+          ensureOnTop(islandWindow);
+          islandWindow.focus();
+        }
+      } else {
+        dockDialogOpen = false;
+        if (isPopoverOpen && dockWindow && !dockWindow.isDestroyed()) {
+          ensureOnTop(dockWindow);
+          dockWindow.focus();
+        }
+      }
+    }
+  });
+  ipcMain.on('glassy:shelf-start-drag', (e, paths: string[], iconDataUrl?: string) => {
+    startNativeShelfDrag(e.sender, paths, iconDataUrl);
+  });
+  ipcMain.handle('glassy:shelf-open', (_e, filePath: string) => openShelfItem(filePath));
+  ipcMain.handle('glassy:shelf-reveal', (_e, filePath: string) => revealShelfItem(filePath));
   ipcMain.handle('glassy:get-audio-devices', () => listAudioDevices());
   ipcMain.handle('glassy:set-audio-device', (_e, deviceId: string) =>
     setDefaultAudioDevice(deviceId)
@@ -1667,6 +1781,18 @@ if (!singleInstance) {
 
     globalShortcut.register('Alt+H', () => {
       toggleIslandVisibility();
+    });
+
+    globalShortcut.register('Alt+N', () => {
+      const place = currentConfig?.settings.notchPlacement ?? 'top';
+      if (place === 'off') return;
+      if (place === 'taskbar') {
+        if (dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) {
+          dockWindow.webContents.send('glassy:toggle-nook-popover');
+        }
+      } else {
+        toggleIslandVisibility();
+      }
     });
 
     const getTopologyKey = () =>

@@ -17,6 +17,8 @@ const DEFAULT_CONFIG: AppConfig = {
     launchAtStartup: false,
     hideInFullscreen: true,
     autoHideIdleIsland: false,
+    notchNookEnabled: true,
+    notchPlacement: 'top',
     showOnAllDisplays: true
   },
   pinnedApps: [
@@ -123,6 +125,22 @@ export function loadConfig(): AppConfig {
           typeof rawSettings.autoHideIdleIsland === 'boolean'
             ? rawSettings.autoHideIdleIsland
             : DEFAULT_CONFIG.settings.autoHideIdleIsland,
+        notchNookEnabled:
+          rawSettings.notchPlacement === 'off'
+            ? false
+            : rawSettings.notchPlacement === 'top' || rawSettings.notchPlacement === 'taskbar'
+              ? true
+              : typeof rawSettings.notchNookEnabled === 'boolean'
+                ? rawSettings.notchNookEnabled
+                : DEFAULT_CONFIG.settings.notchNookEnabled,
+        notchPlacement:
+          rawSettings.notchPlacement === 'top' ||
+          rawSettings.notchPlacement === 'taskbar' ||
+          rawSettings.notchPlacement === 'off'
+            ? rawSettings.notchPlacement
+            : rawSettings.notchNookEnabled === false
+              ? 'off'
+              : DEFAULT_CONFIG.settings.notchPlacement,
         showOnAllDisplays:
           typeof rawSettings.showOnAllDisplays === 'boolean'
             ? rawSettings.showOnAllDisplays

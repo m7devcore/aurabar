@@ -2666,6 +2666,283 @@ namespace GlassyNative {
       return GetVolumeJson();
     }
 
+    private static IAudioEndpointVolume GetCaptureEndpointVolume(int role) {
+      IMMDeviceEnumerator enumerator = null;
+      IMMDevice device = null;
+      try {
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        // dataFlow = 1 (eCapture)
+        if (enumerator.GetDefaultAudioEndpoint(1, role, out device) != 0 || device == null) return null;
+        Guid iid = typeof(IAudioEndpointVolume).GUID;
+        object obj;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return null;
+        IAudioEndpointVolume vol = obj as IAudioEndpointVolume;
+        if (vol == null) SafeReleaseCom(obj);
+        return vol;
+      } catch {
+        return null;
+      } finally {
+        SafeReleaseCom(device);
+        SafeReleaseCom(enumerator);
+      }
+    }
+
+    private static string CleanCapabilityAppName(string raw, bool nonPackaged) {
+      try {
+        string name = raw;
+        if (nonPackaged) {
+          string path = raw.Replace('#', '\\');
+          name = Path.GetFileNameWithoutExtension(path);
+        } else {
+          int us = name.IndexOf('_');
+          if (us > 0) name = name.Substring(0, us);
+          int dot = name.LastIndexOf('.');
+          if (dot >= 0 && dot + 1 < name.Length) name = name.Substring(dot + 1);
+        }
+        name = (name ?? "").Trim();
+        if (name.Length == 0) return "";
+        string lower = name.ToLowerInvariant();
+        if (lower == "code") return "VS Code";
+        if (lower == "obs64" || lower == "obs32") return "OBS Studio";
+        if (lower == "msedge") return "Edge";
+        if (lower == "chrome") return "Chrome";
+        if (lower == "brave") return "Brave";
+        if (lower == "firefox") return "Firefox";
+        if (lower == "discord" || lower == "discordptb" || lower == "discordcanary") return "Discord";
+        if (lower == "teams" || lower == "ms-teams") return "Teams";
+        if (lower == "zoom") return "Zoom";
+        if (lower == "whatsapp") return "WhatsApp";
+        if (char.IsLower(name[0])) {
+          return char.ToUpperInvariant(name[0]) + name.Substring(1);
+        }
+        return name;
+      } catch {
+        return "";
+      }
+    }
+
+    private static bool IsConsentSubkeyActive(Microsoft.Win32.RegistryKey sub) {
+      if (sub == null) return false;
+      try {
+        object oStart = sub.GetValue("LastUsedTimeStart");
+        object oStop = sub.GetValue("LastUsedTimeStop");
+        if (oStart == null) return false;
+        long start = Convert.ToInt64(oStart);
+        long stop = oStop != null ? Convert.ToInt64(oStop) : 0L;
+        return start > 0 && stop == 0;
+      } catch {
+        return false;
+      }
+    }
+
+    private static List<string> ReadActiveCapabilityApps(string capability) {
+      List<string> list = new List<string>();
+      HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      try {
+        string rootPath = @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\" + capability;
+        using (Microsoft.Win32.RegistryKey root = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(rootPath)) {
+          if (root == null) return list;
+          string[] names = root.GetSubKeyNames();
+          for (int i = 0; i < names.Length; i++) {
+            string subName = names[i];
+            if (subName.Equals("NonPackaged", StringComparison.OrdinalIgnoreCase)) {
+              using (Microsoft.Win32.RegistryKey np = root.OpenSubKey(subName)) {
+                if (np == null) continue;
+                string[] npNames = np.GetSubKeyNames();
+                for (int j = 0; j < npNames.Length; j++) {
+                  using (Microsoft.Win32.RegistryKey appKey = np.OpenSubKey(npNames[j])) {
+                    if (IsConsentSubkeyActive(appKey)) {
+                      string clean = CleanCapabilityAppName(npNames[j], true);
+                      if (clean.Length > 0 && seen.Add(clean) && list.Count < 5) {
+                        list.Add(clean);
+                      }
+                    }
+                  }
+                }
+              }
+            } else {
+              using (Microsoft.Win32.RegistryKey appKey = root.OpenSubKey(subName)) {
+                if (IsConsentSubkeyActive(appKey)) {
+                  string clean = CleanCapabilityAppName(subName, false);
+                  if (clean.Length > 0 && seen.Add(clean) && list.Count < 5) {
+                    list.Add(clean);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch { }
+      return list;
+    }
+
+    private static string JsonStringArray(List<string> items) {
+      if (items == null || items.Count == 0) return "[]";
+      StringBuilder sb = new StringBuilder("[");
+      for (int i = 0; i < items.Count; i++) {
+        if (i > 0) sb.Append(',');
+        sb.Append('"').Append(JsonEscape(items[i])).Append('"');
+      }
+      sb.Append(']');
+      return sb.ToString();
+    }
+
+    private static void AddActiveWasapiMicApps(List<string> list, HashSet<string> seen, out bool anyActiveEndpointMuted, out bool sawActiveSession) {
+      anyActiveEndpointMuted = false;
+      sawActiveSession = false;
+      IMMDeviceEnumerator enumerator = null;
+      IMMDeviceCollection col = null;
+      try {
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        // dataFlow = 1 (eCapture), stateMask = 1 (DEVICE_STATE_ACTIVE)
+        if (enumerator.EnumAudioEndpoints(1, 1, out col) != 0 || col == null) return;
+        uint epCount;
+        col.GetCount(out epCount);
+        Guid iidMgr = typeof(IAudioSessionManager2).GUID;
+        Guid iidVol = typeof(IAudioEndpointVolume).GUID;
+        for (uint i = 0; i < epCount; i++) {
+          IMMDevice dev = null;
+          object mgrObj = null;
+          IAudioSessionEnumerator se = null;
+          bool epHasActive = false;
+          try {
+            if (col.Item(i, out dev) != 0 || dev == null) continue;
+            if (dev.Activate(ref iidMgr, 23, IntPtr.Zero, out mgrObj) != 0 || mgrObj == null) continue;
+            IAudioSessionManager2 mgr = mgrObj as IAudioSessionManager2;
+            if (mgr == null) continue;
+            if (mgr.GetSessionEnumerator(out se) != 0 || se == null) continue;
+            int sc;
+            se.GetCount(out sc);
+            for (int j = 0; j < sc; j++) {
+              IAudioSessionControl ctrl = null;
+              try {
+                if (se.GetSession(j, out ctrl) != 0 || ctrl == null) continue;
+                int state;
+                if (ctrl.GetState(out state) != 0 || state != 1) continue; // AudioSessionStateActive == 1
+                IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+                if (ctrl2 == null) continue;
+                uint pid;
+                if (ctrl2.GetProcessId(out pid) != 0 || pid <= 4) continue;
+                if (IsGlassyWindow(pid, IntPtr.Zero)) continue;
+                epHasActive = true;
+                sawActiveSession = true;
+                ProcMeta meta = GetProcMeta(pid);
+                string clean = CleanCapabilityAppName(meta.name, false);
+                if (clean.Length == 0) clean = "Microphone";
+                if (seen.Add(clean) && list.Count < 5) {
+                  list.Add(clean);
+                }
+              } finally {
+                SafeReleaseCom(ctrl);
+              }
+            }
+            if (epHasActive) {
+              object volObj = null;
+              try {
+                if (dev.Activate(ref iidVol, 23, IntPtr.Zero, out volObj) == 0 && volObj != null) {
+                  IAudioEndpointVolume ev = volObj as IAudioEndpointVolume;
+                  bool epMuted;
+                  if (ev != null && ev.GetMute(out epMuted) == 0 && epMuted) {
+                    anyActiveEndpointMuted = true;
+                  }
+                }
+              } finally {
+                SafeReleaseCom(volObj);
+              }
+            }
+          } finally {
+            SafeReleaseCom(se);
+            SafeReleaseCom(mgrObj);
+            SafeReleaseCom(dev);
+          }
+        }
+      } catch {
+      } finally {
+        SafeReleaseCom(col);
+        SafeReleaseCom(enumerator);
+      }
+    }
+
+    private static string GetPrivacyJson() {
+      List<string> micApps = ReadActiveCapabilityApps("microphone");
+      HashSet<string> micSeen = new HashSet<string>(micApps, StringComparer.OrdinalIgnoreCase);
+      bool activeEpMuted;
+      bool sawWasapiActive;
+      AddActiveWasapiMicApps(micApps, micSeen, out activeEpMuted, out sawWasapiActive);
+
+      List<string> camApps = ReadActiveCapabilityApps("webcam");
+      bool hasMic = false;
+      bool micMuted = false;
+      IAudioEndpointVolume micVol = null;
+      try {
+        micVol = GetCaptureEndpointVolume(1);
+        if (micVol == null) micVol = GetCaptureEndpointVolume(2);
+        if (micVol != null) {
+          hasMic = true;
+          micVol.GetMute(out micMuted);
+        }
+      } catch {
+      } finally {
+        SafeReleaseCom(micVol);
+      }
+      if (sawWasapiActive) {
+        hasMic = true;
+        if (activeEpMuted) micMuted = true;
+      }
+      return string.Format(
+        "{{\"micActive\":{0},\"micApps\":{1},\"micMuted\":{2},\"hasMic\":{3},\"camActive\":{4},\"camApps\":{5}}}",
+        micApps.Count > 0 ? "true" : "false",
+        JsonStringArray(micApps),
+        micMuted ? "true" : "false",
+        hasMic ? "true" : "false",
+        camApps.Count > 0 ? "true" : "false",
+        JsonStringArray(camApps)
+      );
+    }
+
+    private static string ToggleMicMute() {
+      IMMDeviceEnumerator enumerator = null;
+      IMMDeviceCollection col = null;
+      IAudioEndpointVolume defVol = null;
+      try {
+        defVol = GetCaptureEndpointVolume(1);
+        if (defVol == null) defVol = GetCaptureEndpointVolume(2);
+        bool curMuted = false;
+        if (defVol != null) defVol.GetMute(out curMuted);
+        bool nextMuted = !curMuted;
+        Guid ctx = Guid.Empty;
+
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        if (enumerator.EnumAudioEndpoints(1, 1, out col) == 0 && col != null) {
+          uint count;
+          col.GetCount(out count);
+          Guid iidVol = typeof(IAudioEndpointVolume).GUID;
+          for (uint i = 0; i < count; i++) {
+            IMMDevice dev = null;
+            object volObj = null;
+            try {
+              if (col.Item(i, out dev) != 0 || dev == null) continue;
+              if (dev.Activate(ref iidVol, 23, IntPtr.Zero, out volObj) == 0 && volObj != null) {
+                IAudioEndpointVolume ev = volObj as IAudioEndpointVolume;
+                if (ev != null) ev.SetMute(nextMuted, ref ctx);
+              }
+            } finally {
+              SafeReleaseCom(volObj);
+              SafeReleaseCom(dev);
+            }
+          }
+        } else if (defVol != null) {
+          defVol.SetMute(nextMuted, ref ctx);
+        }
+      } catch {
+      } finally {
+        SafeReleaseCom(col);
+        SafeReleaseCom(enumerator);
+        SafeReleaseCom(defVol);
+      }
+      return GetPrivacyJson();
+    }
+
     private static PROPERTYKEY PKEY_Device_FriendlyName = new PROPERTYKEY {
       fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"),
       pid = 14
@@ -4099,6 +4376,10 @@ namespace GlassyNative {
             Reply("ok");
           } else if (line == "VOL_MUTE") {
             Reply(ToggleVolumeMute());
+          } else if (line == "PRIVACY_GET") {
+            Reply(GetPrivacyJson());
+          } else if (line == "MIC_MUTE_TOGGLE") {
+            Reply(ToggleMicMute());
           } else if (line == "AUDIO_DEVICES") {
             Reply(GetAudioDevicesJson());
           } else if (line.StartsWith("AUDIO_SET_DEVICE ")) {

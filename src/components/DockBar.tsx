@@ -9,6 +9,8 @@ import {
   ExternalLink,
   FolderOpen,
   Gauge,
+  Inbox,
+  MicOff,
   Music,
   Pause,
   Pin,
@@ -38,6 +40,7 @@ import type {
   UpdateInfo,
   NetworkInfo,
   PinnedApp,
+  PrivacyStatus,
   RunningWindow,
   SystemStats,
   VolumeInfo
@@ -228,6 +231,8 @@ interface Props {
   activePanel: ActivePanel;
   stats: SystemStats;
   media: MediaInfo | null;
+  privacy?: PrivacyStatus;
+  shelfCount?: number;
   runningWindows: RunningWindow[];
   kbdLang: string;
   now: Date;
@@ -235,6 +240,8 @@ interface Props {
   onSavePinnedApps: (apps: PinnedApp[]) => void;
   onRefreshMedia: () => void;
   onRefreshWindows: () => void;
+  onToggleMicMute?: () => void;
+  onDropToNook?: (dt: DataTransfer) => Promise<void> | void;
   onSwitchKbdLang: () => void;
 }
 
@@ -245,6 +252,8 @@ export function DockBar({
   activePanel,
   stats,
   media,
+  privacy,
+  shelfCount = 0,
   runningWindows,
   kbdLang,
   now,
@@ -252,6 +261,8 @@ export function DockBar({
   onSavePinnedApps,
   onRefreshMedia,
   onRefreshWindows,
+  onToggleMicMute,
+  onDropToNook,
   onSwitchKbdLang
 }: Props) {
   const { settings, pinnedApps } = config;
@@ -288,6 +299,7 @@ export function DockBar({
   useDockFit(dockBarRef, stripRef, [
     settings.compactMode,
     settings.musicPosition,
+    settings.notchPlacement,
     settings.showOpenWindowsInBar
   ]);
   const folderPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -1672,10 +1684,39 @@ export function DockBar({
     pinRunningApp
   };
 
+  const isAppPinExtension = (filePath: string): boolean => {
+    return /\.(exe|lnk|appref-ms|bat|cmd|url)$/i.test(filePath.trim());
+  };
+
   const handleExternalDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragOverExternal(false);
+
+    const notchActive =
+      !isSecondary &&
+      (settings.notchPlacement ?? (settings.notchNookEnabled === false ? 'off' : 'top')) !== 'off';
     const files = Array.from(e.dataTransfer.files);
+
+    // Whenever NotchNook is enabled (Top Island or Taskbar Right), dropping images, documents,
+    // media, browser blobs, or text snippets anywhere on the taskbar parks them directly in the
+    // Drop Tray. Dropping .exe/.lnk shortcuts on the app strip still pins apps as expected.
+    if (notchActive && onDropToNook) {
+      if (files.length === 0) {
+        if (e.dataTransfer.getData('text/plain')?.trim()) {
+          await onDropToNook(e.dataTransfer);
+        }
+        return;
+      }
+      const allAppShortcuts = files.every((f) => {
+        const p = dockBridge.getPathForFile(f);
+        return Boolean(p) && isAppPinExtension(p);
+      });
+      if (!allAppShortcuts) {
+        await onDropToNook(e.dataTransfer);
+        return;
+      }
+    }
+
     if (files.length === 0) return;
 
     const added: PinnedApp[] = [];
@@ -2912,6 +2953,61 @@ export function DockBar({
         <div className="dock-right-tray">
           {!isSecondary && (
             <>
+              {(settings.notchPlacement ?? (settings.notchNookEnabled === false ? 'off' : 'top')) ===
+                'taskbar' && (
+                <button
+                  type="button"
+                  className={`tray-nook-btn ${activePanel === 'nook' ? 'active' : ''} ${
+                    dragOverExternal ? 'is-drop-ready' : ''
+                  } ${
+                    privacy?.micMuted ? 'is-muted' : privacy?.micActive ? 'is-mic-live' : ''
+                  }`}
+                  aria-label={dict.nook}
+                  aria-expanded={activePanel === 'nook'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle('nook');
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onToggleMicMute?.();
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = 'copy';
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDragOverExternal(false);
+                    void onDropToNook?.(e.dataTransfer);
+                  }}
+                  onMouseEnter={(e) =>
+                    showTooltipFor(
+                      e,
+                      privacy?.micActive
+                        ? `${dict.nookMicActive} (${privacy.micApps.join(', ') || 'Mic'}) · Alt+N`
+                        : privacy?.camActive
+                          ? `${dict.nookCamActive} (${privacy.camApps.join(', ') || 'Cam'}) · Alt+N`
+                          : `${dict.nookDropTitle} (Alt+N)`
+                    )
+                  }
+                  onMouseLeave={() => setTooltip(null)}
+                >
+                  {privacy?.micMuted ? <MicOff size={14} /> : <Inbox size={14} />}
+                  {shelfCount > 0 && <span className="tray-nook-count tabular">{shelfCount}</span>}
+                  {privacy?.micActive && (
+                    <span
+                      className={`privacy-dot ${privacy.micMuted ? 'muted' : 'mic'}`}
+                      aria-hidden="true"
+                    />
+                  )}
+                  {privacy?.camActive && <span className="privacy-dot cam" aria-hidden="true" />}
+                </button>
+              )}
+
               <button
                 ref={overflowBtnRef}
                 type="button"

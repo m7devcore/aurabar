@@ -1,7 +1,7 @@
 import { EyeOff, Grid2x2, Power } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { t } from '../../i18n';
-import type { DockSettings, ThemeId, UpdateInfo } from '../../types';
+import type { DockSettings, NotchPlacement, ThemeId, UpdateInfo } from '../../types';
 
 interface Props {
   updateInfo: UpdateInfo | null;
@@ -150,6 +150,40 @@ export function SettingsPopover({
         </div>
       </div>
 
+      {/* 1.5 NotchNook Placement (Top Island / Taskbar Right / Off) */}
+      <div>
+        <div className="settings-section-title">{dict.notchNook}</div>
+        <div className="segmented-control">
+          {(
+            [
+              { id: 'top', label: dict.notchPlaceTop },
+              { id: 'taskbar', label: dict.notchPlaceTaskbar },
+              { id: 'off', label: dict.notchPlaceOff }
+            ] as { id: NotchPlacement; label: string }[]
+          ).map((opt) => {
+            const curPlace: NotchPlacement =
+              settings.notchPlacement ?? (settings.notchNookEnabled === false ? 'off' : 'top');
+            return (
+              <button
+                key={opt.id}
+                className={`segmented-btn ${curPlace === opt.id ? 'active' : ''}`}
+                onClick={() =>
+                  onUpdateSettings({
+                    notchPlacement: opt.id,
+                    notchNookEnabled: opt.id !== 'off'
+                  })
+                }
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="toggle-desc" style={{ marginTop: 4 }}>
+          {dict.notchNookDesc}
+        </div>
+      </div>
+
       {/* 2. Theme & Language */}
       <div className="grid-2">
         <div>
@@ -246,7 +280,9 @@ export function SettingsPopover({
             onToggle={() => onUpdateSettings({ hideInFullscreen: !settings.hideInFullscreen })}
           />
 
-          {settings.musicPosition === 'top' && (
+          {(settings.musicPosition === 'top' ||
+            (settings.notchPlacement ?? (settings.notchNookEnabled === false ? 'off' : 'top')) ===
+              'top') && (
             <ToggleSwitch
               checked={Boolean(settings.autoHideIdleIsland)}
               title={dict.autoHideIdleIsland}

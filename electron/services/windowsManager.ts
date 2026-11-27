@@ -13,6 +13,7 @@ import type {
   NetworkInfo,
   NightLightInfo,
   PinnedApp,
+  PrivacyStatus,
   RunningWindow,
   SystemAction,
   WifiNetwork
@@ -1244,6 +1245,42 @@ export async function toggleAudioSessionMute(sessionId: string): Promise<void> {
   if (!sessionId) return;
   audioSessionsCache = null;
   await win32Daemon.send(`AUDIO_SESSION_MUTE ${sessionId}`);
+}
+
+const DEFAULT_PRIVACY: PrivacyStatus = {
+  micActive: false,
+  micApps: [],
+  micMuted: false,
+  hasMic: false,
+  camActive: false,
+  camApps: []
+};
+
+function parsePrivacyPayload(raw: string): PrivacyStatus {
+  if (!raw || !raw.startsWith('{')) return DEFAULT_PRIVACY;
+  try {
+    const p = JSON.parse(raw) as Partial<PrivacyStatus>;
+    return {
+      micActive: Boolean(p.micActive),
+      micApps: Array.isArray(p.micApps) ? p.micApps.filter((x): x is string => typeof x === 'string') : [],
+      micMuted: Boolean(p.micMuted),
+      hasMic: Boolean(p.hasMic),
+      camActive: Boolean(p.camActive),
+      camApps: Array.isArray(p.camApps) ? p.camApps.filter((x): x is string => typeof x === 'string') : []
+    };
+  } catch {
+    return DEFAULT_PRIVACY;
+  }
+}
+
+export async function getPrivacyStatus(): Promise<PrivacyStatus> {
+  const raw = await win32Daemon.send('PRIVACY_GET');
+  return parsePrivacyPayload(raw);
+}
+
+export async function toggleMicMute(): Promise<PrivacyStatus> {
+  const raw = await win32Daemon.send('MIC_MUTE_TOGGLE');
+  return parsePrivacyPayload(raw);
 }
 
 let brightnessCache: { at: number; info: BrightnessInfo } | null = null;
