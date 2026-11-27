@@ -59,8 +59,8 @@ import {
   WifiIcon
 } from './PremiumIcons';
 
-const RUNNING_ORDER_KEY = 'aurabar.runningOrder';
-const LEARNED_PROCS_KEY = 'aurabar.learnedProcs';
+const RUNNING_ORDER_KEY = 'glassy.runningOrder';
+const LEARNED_PROCS_KEY = 'glassy.learnedProcs';
 
 const GENERIC_LAUNCHER_EXES = new Set([
   'update',

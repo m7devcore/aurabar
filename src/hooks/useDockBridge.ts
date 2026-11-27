@@ -1,9 +1,9 @@
-import type { AuraBarApi } from '../../electron/preload';
+import type { GlassyApi } from '../../electron/preload';
 import type { AppConfig } from '../types';
 
 declare global {
   interface Window {
-    auraBar?: AuraBarApi;
+    glassy?: GlassyApi;
   }
 }
 
@@ -27,7 +27,7 @@ const FALLBACK_CONFIG: AppConfig = {
   calendarEvents: []
 };
 
-export const dockBridge: AuraBarApi = window.auraBar ?? {
+export const dockBridge: GlassyApi = window.glassy ?? {
   getConfig: async () => FALLBACK_CONFIG,
   saveConfig: async (cfg) => cfg,
   setPopoverOpen: async () => undefined,

@@ -356,7 +356,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     clearLiveThumbsIfOwner(win.webContents);
     if (entry.popoverOpen) {
       entry.popoverOpen = false;
-      if (!win.isDestroyed()) win.webContents.send('aurabar:blurred');
+      if (!win.isDestroyed()) win.webContents.send('glassy:blurred');
     }
     applyTopmost(win);
   });
@@ -472,7 +472,7 @@ function applyAllLayouts(settings: DockSettings): void {
 }
 
 function loadView(win: BrowserWindow, view: 'dock' | 'secondary-dock' | 'island'): void {
-  const devUrl = process.env.AURABAR_DEV_URL;
+  const devUrl = process.env.GLASSY_DEV_URL;
   if (devUrl) {
     void win.loadURL(`${devUrl}?view=${view}`);
   } else {
@@ -556,7 +556,7 @@ function createWindows(): void {
     clearLiveThumbsIfOwner(dockWindow?.webContents);
     if (isPopoverOpen) {
       isPopoverOpen = false;
-      dockWindow?.webContents.send('aurabar:blurred');
+      dockWindow?.webContents.send('glassy:blurred');
     }
     applyTopmost(dockWindow);
   });
@@ -599,7 +599,7 @@ function createWindows(): void {
     islandInteractiveLock = false;
     if (isIslandExpanded) {
       isIslandExpanded = false;
-      islandWindow?.webContents.send('aurabar:island-blurred');
+      islandWindow?.webContents.send('glassy:island-blurred');
     }
     applyTopmost(islandWindow);
   });
@@ -626,14 +626,14 @@ function allOverlayWindows(): BrowserWindow[] {
 function broadcastUpdateInfo(): void {
   const info = getUpdateInfo();
   for (const win of allOverlayWindows()) {
-    win.webContents.send('aurabar:update-info', info);
+    win.webContents.send('glassy:update-info', info);
   }
 }
 
 function broadcastConfig(cfg: AppConfig, except?: Electron.WebContents): void {
   for (const win of allOverlayWindows()) {
     if (win.webContents !== except) {
-      win.webContents.send('aurabar:config-updated', cfg);
+      win.webContents.send('glassy:config-updated', cfg);
     }
   }
 }
@@ -674,8 +674,8 @@ function setFullscreenSuspended(next: boolean): void {
     islandInteractiveState = false;
     dockWindow?.setIgnoreMouseEvents(true);
     islandWindow?.setIgnoreMouseEvents(true);
-    dockWindow?.webContents.send('aurabar:suspended', true);
-    islandWindow?.webContents.send('aurabar:suspended', true);
+    dockWindow?.webContents.send('glassy:suspended', true);
+    islandWindow?.webContents.send('glassy:suspended', true);
     dockWindow?.hide();
     islandWindow?.hide();
   } else {
@@ -686,7 +686,7 @@ function setFullscreenSuspended(next: boolean): void {
     if ((suspendedDockWasVisible || !dockManuallyHidden) && dockWindow && !dockWindow.isDestroyed()) {
       dockWindow.showInactive();
       ensureOnTop(dockWindow);
-      dockWindow.webContents.send('aurabar:suspended', false);
+      dockWindow.webContents.send('glassy:suspended', false);
     }
     if (
       suspendedIslandWasVisible &&
@@ -694,7 +694,7 @@ function setFullscreenSuspended(next: boolean): void {
       !islandWindow.isDestroyed() &&
       currentConfig.settings.musicPosition === 'top'
     ) {
-      islandWindow.webContents.send('aurabar:suspended', false);
+      islandWindow.webContents.send('glassy:suspended', false);
       islandWindow.showInactive();
       ensureOnTop(islandWindow);
     } else if (
@@ -708,7 +708,7 @@ function setFullscreenSuspended(next: boolean): void {
       islandInteractiveState = false;
       islandWindow.setIgnoreMouseEvents(true);
       islandWindow.hide();
-      islandWindow.webContents.send('aurabar:island-visibility', false);
+      islandWindow.webContents.send('glassy:island-visibility', false);
     }
   }
 }
@@ -755,7 +755,7 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
     entry.interactiveLock = false;
     entry.interactiveState = false;
     entry.win.setIgnoreMouseEvents(true);
-    entry.win.webContents.send('aurabar:suspended', true);
+    entry.win.webContents.send('glassy:suspended', true);
     entry.win.hide();
   } else if (!dockManuallyHidden) {
     const display = screen.getAllDisplays().find((d) => d.id === entry.displayId);
@@ -766,7 +766,7 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
     }
     entry.win.showInactive();
     ensureOnTop(entry.win);
-    entry.win.webContents.send('aurabar:suspended', false);
+    entry.win.webContents.send('glassy:suspended', false);
   }
 }
 
@@ -1086,7 +1086,7 @@ function toggleDockVisibility(): void {
     dockInteractiveLock = false;
     dockInteractiveState = false;
     dockWindow.setIgnoreMouseEvents(true);
-    dockWindow.webContents.send('aurabar:suspended', true);
+    dockWindow.webContents.send('glassy:suspended', true);
     dockWindow.hide();
     for (const entry of secondaryDocks.values()) {
       entry.popoverOpen = false;
@@ -1099,7 +1099,7 @@ function toggleDockVisibility(): void {
           entry.lastReserveKey = '';
         }
         entry.win.setIgnoreMouseEvents(true);
-        entry.win.webContents.send('aurabar:suspended', true);
+        entry.win.webContents.send('glassy:suspended', true);
         entry.win.hide();
       }
     }
@@ -1110,10 +1110,10 @@ function toggleDockVisibility(): void {
     }
   } else {
     dockManuallyHidden = false;
-    dockWindow.webContents.send('aurabar:suspended', false);
+    dockWindow.webContents.send('glassy:suspended', false);
     for (const entry of secondaryDocks.values()) {
       if (!entry.win.isDestroyed() && !entry.fullscreenSuspended) {
-        entry.win.webContents.send('aurabar:suspended', false);
+        entry.win.webContents.send('glassy:suspended', false);
       }
     }
     if (currentConfig.settings.replaceWindowsTaskbar) {
@@ -1140,7 +1140,7 @@ function toggleIslandVisibility(): void {
     islandInteractiveState = false;
     islandWindow.setIgnoreMouseEvents(true);
     islandWindow.hide();
-    islandWindow.webContents.send('aurabar:island-visibility', false);
+    islandWindow.webContents.send('glassy:island-visibility', false);
   } else {
     if (fullscreenSuspended && currentConfig.settings.musicPosition !== 'top') {
       islandFullscreenPeek = true;
@@ -1148,7 +1148,7 @@ function toggleIslandVisibility(): void {
     islandWindow.setAlwaysOnTop(true, 'screen-saver');
     islandWindow.setBounds(computeIslandBounds(), false);
     islandWindow.showInactive();
-    islandWindow.webContents.send('aurabar:island-visibility', true);
+    islandWindow.webContents.send('glassy:island-visibility', true);
     ensureOnTop(islandWindow);
   }
 }
@@ -1274,7 +1274,7 @@ function updateCursorHitTesting(force = false): void {
 
 function registerIpcHandlers(): void {
   let iconBackfillStarted = false;
-  ipcMain.handle('aurabar:get-config', () => {
+  ipcMain.handle('glassy:get-config', () => {
     if (!iconBackfillStarted) {
       iconBackfillStarted = true;
       // Defer icon/identity backfill slightly so startup taskbar hide & first paint are instant
@@ -1283,9 +1283,9 @@ function registerIpcHandlers(): void {
     return currentConfig;
   });
 
-  ipcMain.handle('aurabar:get-app-icon', (_e, target: string) => getIconDataUrl(target));
+  ipcMain.handle('glassy:get-app-icon', (_e, target: string) => getIconDataUrl(target));
 
-  ipcMain.handle('aurabar:save-config', (e, nextConfig: AppConfig) => {
+  ipcMain.handle('glassy:save-config', (e, nextConfig: AppConfig) => {
     const prevSettings = currentConfig.settings;
     currentConfig = saveConfig({
       ...nextConfig,
@@ -1312,7 +1312,7 @@ function registerIpcHandlers(): void {
     return currentConfig;
   });
 
-  ipcMain.handle('aurabar:set-popover-open', (e, open: boolean) => {
+  ipcMain.handle('glassy:set-popover-open', (e, open: boolean) => {
     const sec = findSecondaryEntryBySender(e.sender);
     if (sec) {
       sec.popoverOpen = open;
@@ -1337,7 +1337,7 @@ function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.on('aurabar:set-dock-interactive', (e, interactive: boolean) => {
+  ipcMain.on('glassy:set-dock-interactive', (e, interactive: boolean) => {
     const sec = findSecondaryEntryBySender(e.sender);
     if (sec) {
       sec.interactiveLock = interactive;
@@ -1347,7 +1347,7 @@ function registerIpcHandlers(): void {
     updateCursorHitTesting(true);
   });
 
-  ipcMain.handle('aurabar:set-island-expanded', (_e, expanded: boolean) => {
+  ipcMain.handle('glassy:set-island-expanded', (_e, expanded: boolean) => {
     isIslandExpanded = expanded;
     if (expanded) {
       islandInteractiveState = true;
@@ -1359,12 +1359,12 @@ function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.on('aurabar:set-island-interactive', (_e, interactive: boolean) => {
+  ipcMain.on('glassy:set-island-interactive', (_e, interactive: boolean) => {
     islandInteractiveLock = interactive;
     updateCursorHitTesting(true);
   });
 
-  ipcMain.on('aurabar:set-hit-rects', (e, view: 'dock' | 'island', rects: HitRect[]) => {
+  ipcMain.on('glassy:set-hit-rects', (e, view: 'dock' | 'island', rects: HitRect[]) => {
     const clean = Array.isArray(rects) ? rects : [];
     if (view === 'dock') {
       const sec = findSecondaryEntryBySender(e.sender);
@@ -1379,26 +1379,26 @@ function registerIpcHandlers(): void {
     updateCursorHitTesting(true);
   });
 
-  ipcMain.handle('aurabar:get-system-stats', () => getSystemStats());
-  ipcMain.handle('aurabar:get-running-windows', () => listRunningWindows());
-  ipcMain.handle('aurabar:get-background-apps', () => listBackgroundApps());
-  ipcMain.handle('aurabar:get-installed-apps', () => listInstalledApps());
-  ipcMain.handle('aurabar:create-pinned-from-path', (_e, filePath: string) =>
+  ipcMain.handle('glassy:get-system-stats', () => getSystemStats());
+  ipcMain.handle('glassy:get-running-windows', () => listRunningWindows());
+  ipcMain.handle('glassy:get-background-apps', () => listBackgroundApps());
+  ipcMain.handle('glassy:get-installed-apps', () => listInstalledApps());
+  ipcMain.handle('glassy:create-pinned-from-path', (_e, filePath: string) =>
     createPinnedAppFromPath(filePath)
   );
-  ipcMain.handle('aurabar:import-taskbar-apps', () => importTaskbarPinnedApps());
-  ipcMain.handle('aurabar:focus-window', (_e, pid: number, hwnd?: string) =>
+  ipcMain.handle('glassy:import-taskbar-apps', () => importTaskbarPinnedApps());
+  ipcMain.handle('glassy:focus-window', (_e, pid: number, hwnd?: string) =>
     focusWindowByPid(pid, hwnd)
   );
-  ipcMain.handle('aurabar:activate-window', (_e, pid: number, hwnd?: string) =>
+  ipcMain.handle('glassy:activate-window', (_e, pid: number, hwnd?: string) =>
     activateWindowByPid(pid, hwnd)
   );
-  ipcMain.on('aurabar:peek-start', (e, hwnd: string) => {
+  ipcMain.on('glassy:peek-start', (e, hwnd: string) => {
     livePeekOwner = e.sender;
     startLiveWindowPeek(hwnd);
   });
-  ipcMain.on('aurabar:peek-stop', (e) => stopLivePeekIfOwner(e.sender));
-  ipcMain.on('aurabar:live-thumbs', (e, slots: LiveThumbSlot[]) => {
+  ipcMain.on('glassy:peek-stop', (e) => stopLivePeekIfOwner(e.sender));
+  ipcMain.on('glassy:live-thumbs', (e, slots: LiveThumbSlot[]) => {
     const sec = findSecondaryEntryBySender(e.sender);
     const hostWin = sec ? sec.win : dockWindow;
     if (!hostWin || hostWin.isDestroyed() || !Array.isArray(slots) || slots.length === 0) {
@@ -1427,26 +1427,26 @@ function registerIpcHandlers(): void {
     });
     setLiveThumbnails(physicalSlots);
   });
-  ipcMain.on('aurabar:live-thumbs-clear', (e) => clearLiveThumbsIfOwner(e.sender));
-  ipcMain.handle('aurabar:wake-hidden-app', (_e, exeName?: string, installDir?: string) =>
+  ipcMain.on('glassy:live-thumbs-clear', (e) => clearLiveThumbsIfOwner(e.sender));
+  ipcMain.handle('glassy:wake-hidden-app', (_e, exeName?: string, installDir?: string) =>
     wakeHiddenApp(exeName, installDir)
   );
-  ipcMain.handle('aurabar:open-app', (_e, pid: number, executablePath?: string) =>
+  ipcMain.handle('glassy:open-app', (_e, pid: number, executablePath?: string) =>
     openAppByPid(pid, executablePath)
   );
-  ipcMain.handle('aurabar:close-window', (_e, hwnd: string) => closeWindowByHwnd(hwnd));
-  ipcMain.handle('aurabar:get-window-thumb', (_e, hwnd: string) => getWindowThumbnail(hwnd));
-  ipcMain.handle('aurabar:quit-process', (_e, pid: number, executablePath?: string) =>
+  ipcMain.handle('glassy:close-window', (_e, hwnd: string) => closeWindowByHwnd(hwnd));
+  ipcMain.handle('glassy:get-window-thumb', (_e, hwnd: string) => getWindowThumbnail(hwnd));
+  ipcMain.handle('glassy:quit-process', (_e, pid: number, executablePath?: string) =>
     quitAppByPid(pid, executablePath)
   );
-  ipcMain.handle('aurabar:launch-target', (_e, target: string) => launchTarget(target));
-  ipcMain.handle('aurabar:pick-app-file', () => pickExecutableOrFolder(dockWindow));
-  ipcMain.handle('aurabar:get-update-info', () => getUpdateInfo());
-  ipcMain.handle('aurabar:check-updates', () => checkForUpdates(true));
-  ipcMain.handle('aurabar:install-update', () => installUpdateNow());
-  ipcMain.handle('aurabar:get-media-info', () => getCurrentMedia());
+  ipcMain.handle('glassy:launch-target', (_e, target: string) => launchTarget(target));
+  ipcMain.handle('glassy:pick-app-file', () => pickExecutableOrFolder(dockWindow));
+  ipcMain.handle('glassy:get-update-info', () => getUpdateInfo());
+  ipcMain.handle('glassy:check-updates', () => checkForUpdates(true));
+  ipcMain.handle('glassy:install-update', () => installUpdateNow());
+  ipcMain.handle('glassy:get-media-info', () => getCurrentMedia());
   ipcMain.handle(
-    'aurabar:get-lyrics',
+    'glassy:get-lyrics',
     (_e, title: unknown, artist: unknown, album: unknown, durationSec: unknown) =>
       getLyrics(
         typeof title === 'string' ? title.slice(0, 300) : '',
@@ -1455,39 +1455,39 @@ function registerIpcHandlers(): void {
         typeof durationSec === 'number' && Number.isFinite(durationSec) ? durationSec : 0
       )
   );
-  ipcMain.handle('aurabar:send-media-cmd', (_e, cmd: 'playPause' | 'next' | 'previous') =>
+  ipcMain.handle('glassy:send-media-cmd', (_e, cmd: 'playPause' | 'next' | 'previous') =>
     sendMediaCommand(cmd)
   );
-  ipcMain.handle('aurabar:adjust-volume', (_e, action: 'up' | 'down' | 'mute') =>
+  ipcMain.handle('glassy:adjust-volume', (_e, action: 'up' | 'down' | 'mute') =>
     adjustSystemVolume(action)
   );
-  ipcMain.handle('aurabar:get-volume', () => getSystemVolume());
-  ipcMain.handle('aurabar:set-volume', (_e, level: number) => setSystemVolume(level));
-  ipcMain.handle('aurabar:toggle-mute', () => toggleSystemMute());
-  ipcMain.handle('aurabar:get-audio-devices', () => listAudioDevices());
-  ipcMain.handle('aurabar:set-audio-device', (_e, deviceId: string) =>
+  ipcMain.handle('glassy:get-volume', () => getSystemVolume());
+  ipcMain.handle('glassy:set-volume', (_e, level: number) => setSystemVolume(level));
+  ipcMain.handle('glassy:toggle-mute', () => toggleSystemMute());
+  ipcMain.handle('glassy:get-audio-devices', () => listAudioDevices());
+  ipcMain.handle('glassy:set-audio-device', (_e, deviceId: string) =>
     setDefaultAudioDevice(deviceId)
   );
-  ipcMain.handle('aurabar:get-audio-sessions', () => listAudioSessions());
-  ipcMain.handle('aurabar:set-audio-session-vol', (_e, sessionId: string, level: number) =>
+  ipcMain.handle('glassy:get-audio-sessions', () => listAudioSessions());
+  ipcMain.handle('glassy:set-audio-session-vol', (_e, sessionId: string, level: number) =>
     setAudioSessionVolume(sessionId, level)
   );
-  ipcMain.handle('aurabar:toggle-audio-session-mute', (_e, sessionId: string) =>
+  ipcMain.handle('glassy:toggle-audio-session-mute', (_e, sessionId: string) =>
     toggleAudioSessionMute(sessionId)
   );
-  ipcMain.handle('aurabar:get-brightness', () => getScreenBrightness());
-  ipcMain.handle('aurabar:set-brightness', (_e, level: number) => setScreenBrightness(level));
-  ipcMain.handle('aurabar:get-nightlight', () => getNightLightStatus());
-  ipcMain.handle('aurabar:toggle-nightlight', () => toggleNightLight());
-  ipcMain.handle('aurabar:list-wifi-networks', () => listWifiNetworks());
-  ipcMain.handle('aurabar:connect-wifi-network', (_e, ssid: string) => connectWifiNetwork(ssid));
-  ipcMain.handle('aurabar:system-action', (_e, action: SystemAction) =>
+  ipcMain.handle('glassy:get-brightness', () => getScreenBrightness());
+  ipcMain.handle('glassy:set-brightness', (_e, level: number) => setScreenBrightness(level));
+  ipcMain.handle('glassy:get-nightlight', () => getNightLightStatus());
+  ipcMain.handle('glassy:toggle-nightlight', () => toggleNightLight());
+  ipcMain.handle('glassy:list-wifi-networks', () => listWifiNetworks());
+  ipcMain.handle('glassy:connect-wifi-network', (_e, ssid: string) => connectWifiNetwork(ssid));
+  ipcMain.handle('glassy:system-action', (_e, action: SystemAction) =>
     runQuickSystemAction(action)
   );
-  ipcMain.handle('aurabar:get-keyboard-lang', () => getKeyboardLayoutCode());
-  ipcMain.handle('aurabar:switch-keyboard-lang', () => switchKeyboardLayout());
-  ipcMain.handle('aurabar:get-network-info', () => getNetworkInfo());
-  ipcMain.handle('aurabar:hide-dock', () => {
+  ipcMain.handle('glassy:get-keyboard-lang', () => getKeyboardLayoutCode());
+  ipcMain.handle('glassy:switch-keyboard-lang', () => switchKeyboardLayout());
+  ipcMain.handle('glassy:get-network-info', () => getNetworkInfo());
+  ipcMain.handle('glassy:hide-dock', () => {
     stopLiveWindowPeek();
     clearLiveThumbnails();
     dockManuallyHidden = true;
@@ -1512,15 +1512,15 @@ function registerIpcHandlers(): void {
     }
     rebuildTrayMenu();
   });
-  ipcMain.handle('aurabar:quit', () => app.quit());
+  ipcMain.handle('glassy:quit', () => app.quit());
 }
 
 // Same data folder whether run from source or installed, so an update never loses the config
 app.setPath(
   'userData',
-  process.env.AURABAR_USER_DATA || path.join(app.getPath('appData'), 'aurabar')
+  process.env.GLASSY_USER_DATA || path.join(app.getPath('appData'), 'glassy')
 );
-app.setAppUserModelId('com.m7devcore.aurabar');
+app.setAppUserModelId('com.m7devcore.glassy');
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) {

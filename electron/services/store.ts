@@ -41,7 +41,21 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 function getConfigPath(): string {
-  return path.join(app.getPath('userData'), 'aurabar-config.json');
+  return path.join(app.getPath('userData'), 'glassy-config.json');
+}
+
+// One-time seamless migration if upgrading from an older installation folder
+function migrateLegacyConfigIfNeeded(targetPath: string): void {
+  if (fs.existsSync(targetPath)) return;
+  try {
+    const legacyPath = path.join(app.getPath('appData'), 'aurabar', 'aurabar-config.json');
+    if (fs.existsSync(legacyPath)) {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.copyFileSync(legacyPath, targetPath);
+    }
+  } catch {
+    // Non-fatal: falls back to default config
+  }
 }
 
 function normalizeTheme(raw: unknown): ThemeId {
@@ -51,6 +65,7 @@ function normalizeTheme(raw: unknown): ThemeId {
 
 export function loadConfig(): AppConfig {
   const filePath = getConfigPath();
+  migrateLegacyConfigIfNeeded(filePath);
   try {
     if (!fs.existsSync(filePath)) {
       saveConfig(DEFAULT_CONFIG);

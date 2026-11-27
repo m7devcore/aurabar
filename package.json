@@ -1,5 +1,5 @@
 {
-  "name": "aurabar",
+  "name": "glassy",
   "version": "1.0.0",
   "description": "Glassy - Smart Floating Taskbar & Dynamic Island for Windows",
   "main": "dist-electron/main.cjs",
@@ -32,14 +32,14 @@
     "vite": "^6.0.5"
   },
   "author": "m7devcore",
-  "homepage": "https://github.com/m7devcore/aurabar",
+  "homepage": "https://github.com/m7devcore/glassy",
   "repository": {
     "type": "git",
-    "url": "https://github.com/m7devcore/aurabar.git"
+    "url": "https://github.com/m7devcore/glassy.git"
   },
   "license": "MIT",
   "build": {
-    "appId": "com.m7devcore.aurabar",
+    "appId": "com.m7devcore.glassy",
     "productName": "Glassy",
     "directories": {
       "output": "release",
@@ -78,7 +78,7 @@
       {
         "provider": "github",
         "owner": "m7devcore",
-        "repo": "aurabar",
+        "repo": "glassy",
         "releaseType": "release"
       }
     ]

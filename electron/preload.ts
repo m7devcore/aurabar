@@ -35,7 +35,7 @@ export interface LiveThumbSlot {
   radius?: number;
 }
 
-export interface AuraBarApi {
+export interface GlassyApi {
   getConfig: () => Promise<AppConfig>;
   saveConfig: (config: AppConfig) => Promise<AppConfig>;
   setPopoverOpen: (open: boolean) => Promise<void>;
@@ -105,98 +105,98 @@ export interface AuraBarApi {
   onUpdateInfo: (cb: (info: UpdateInfo) => void) => () => void;
 }
 
-const api: AuraBarApi = {
-  getConfig: () => ipcRenderer.invoke('aurabar:get-config'),
-  saveConfig: (config) => ipcRenderer.invoke('aurabar:save-config', config),
-  setPopoverOpen: (open) => ipcRenderer.invoke('aurabar:set-popover-open', open),
+const api: GlassyApi = {
+  getConfig: () => ipcRenderer.invoke('glassy:get-config'),
+  saveConfig: (config) => ipcRenderer.invoke('glassy:save-config', config),
+  setPopoverOpen: (open) => ipcRenderer.invoke('glassy:set-popover-open', open),
   setDockInteractive: (interactive) =>
-    ipcRenderer.send('aurabar:set-dock-interactive', interactive),
-  setIslandExpanded: (expanded) => ipcRenderer.invoke('aurabar:set-island-expanded', expanded),
+    ipcRenderer.send('glassy:set-dock-interactive', interactive),
+  setIslandExpanded: (expanded) => ipcRenderer.invoke('glassy:set-island-expanded', expanded),
   setIslandInteractive: (interactive) =>
-    ipcRenderer.send('aurabar:set-island-interactive', interactive),
-  setHitRects: (view, rects) => ipcRenderer.send('aurabar:set-hit-rects', view, rects),
-  getSystemStats: () => ipcRenderer.invoke('aurabar:get-system-stats'),
-  getRunningWindows: () => ipcRenderer.invoke('aurabar:get-running-windows'),
-  getBackgroundApps: () => ipcRenderer.invoke('aurabar:get-background-apps'),
-  getInstalledApps: () => ipcRenderer.invoke('aurabar:get-installed-apps'),
-  createPinnedFromPath: (filePath) => ipcRenderer.invoke('aurabar:create-pinned-from-path', filePath),
+    ipcRenderer.send('glassy:set-island-interactive', interactive),
+  setHitRects: (view, rects) => ipcRenderer.send('glassy:set-hit-rects', view, rects),
+  getSystemStats: () => ipcRenderer.invoke('glassy:get-system-stats'),
+  getRunningWindows: () => ipcRenderer.invoke('glassy:get-running-windows'),
+  getBackgroundApps: () => ipcRenderer.invoke('glassy:get-background-apps'),
+  getInstalledApps: () => ipcRenderer.invoke('glassy:get-installed-apps'),
+  createPinnedFromPath: (filePath) => ipcRenderer.invoke('glassy:create-pinned-from-path', filePath),
   getPathForFile: (file) => webUtils.getPathForFile(file),
-  importTaskbarApps: () => ipcRenderer.invoke('aurabar:import-taskbar-apps'),
-  focusWindow: (pid, hwnd) => ipcRenderer.invoke('aurabar:focus-window', pid, hwnd),
-  activateWindow: (pid, hwnd) => ipcRenderer.invoke('aurabar:activate-window', pid, hwnd),
-  startWindowPeek: (hwnd) => ipcRenderer.send('aurabar:peek-start', hwnd),
-  stopWindowPeek: () => ipcRenderer.send('aurabar:peek-stop'),
-  setLiveThumbs: (slots) => ipcRenderer.send('aurabar:live-thumbs', slots),
-  clearLiveThumbs: () => ipcRenderer.send('aurabar:live-thumbs-clear'),
+  importTaskbarApps: () => ipcRenderer.invoke('glassy:import-taskbar-apps'),
+  focusWindow: (pid, hwnd) => ipcRenderer.invoke('glassy:focus-window', pid, hwnd),
+  activateWindow: (pid, hwnd) => ipcRenderer.invoke('glassy:activate-window', pid, hwnd),
+  startWindowPeek: (hwnd) => ipcRenderer.send('glassy:peek-start', hwnd),
+  stopWindowPeek: () => ipcRenderer.send('glassy:peek-stop'),
+  setLiveThumbs: (slots) => ipcRenderer.send('glassy:live-thumbs', slots),
+  clearLiveThumbs: () => ipcRenderer.send('glassy:live-thumbs-clear'),
   wakeHiddenApp: (exeName, installDir) =>
-    ipcRenderer.invoke('aurabar:wake-hidden-app', exeName, installDir),
-  openApp: (pid, executablePath) => ipcRenderer.invoke('aurabar:open-app', pid, executablePath),
-  closeWindow: (hwnd) => ipcRenderer.invoke('aurabar:close-window', hwnd),
-  getWindowThumb: (hwnd) => ipcRenderer.invoke('aurabar:get-window-thumb', hwnd),
-  quitProcess: (pid, executablePath) => ipcRenderer.invoke('aurabar:quit-process', pid, executablePath),
-  launchTarget: (target) => ipcRenderer.invoke('aurabar:launch-target', target),
-  pickAppFile: () => ipcRenderer.invoke('aurabar:pick-app-file'),
-  getAppIcon: (target) => ipcRenderer.invoke('aurabar:get-app-icon', target),
-  getMediaInfo: () => ipcRenderer.invoke('aurabar:get-media-info'),
-  sendMediaCommand: (cmd) => ipcRenderer.invoke('aurabar:send-media-cmd', cmd),
+    ipcRenderer.invoke('glassy:wake-hidden-app', exeName, installDir),
+  openApp: (pid, executablePath) => ipcRenderer.invoke('glassy:open-app', pid, executablePath),
+  closeWindow: (hwnd) => ipcRenderer.invoke('glassy:close-window', hwnd),
+  getWindowThumb: (hwnd) => ipcRenderer.invoke('glassy:get-window-thumb', hwnd),
+  quitProcess: (pid, executablePath) => ipcRenderer.invoke('glassy:quit-process', pid, executablePath),
+  launchTarget: (target) => ipcRenderer.invoke('glassy:launch-target', target),
+  pickAppFile: () => ipcRenderer.invoke('glassy:pick-app-file'),
+  getAppIcon: (target) => ipcRenderer.invoke('glassy:get-app-icon', target),
+  getMediaInfo: () => ipcRenderer.invoke('glassy:get-media-info'),
+  sendMediaCommand: (cmd) => ipcRenderer.invoke('glassy:send-media-cmd', cmd),
   getLyrics: (title, artist, album, durationSec) =>
-    ipcRenderer.invoke('aurabar:get-lyrics', title, artist, album, durationSec),
-  adjustVolume: (action) => ipcRenderer.invoke('aurabar:adjust-volume', action),
-  getVolume: () => ipcRenderer.invoke('aurabar:get-volume'),
-  setVolume: (level) => ipcRenderer.invoke('aurabar:set-volume', level),
-  toggleMute: () => ipcRenderer.invoke('aurabar:toggle-mute'),
-  getAudioDevices: () => ipcRenderer.invoke('aurabar:get-audio-devices'),
-  setDefaultAudioDevice: (deviceId) => ipcRenderer.invoke('aurabar:set-audio-device', deviceId),
-  getAudioSessions: () => ipcRenderer.invoke('aurabar:get-audio-sessions'),
+    ipcRenderer.invoke('glassy:get-lyrics', title, artist, album, durationSec),
+  adjustVolume: (action) => ipcRenderer.invoke('glassy:adjust-volume', action),
+  getVolume: () => ipcRenderer.invoke('glassy:get-volume'),
+  setVolume: (level) => ipcRenderer.invoke('glassy:set-volume', level),
+  toggleMute: () => ipcRenderer.invoke('glassy:toggle-mute'),
+  getAudioDevices: () => ipcRenderer.invoke('glassy:get-audio-devices'),
+  setDefaultAudioDevice: (deviceId) => ipcRenderer.invoke('glassy:set-audio-device', deviceId),
+  getAudioSessions: () => ipcRenderer.invoke('glassy:get-audio-sessions'),
   setAudioSessionVolume: (sessionId, level) =>
-    ipcRenderer.invoke('aurabar:set-audio-session-vol', sessionId, level),
+    ipcRenderer.invoke('glassy:set-audio-session-vol', sessionId, level),
   toggleAudioSessionMute: (sessionId) =>
-    ipcRenderer.invoke('aurabar:toggle-audio-session-mute', sessionId),
-  getBrightness: () => ipcRenderer.invoke('aurabar:get-brightness'),
-  setBrightness: (level) => ipcRenderer.invoke('aurabar:set-brightness', level),
-  getNightLight: () => ipcRenderer.invoke('aurabar:get-nightlight'),
-  toggleNightLight: () => ipcRenderer.invoke('aurabar:toggle-nightlight'),
-  listWifiNetworks: () => ipcRenderer.invoke('aurabar:list-wifi-networks'),
-  connectWifiNetwork: (ssid) => ipcRenderer.invoke('aurabar:connect-wifi-network', ssid),
-  systemAction: (action) => ipcRenderer.invoke('aurabar:system-action', action),
-  getKeyboardLang: () => ipcRenderer.invoke('aurabar:get-keyboard-lang'),
-  switchKeyboardLang: () => ipcRenderer.invoke('aurabar:switch-keyboard-lang'),
-  getNetworkInfo: () => ipcRenderer.invoke('aurabar:get-network-info'),
-  hideDock: () => ipcRenderer.invoke('aurabar:hide-dock'),
-  quitApp: () => ipcRenderer.invoke('aurabar:quit'),
+    ipcRenderer.invoke('glassy:toggle-audio-session-mute', sessionId),
+  getBrightness: () => ipcRenderer.invoke('glassy:get-brightness'),
+  setBrightness: (level) => ipcRenderer.invoke('glassy:set-brightness', level),
+  getNightLight: () => ipcRenderer.invoke('glassy:get-nightlight'),
+  toggleNightLight: () => ipcRenderer.invoke('glassy:toggle-nightlight'),
+  listWifiNetworks: () => ipcRenderer.invoke('glassy:list-wifi-networks'),
+  connectWifiNetwork: (ssid) => ipcRenderer.invoke('glassy:connect-wifi-network', ssid),
+  systemAction: (action) => ipcRenderer.invoke('glassy:system-action', action),
+  getKeyboardLang: () => ipcRenderer.invoke('glassy:get-keyboard-lang'),
+  switchKeyboardLang: () => ipcRenderer.invoke('glassy:switch-keyboard-lang'),
+  getNetworkInfo: () => ipcRenderer.invoke('glassy:get-network-info'),
+  hideDock: () => ipcRenderer.invoke('glassy:hide-dock'),
+  quitApp: () => ipcRenderer.invoke('glassy:quit'),
   onDockBlurred: (cb) => {
     const handler = () => cb();
-    ipcRenderer.on('aurabar:blurred', handler);
-    return () => ipcRenderer.removeListener('aurabar:blurred', handler);
+    ipcRenderer.on('glassy:blurred', handler);
+    return () => ipcRenderer.removeListener('glassy:blurred', handler);
   },
   onIslandBlurred: (cb) => {
     const handler = () => cb();
-    ipcRenderer.on('aurabar:island-blurred', handler);
-    return () => ipcRenderer.removeListener('aurabar:island-blurred', handler);
+    ipcRenderer.on('glassy:island-blurred', handler);
+    return () => ipcRenderer.removeListener('glassy:island-blurred', handler);
   },
   onIslandVisibility: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, visible: boolean) => cb(visible);
-    ipcRenderer.on('aurabar:island-visibility', handler);
-    return () => ipcRenderer.removeListener('aurabar:island-visibility', handler);
+    ipcRenderer.on('glassy:island-visibility', handler);
+    return () => ipcRenderer.removeListener('glassy:island-visibility', handler);
   },
   onSuspended: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, suspended: boolean) => cb(suspended);
-    ipcRenderer.on('aurabar:suspended', handler);
-    return () => ipcRenderer.removeListener('aurabar:suspended', handler);
+    ipcRenderer.on('glassy:suspended', handler);
+    return () => ipcRenderer.removeListener('glassy:suspended', handler);
   },
   onConfigUpdated: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, cfg: AppConfig) => cb(cfg);
-    ipcRenderer.on('aurabar:config-updated', handler);
-    return () => ipcRenderer.removeListener('aurabar:config-updated', handler);
+    ipcRenderer.on('glassy:config-updated', handler);
+    return () => ipcRenderer.removeListener('glassy:config-updated', handler);
   },
-  getUpdateInfo: () => ipcRenderer.invoke('aurabar:get-update-info'),
-  checkForUpdates: () => ipcRenderer.invoke('aurabar:check-updates'),
-  installUpdate: () => ipcRenderer.invoke('aurabar:install-update'),
+  getUpdateInfo: () => ipcRenderer.invoke('glassy:get-update-info'),
+  checkForUpdates: () => ipcRenderer.invoke('glassy:check-updates'),
+  installUpdate: () => ipcRenderer.invoke('glassy:install-update'),
   onUpdateInfo: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, info: UpdateInfo) => cb(info);
-    ipcRenderer.on('aurabar:update-info', handler);
-    return () => ipcRenderer.removeListener('aurabar:update-info', handler);
+    ipcRenderer.on('glassy:update-info', handler);
+    return () => ipcRenderer.removeListener('glassy:update-info', handler);
   }
 };
 
-contextBridge.exposeInMainWorld('auraBar', api);
+contextBridge.exposeInMainWorld('glassy', api);

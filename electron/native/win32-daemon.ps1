@@ -40,4 +40,4 @@ if (-not $loaded) {
   Add-Type -TypeDefinition $csCode -ReferencedAssemblies System.Drawing,System.Management -ErrorAction Stop
 }
 
-[AuraBarNative.Win32Bridge]::Main(@([string]$ElectronPid))
+[GlassyNative.Win32Bridge]::Main(@([string]$ElectronPid))

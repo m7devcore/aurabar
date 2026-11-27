@@ -11,12 +11,12 @@ An open-source, glassy smart taskbar replacement and top Music Dynamic Island fo
 - **Taskbar App Folders & Drag-and-Drop**: Drag any pinned or running app onto another to merge into a glassy 2×2 folder popup, rename folders inline, reorder icons, or eject apps back out onto the taskbar.
 - **Installed Apps & Open Windows**: Scan installed Start Menu apps, pin `.exe`/folders/URLs, and switch or minimize active desktop windows using their real executable icons.
 - **Live System & Audio Controls**: CPU/RAM sparklines, disk usage, battery indicator, volume controls, keyboard layout switcher (`EN`/`AR`), and quick system actions.
-- **Calendar & Local Reminders**: Interactive monthly calendar stored locally in `%APPDATA%\aurabar\aurabar-config.json`.
+- **Calendar & Local Reminders**: Interactive monthly calendar stored locally in `%APPDATA%\glassy\glassy-config.json`.
 - **Premium Glass Themes & RTL Support**: Choose between **Classy Obsidian**, **Platinum Gold**, and **Frost Light**, with English (`LTR`) and Arabic (`RTL`) UI support.
 
 ## Install
 
-Download **`Glassy-Setup-<version>.exe`** from the [latest release](https://github.com/m7devcore/aurabar/releases/latest) and run it. No Node.js needed; it installs for the current user only.
+Download **`Glassy-Setup-<version>.exe`** from the [latest release](https://github.com/m7devcore/glassy/releases/latest) and run it. No Node.js needed; it installs for the current user only.
 
 The installer is not code-signed, so Windows SmartScreen may show "Unknown publisher": choose **More info → Run anyway**.
 

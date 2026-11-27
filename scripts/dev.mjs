@@ -51,7 +51,7 @@ await waitForVite('http://localhost:5178');
 
 const devEnv = {
   ...process.env,
-  AURABAR_DEV_URL: 'http://localhost:5178'
+  GLASSY_DEV_URL: 'http://localhost:5178'
 };
 delete devEnv.ELECTRON_RUN_AS_NODE;
 

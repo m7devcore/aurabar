@@ -44,7 +44,7 @@ export function useLyrics(media: MediaInfo | null, enabled: boolean): LyricsStat
 
 /* ---------------- Lyrics on/off preference (shared by the island and dock windows) ---------------- */
 
-const LYRICS_PREF_KEY = 'aurabar.lyrics';
+const LYRICS_PREF_KEY = 'glassy.lyrics';
 
 function readLyricsPref(): boolean {
   try {

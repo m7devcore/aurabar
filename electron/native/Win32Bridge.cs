@@ -10,7 +10,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.Win32;
 
-namespace AuraBarNative {
+namespace GlassyNative {
   public class Win32Bridge {
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -729,7 +729,7 @@ namespace AuraBarNative {
     }
 
     // UWP/Store apps (WhatsApp, Calculator, Photos, Settings...) host their top-level frame inside
-    // ApplicationFrameHost.exe. Find the real hosted child CoreWindow PID so AuraBar gets the true
+    // ApplicationFrameHost.exe. Find the real hosted child CoreWindow PID so Glassy gets the true
     // app name, executable path, icon, and AUMID instead of ApplicationFrameHost.
     private static uint ResolveRealUwpPid(IntPtr hWnd, uint hostPid) {
       uint corePid = 0;
@@ -813,7 +813,7 @@ namespace AuraBarNative {
       return false;
     }
 
-    private static bool IsAuraBarWindow(uint pid, IntPtr hWnd) {
+    private static bool IsGlassyWindow(uint pid, IntPtr hWnd) {
       if (hWnd != IntPtr.Zero) {
         if (hWnd == dockHwnd || hWnd == islandHwnd || hWnd == peekOverlayHwnd || IsExtraDockHwnd(hWnd)) return true;
         lock (liveThumbLock) {
@@ -976,7 +976,7 @@ namespace AuraBarNative {
           if (prev != dockHwnd && prev != islandHwnd && !IsExtraDockHwnd(prev) && IsWindowVisible(prev)) {
             uint pPid;
             GetWindowThreadProcessId(prev, out pPid);
-            if (!IsAuraBarWindow(pPid, prev)) {
+            if (!IsGlassyWindow(pPid, prev)) {
               int pEx = GetWindowLong(prev, GWL_EXSTYLE);
               // Ignore genuine tool/system overlays; promote if any normal app window sits above us
               if ((pEx & WS_EX_TOPMOST) == 0) {
@@ -1054,7 +1054,7 @@ namespace AuraBarNative {
       uint pid;
       GetWindowThreadProcessId(fg, out pid);
       if (pid <= 4) return false;
-      bool isStartOrAura = IsStartMenuWindow(fg, pid) || IsAuraBarWindow(pid, fg);
+      bool isStartOrAura = IsStartMenuWindow(fg, pid) || IsGlassyWindow(pid, fg);
       if (!isStartOrAura) return false;
       IntPtr fgMon = MonitorFromWindow(fg, 2);
       return fgMon == monitor;
@@ -1074,7 +1074,7 @@ namespace AuraBarNative {
       }
       int closedAt = startMenuClosedByDockAt;
       if (startMenuOpen || (closedAt != 0 && unchecked(Environment.TickCount - closedAt) < 550)) {
-        // Clicking the Start button on any AuraBar monitor just stole focus and closed Start Menu;
+        // Clicking the Start button on any Glassy monitor just stole focus and closed Start Menu;
         // do not send Win key again or Windows will bounce Start Menu right back open.
         startMenuOpen = false;
         startMenuClosedByDockAt = 0;
@@ -1109,14 +1109,14 @@ namespace AuraBarNative {
           if (fg != IntPtr.Zero) {
             uint pid;
             GetWindowThreadProcessId(fg, out pid);
-            bool isAura = IsAuraBarWindow(pid, fg);
+            bool isAura = IsGlassyWindow(pid, fg);
             isStartNow = !isAura && IsStartMenuWindow(fg, pid);
             if (isStartNow) {
               startMenuOpen = true;
               startMenuClosedByDockAt = 0;
               // User pressed the Windows key (possibly from inside a fullscreen game!):
               // immediately hide Windows' native taskbar so it never flashes, and push an instant
-              // wake event to Electron so AuraBar appears in <100ms instead of waiting ~1.5s.
+              // wake event to Electron so Glassy appears in <100ms instead of waiting ~1.5s.
               if (!wasStartMenu) {
                 if (taskbarHiddenByUs) {
                   SetAllNativeTaskbarsVisible(false);
@@ -1169,7 +1169,7 @@ namespace AuraBarNative {
             }
 
             if (!primaryDockVis && !anyExtraVis) {
-              // All AuraBar docks are hidden (e.g. fullscreen game): skip EnumWindows/DWM completely!
+              // All Glassy docks are hidden (e.g. fullscreen game): skip EnumWindows/DWM completely!
               inFullscreenSleep = true;
             } else {
               POINT origin = new POINT();
@@ -1241,7 +1241,7 @@ namespace AuraBarNative {
       if (currentFg != IntPtr.Zero) {
         uint fgPid;
         GetWindowThreadProcessId(currentFg, out fgPid);
-        if (!IsAuraBarWindow(fgPid, currentFg)) {
+        if (!IsGlassyWindow(fgPid, currentFg)) {
           activeHwnd = currentFg;
         }
       }
@@ -1251,7 +1251,7 @@ namespace AuraBarNative {
 
         uint pid;
         GetWindowThreadProcessId(hWnd, out pid);
-        if (IsAuraBarWindow(pid, hWnd)) return true;
+        if (IsGlassyWindow(pid, hWnd)) return true;
 
         int len = GetWindowTextLength(hWnd);
         StringBuilder sb = new StringBuilder(len + 1);
@@ -1430,7 +1430,7 @@ namespace AuraBarNative {
       bool hasCaption = (GetWindowLong(hWnd, GWL_STYLE) & 0x00C00000) == 0x00C00000; // WS_CAPTION
       if (!hasCaption || !IsZoomed(hWnd)) return true;
 
-      // During the brief 1.5s settle window right after AuraBar changes work area, a normal
+      // During the brief 1.5s settle window right after Glassy changes work area, a normal
       // maximized window might still be resizing from the old work area — never misclassify it.
       int sinceWa = unchecked(Environment.TickCount - lastWorkAreaChangeAt);
       if (lastWorkAreaChangeAt != 0 && sinceWa >= 0 && sinceWa < 1500) return false;
@@ -1446,7 +1446,7 @@ namespace AuraBarNative {
     // Finds the topmost real visible application window on a specific monitor by walking Z-order
     // from front to back. This keeps Monitor 1's dock hidden while a fullscreen game/video sits on
     // Monitor 1 even when the user clicks Discord/Browser on Monitor 2, while ignoring transparent
-    // overlays (NVIDIA, Discord, Xbox Game Bar) and AuraBar itself.
+    // overlays (NVIDIA, Discord, Xbox Game Bar) and Glassy itself.
     private static IntPtr GetTopmostRealWindowOnMonitor(IntPtr targetMonitor) {
       if (targetMonitor == IntPtr.Zero) return IntPtr.Zero;
       IntPtr topWin = IntPtr.Zero;
@@ -1458,7 +1458,7 @@ namespace AuraBarNative {
         if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0) return true;
         uint pid;
         GetWindowThreadProcessId(hWnd, out pid);
-        if (IsAuraBarWindow(pid, hWnd)) return true;
+        if (IsGlassyWindow(pid, hWnd)) return true;
         StringBuilder cls = new StringBuilder(64);
         GetClassName(hWnd, cls, cls.Capacity);
         string clsName = cls.ToString();
@@ -1479,7 +1479,7 @@ namespace AuraBarNative {
     private static bool IsMonitorShowingFullscreen(IntPtr monitor, IntPtr primaryMon, bool primaryD3dFs) {
       if (monitor == IntPtr.Zero) return false;
 
-      // If the user pressed the Windows key (Start Menu / Search) or is interacting with AuraBar
+      // If the user pressed the Windows key (Start Menu / Search) or is interacting with Glassy
       // on this monitor, NEVER suppress the dock even if a borderless fullscreen game sits behind it!
       if (IsShellOverlayForegroundOnMonitor(monitor)) return false;
 
@@ -1492,7 +1492,7 @@ namespace AuraBarNative {
         if (fgMon == monitor) {
           uint fgPid;
           GetWindowThreadProcessId(fg, out fgPid);
-          if (!IsAuraBarWindow(fgPid, fg)) {
+          if (!IsGlassyWindow(fgPid, fg)) {
             if (IsFullscreenWindowOnMonitor(fg, monitor)) return true;
             if (monitor == primaryMon && primaryD3dFs) return true;
             // A normal non-fullscreen app is foreground on this monitor: monitor is NOT fullscreen
@@ -1830,7 +1830,7 @@ namespace AuraBarNative {
       while (liveThumbPool.Count < count) {
         IntPtr w = CreateWindowEx(
           OVERLAY_EX_STYLE,
-          "AuraBarLiveThumbSlot",
+          "GlassyLiveThumbSlot",
           "",
           0x80000000u, // WS_POPUP
           0, 0, 1, 1,
@@ -1989,7 +1989,7 @@ namespace AuraBarNative {
       };
       DwmUpdateThumbnailProperties(hThumb, ref props);
 
-      // Show overlay topmost without activating, then keep AuraBar dock & preview card above it
+      // Show overlay topmost without activating, then keep Glassy dock & preview card above it
       SetWindowPos(overlay, new IntPtr(-1), rc.left, rc.top, w, h, 0x0010 | 0x0040); // SWP_NOACTIVATE | SWP_SHOWWINDOW
       if (dockHwnd != IntPtr.Zero && IsWindow(dockHwnd)) {
         SetWindowPos(dockHwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
@@ -2014,7 +2014,7 @@ namespace AuraBarNative {
           cbSize = (uint)Marshal.SizeOf(typeof(WNDCLASSEX)),
           lpfnWndProc = Marshal.GetFunctionPointerForDelegate(peekWndProcRef),
           hInstance = hInst,
-          lpszClassName = "AuraBarLivePeekOverlay"
+          lpszClassName = "GlassyLivePeekOverlay"
         };
         RegisterClassEx(ref wc);
 
@@ -2023,13 +2023,13 @@ namespace AuraBarNative {
           lpfnWndProc = Marshal.GetFunctionPointerForDelegate(peekWndProcRef),
           hInstance = hInst,
           hbrBackground = liveThumbBrush,
-          lpszClassName = "AuraBarLiveThumbSlot"
+          lpszClassName = "GlassyLiveThumbSlot"
         };
         RegisterClassEx(ref tc);
         // WS_POPUP (0x80000000), WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST
         IntPtr h = CreateWindowEx(
           0x080800A8u,
-          "AuraBarLivePeekOverlay",
+          "GlassyLivePeekOverlay",
           "",
           0x80000000u,
           0, 0, 1, 1,
@@ -2165,7 +2165,7 @@ namespace AuraBarNative {
       if (lowerPath.StartsWith("c:\\windows\\") || lowerPath.StartsWith("c:\\windows/")) return true;
       if (lowerPath.Contains("\\.vscode\\extensions\\") || lowerPath.Contains("\\node_modules\\")) return true;
       string[] blocked = new string[] {
-        "glassy", "aurabar", "win32bridge", "electron", "crashhandler", "crashpad", "msedgewebview2",
+        "glassy", "win32bridge", "electron", "crashhandler", "crashpad", "msedgewebview2",
         "webview", "elevation_service", "widgetservice", "widgetboard", "crossdeviceservice",
         "startfeedprovider", "nvcontainer", "amdrsserv", "amdrssrcext", "amdow", "cncmd",
         "lghub_agent", "omencommandcenterbackground", "securityhealthservice", "openconsole",
@@ -2236,8 +2236,7 @@ namespace AuraBarNative {
                 if (string.IsNullOrEmpty(resolved)) continue;
                 string fileName = Path.GetFileName(resolved).ToLowerInvariant();
                 if (fileName == "explorer.exe" || fileName == "taskmgr.exe" ||
-                    fileName == "monotificationux.exe" || fileName == "aurabar.exe" ||
-                    fileName == "glassy.exe" ||
+                    fileName == "monotificationux.exe" || fileName == "glassy.exe" ||
                     fileName == "electron.exe" || fileName == "shellexperiencehost.exe") {
                   continue;
                 }
@@ -2276,7 +2275,7 @@ namespace AuraBarNative {
             uint pid = (uint)p.Id;
             ProcMeta meta = GetProcMeta(pid);
             if (string.IsNullOrEmpty(meta.exePath)) continue;
-            if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+            if (IsGlassyWindow(pid, IntPtr.Zero)) continue;
 
             string tip;
             if (!registeredTray.TryGetValue(meta.exePath, out tip)) continue;
@@ -2322,7 +2321,7 @@ namespace AuraBarNative {
         if (!IsTaskbarWindow(hWnd)) return true;
         uint pid;
         GetWindowThreadProcessId(hWnd, out pid);
-        if (pid == 0 || IsAuraBarWindow(pid, hWnd)) return true;
+        if (pid == 0 || IsGlassyWindow(pid, hWnd)) return true;
         ProcMeta meta = GetProcMeta(pid);
         if (meta.name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) {
           uint realPid = ResolveRealUwpPid(hWnd, pid);
@@ -2341,7 +2340,7 @@ namespace AuraBarNative {
           if (p.SessionId != mySession) continue;
           uint pid = (uint)p.Id;
           ProcMeta meta = GetProcMeta(pid);
-          if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+          if (IsGlassyWindow(pid, IntPtr.Zero)) continue;
           if (IsExcludedBackgroundExe(meta.name, meta.exePath)) continue;
           if (taskbarExePaths.Contains(meta.exePath)) continue;
           if (byExe.ContainsKey(meta.exePath)) continue;
@@ -2377,7 +2376,7 @@ namespace AuraBarNative {
     private static HashSet<uint> CollectMatchingPids(int seedPid, out ProcMeta targetMeta) {
       targetMeta = QueryProcMeta((uint)seedPid);
       HashSet<uint> pids = new HashSet<uint>();
-      if (seedPid > 4 && !IsAuraBarWindow((uint)seedPid, IntPtr.Zero)) {
+      if (seedPid > 4 && !IsGlassyWindow((uint)seedPid, IntPtr.Zero)) {
         pids.Add((uint)seedPid);
       }
 
@@ -2397,7 +2396,7 @@ namespace AuraBarNative {
               !string.Equals(p.ProcessName, targetName, StringComparison.OrdinalIgnoreCase)) {
             continue;
           }
-          if (IsAuraBarWindow(pid, IntPtr.Zero)) continue;
+          if (IsGlassyWindow(pid, IntPtr.Zero)) continue;
           if (!string.IsNullOrEmpty(targetExe)) {
             ProcMeta pm = QueryProcMeta(pid);
             if (string.Equals(pm.exePath, targetExe, StringComparison.OrdinalIgnoreCase)) {
@@ -2531,7 +2530,7 @@ namespace AuraBarNative {
     }
 
     private static string KillAppDeep(int pid) {
-      if (pid <= 4 || IsAuraBarWindow((uint)pid, IntPtr.Zero)) return "none";
+      if (pid <= 4 || IsGlassyWindow((uint)pid, IntPtr.Zero)) return "none";
       ProcMeta targetMeta;
       HashSet<uint> pids = CollectMatchingPids(pid, out targetMeta);
       if (!string.IsNullOrEmpty(targetMeta.exePath) &&
