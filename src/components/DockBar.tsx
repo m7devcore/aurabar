@@ -320,6 +320,18 @@ export function DockBar({
     );
   };
 
+  // Clear any open flyout/peek/menu when suspended for fullscreen on ANY display
+  useEffect(() => {
+    return dockBridge.onSuspended((s) => {
+      if (!s) return;
+      setPeek(null);
+      setCtxMenu(null);
+      setOpenFolder(null);
+      setCcFlyout(null);
+      setOverflowTray(null);
+    });
+  }, []);
+
   // Live sync tray Volume + Wi-Fi/Network state cleanly (primary monitor only, paused when hidden)
   useEffect(() => {
     if (isSecondary) return;

@@ -1,9 +1,9 @@
-# AuraBar
+# Glassy
 
 An open-source, glassy smart taskbar replacement and top Music Dynamic Island for Windows 10/11 — built with Electron, React, TypeScript, Vite, and a lightweight persistent C#/Win32 native bridge.
 
 > [!NOTE]
-> AuraBar is currently in active development — expect frequent updates, polish, and bug fixes.
+> Glassy is currently in active development — expect frequent updates, polish, and bug fixes.
 
 ## Features
 - **Glassy Smart Taskbar Pill**: Floating centered dock bar anchored cleanly above the bottom edge (or top), with optional native Windows taskbar replacement (`Shell_TrayWnd` hide + `SPI_SETWORKAREA` reserved workspace) and `Alt+Space` toggle.
@@ -16,7 +16,7 @@ An open-source, glassy smart taskbar replacement and top Music Dynamic Island fo
 
 ## Install
 
-Download **`AuraBar-Setup-<version>.exe`** from the [latest release](https://github.com/m7devcore/aurabar/releases/latest) and run it. No Node.js needed; it installs for the current user only.
+Download **`Glassy-Setup-<version>.exe`** from the [latest release](https://github.com/m7devcore/aurabar/releases/latest) and run it. No Node.js needed; it installs for the current user only.
 
 The installer is not code-signed, so Windows SmartScreen may show "Unknown publisher": choose **More info → Run anyway**.
 

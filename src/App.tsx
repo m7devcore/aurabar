@@ -285,8 +285,8 @@ export function App() {
     return (
       <DynamicIsland
         lang={config?.settings.language ?? 'en'}
-        media={media}
-        expanded={islandExpanded}
+        media={suspended ? null : media}
+        expanded={suspended ? false : islandExpanded}
         onToggleExpand={(open) => {
           setIslandExpanded(open);
           void dockBridge.setIslandExpanded(open);

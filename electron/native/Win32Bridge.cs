@@ -1029,12 +1029,35 @@ namespace AuraBarNative {
       }
     }
 
+    private static readonly object stdoutLock = new object();
+
+    private static void EmitEvent(string ev) {
+      lock (stdoutLock) {
+        Console.WriteLine("!" + ev);
+        Console.Out.Flush();
+      }
+    }
+
     private static bool IsStartMenuWindow(IntPtr hWnd, uint pid) {
       if (hWnd == IntPtr.Zero || pid <= 4 || !IsWindowVisible(hWnd) || IsCloaked(hWnd)) return false;
       string name = GetProcMeta(pid).name;
       return name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase) ||
-             name.Equals("SearchApp", StringComparison.OrdinalIgnoreCase);
+             name.Equals("SearchApp", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsShellOverlayForegroundOnMonitor(IntPtr monitor) {
+      if (monitor == IntPtr.Zero) return false;
+      IntPtr fg = GetForegroundWindow();
+      if (fg == IntPtr.Zero) return false;
+      uint pid;
+      GetWindowThreadProcessId(fg, out pid);
+      if (pid <= 4) return false;
+      bool isStartOrAura = IsStartMenuWindow(fg, pid) || IsAuraBarWindow(pid, fg);
+      if (!isStartOrAura) return false;
+      IntPtr fgMon = MonitorFromWindow(fg, 2);
+      return fgMon == monitor;
     }
 
     private static string ToggleStartMenu() {
@@ -1066,6 +1089,8 @@ namespace AuraBarNative {
     private static void PollForegroundLoop() {
       int parentCheckTick = 0;
       int enforceTick = 0;
+      bool inFullscreenSleep = false;
+      bool wasStartMenu = false;
       while (true) {
         try {
           if (++parentCheckTick >= 10) {
@@ -1079,57 +1104,27 @@ namespace AuraBarNative {
             }
           }
 
-          // Enforce work area, dock rect, and topmost z-order every ~560ms instead of 7x/sec
-          if (++enforceTick >= 4) {
-            enforceTick = 0;
-            POINT origin = new POINT();
-            IntPtr primaryMon = MonitorFromPoint(origin, 1);
-            int qState;
-            bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
-            bool primaryFs = IsMonitorShowingFullscreen(primaryMon, primaryMon, primaryD3dFs);
-            bool anyFs = primaryFs;
-
-            List<IntPtr> extrasCopy = null;
-            lock (extraHwndsLock) {
-              if (extraDockHwnds.Count > 0) extrasCopy = new List<IntPtr>(extraDockHwnds);
-            }
-
-            if (!primaryFs) {
-              EnforceDockPlacement();
-              KeepOnTopIfDemoted(dockHwnd);
-              KeepOnTopIfDemoted(islandHwnd);
-            }
-            if (extrasCopy != null) {
-              for (int i = 0; i < extrasCopy.Count; i++) {
-                IntPtr eh = extrasCopy[i];
-                if (eh == IntPtr.Zero || !IsWindow(eh)) continue;
-                IntPtr eMon = MonitorFromWindow(eh, 2);
-                bool eFs = eMon != IntPtr.Zero && IsMonitorShowingFullscreen(eMon, primaryMon, primaryD3dFs);
-                if (eFs) {
-                  anyFs = true;
-                } else {
-                  EnforceExtraDockPlacement(eh);
-                  KeepOnTopIfDemoted(eh);
-                }
-              }
-            }
-            if (!anyFs) {
-              if (taskbarHiddenByUs) {
-                SetAllNativeTaskbarsVisible(false);
-              }
-              EnforceWorkArea();
-            }
-          }
-
           IntPtr fg = GetForegroundWindow();
+          bool isStartNow = false;
           if (fg != IntPtr.Zero) {
             uint pid;
             GetWindowThreadProcessId(fg, out pid);
             bool isAura = IsAuraBarWindow(pid, fg);
-            bool isStart = !isAura && IsStartMenuWindow(fg, pid);
-            if (isStart) {
+            isStartNow = !isAura && IsStartMenuWindow(fg, pid);
+            if (isStartNow) {
               startMenuOpen = true;
               startMenuClosedByDockAt = 0;
+              // User pressed the Windows key (possibly from inside a fullscreen game!):
+              // immediately hide Windows' native taskbar so it never flashes, and push an instant
+              // wake event to Electron so AuraBar appears in <100ms instead of waiting ~1.5s.
+              if (!wasStartMenu) {
+                if (taskbarHiddenByUs) {
+                  SetAllNativeTaskbarsVisible(false);
+                }
+                if (dockHwnd != IntPtr.Zero && !IsWindowVisible(dockHwnd)) {
+                  EmitEvent("FS_WAKE");
+                }
+              }
             } else if (isAura) {
               if (startMenuOpen) {
                 startMenuOpen = false;
@@ -1152,8 +1147,68 @@ namespace AuraBarNative {
               lastExternalForeground = IntPtr.Zero;
             }
           }
+          wasStartMenu = isStartNow;
+
+          // Enforce work area, dock rect, and topmost z-order every ~600ms (zero work while hidden in fullscreen!)
+          if (++enforceTick >= 4) {
+            enforceTick = 0;
+            bool primaryDockVis = dockHwnd != IntPtr.Zero && IsWindow(dockHwnd) && IsWindowVisible(dockHwnd);
+            List<IntPtr> extrasCopy = null;
+            lock (extraHwndsLock) {
+              if (extraDockHwnds.Count > 0) extrasCopy = new List<IntPtr>(extraDockHwnds);
+            }
+            bool anyExtraVis = false;
+            if (extrasCopy != null) {
+              for (int i = 0; i < extrasCopy.Count; i++) {
+                IntPtr eh = extrasCopy[i];
+                if (eh != IntPtr.Zero && IsWindow(eh) && IsWindowVisible(eh)) {
+                  anyExtraVis = true;
+                  break;
+                }
+              }
+            }
+
+            if (!primaryDockVis && !anyExtraVis) {
+              // All AuraBar docks are hidden (e.g. fullscreen game): skip EnumWindows/DWM completely!
+              inFullscreenSleep = true;
+            } else {
+              POINT origin = new POINT();
+              IntPtr primaryMon = MonitorFromPoint(origin, 1);
+              int qState;
+              bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
+              bool primaryFs = primaryDockVis ? IsMonitorShowingFullscreen(primaryMon, primaryMon, primaryD3dFs) : true;
+              bool anyFs = primaryFs;
+
+              if (primaryDockVis && !primaryFs) {
+                EnforceDockPlacement();
+                KeepOnTopIfDemoted(dockHwnd);
+                KeepOnTopIfDemoted(islandHwnd);
+              }
+              if (extrasCopy != null) {
+                for (int i = 0; i < extrasCopy.Count; i++) {
+                  IntPtr eh = extrasCopy[i];
+                  if (eh == IntPtr.Zero || !IsWindow(eh) || !IsWindowVisible(eh)) continue;
+                  IntPtr eMon = MonitorFromWindow(eh, 2);
+                  bool eFs = eMon != IntPtr.Zero && IsMonitorShowingFullscreen(eMon, primaryMon, primaryD3dFs);
+                  if (eFs) {
+                    anyFs = true;
+                  } else {
+                    EnforceExtraDockPlacement(eh);
+                    KeepOnTopIfDemoted(eh);
+                  }
+                }
+              }
+              inFullscreenSleep = anyFs;
+              if (!anyFs) {
+                if (taskbarHiddenByUs) {
+                  SetAllNativeTaskbarsVisible(false);
+                }
+                EnforceWorkArea();
+              }
+            }
+          }
         } catch { }
-        Thread.Sleep(140);
+        Thread.Sleep(inFullscreenSleep ? 220 : 140);
       }
     }
 
@@ -1423,15 +1478,34 @@ namespace AuraBarNative {
 
     private static bool IsMonitorShowingFullscreen(IntPtr monitor, IntPtr primaryMon, bool primaryD3dFs) {
       if (monitor == IntPtr.Zero) return false;
+
+      // If the user pressed the Windows key (Start Menu / Search) or is interacting with AuraBar
+      // on this monitor, NEVER suppress the dock even if a borderless fullscreen game sits behind it!
+      if (IsShellOverlayForegroundOnMonitor(monitor)) return false;
+
+      // O(1) fast-path: during active fullscreen gameplay, GetForegroundWindow() IS the game itself.
+      // Checking it directly avoids walking EnumWindows + DwmGetWindowAttribute over 300+ windows,
+      // eliminating DWM frame-pacing stutters and CPU overhead during games!
+      IntPtr fg = GetForegroundWindow();
+      if (fg != IntPtr.Zero) {
+        IntPtr fgMon = MonitorFromWindow(fg, 2);
+        if (fgMon == monitor) {
+          uint fgPid;
+          GetWindowThreadProcessId(fg, out fgPid);
+          if (!IsAuraBarWindow(fgPid, fg)) {
+            if (IsFullscreenWindowOnMonitor(fg, monitor)) return true;
+            if (monitor == primaryMon && primaryD3dFs) return true;
+            // A normal non-fullscreen app is foreground on this monitor: monitor is NOT fullscreen
+            if (IsTaskbarWindow(fg)) return false;
+          }
+        }
+      }
+
+      // Only fall back to Z-order EnumWindows when foreground is on another monitor (e.g. clicking
+      // Discord on Monitor 2 while a fullscreen game/video remains visible on Monitor 1).
       IntPtr topWin = GetTopmostRealWindowOnMonitor(monitor);
       if (topWin != IntPtr.Zero && IsFullscreenWindowOnMonitor(topWin, monitor)) return true;
-      if (monitor == primaryMon && primaryD3dFs) {
-        // Exclusive Direct3D/Vulkan fullscreen on primary monitor (e.g. CS2 4:3 stretched)
-        if (topWin == IntPtr.Zero || IsFullscreenWindowOnMonitor(topWin, monitor)) return true;
-        // Also check if the active foreground window itself is on primary and D3D exclusive
-        IntPtr fg = GetForegroundWindow();
-        if (fg != IntPtr.Zero && MonitorFromWindow(fg, 2) == primaryMon) return true;
-      }
+      if (monitor == primaryMon && primaryD3dFs && topWin == IntPtr.Zero) return true;
       return false;
     }
 
@@ -1469,6 +1543,13 @@ namespace AuraBarNative {
       return IsFullscreenWindowOnMonitor(hWnd, dockMonitor);
     }
 
+    // Returns "1" = fullscreen (hide), "2" = Win/Start overlay active (wake immediately), "0" = normal desktop
+    private static string FullscreenCodeForMonitor(IntPtr mon, IntPtr primaryMon, bool primaryD3dFs) {
+      if (mon == IntPtr.Zero) return "0";
+      if (IsShellOverlayForegroundOnMonitor(mon)) return "2";
+      return IsMonitorShowingFullscreen(mon, primaryMon, primaryD3dFs) ? "1" : "0";
+    }
+
     private static string CheckFullscreenForHwnds(string csv) {
       if (string.IsNullOrWhiteSpace(csv)) return "";
       POINT origin = new POINT();
@@ -1486,20 +1567,19 @@ namespace AuraBarNative {
         }
         IntPtr h = new IntPtr(hv);
         IntPtr mon = MonitorFromWindow(h, 2);
-        results[i] = IsMonitorShowingFullscreen(mon, primaryMon, primaryD3dFs) ? "1" : "0";
+        results[i] = FullscreenCodeForMonitor(mon, primaryMon, primaryD3dFs);
       }
       return string.Join(",", results);
     }
 
-    // True while the primary dock's monitor currently has a fullscreen app on top (game, video
-    // player, browser F11...), even if the user clicked another monitor or the Dynamic Island.
-    private static bool IsFullscreenForeground() {
+    // "1" = primary monitor fullscreen, "2" = Win/Start overlay active (wake instantly), "0" = normal
+    private static string GetPrimaryFullscreenCode() {
       POINT origin = new POINT();
       IntPtr primaryMon = MonitorFromPoint(origin, 1);
       IntPtr dockMon = dockHwnd != IntPtr.Zero ? MonitorFromWindow(dockHwnd, 2) : primaryMon;
       int qState;
       bool primaryD3dFs = SHQueryUserNotificationState(out qState) == 0 && (qState == 3 || qState == 4);
-      return IsMonitorShowingFullscreen(dockMon, primaryMon, primaryD3dFs);
+      return FullscreenCodeForMonitor(dockMon, primaryMon, primaryD3dFs);
     }
 
     private static bool IsForegroundTarget(IntPtr hWnd) {
@@ -2085,7 +2165,7 @@ namespace AuraBarNative {
       if (lowerPath.StartsWith("c:\\windows\\") || lowerPath.StartsWith("c:\\windows/")) return true;
       if (lowerPath.Contains("\\.vscode\\extensions\\") || lowerPath.Contains("\\node_modules\\")) return true;
       string[] blocked = new string[] {
-        "aurabar", "win32bridge", "electron", "crashhandler", "crashpad", "msedgewebview2",
+        "glassy", "aurabar", "win32bridge", "electron", "crashhandler", "crashpad", "msedgewebview2",
         "webview", "elevation_service", "widgetservice", "widgetboard", "crossdeviceservice",
         "startfeedprovider", "nvcontainer", "amdrsserv", "amdrssrcext", "amdow", "cncmd",
         "lghub_agent", "omencommandcenterbackground", "securityhealthservice", "openconsole",
@@ -2157,6 +2237,7 @@ namespace AuraBarNative {
                 string fileName = Path.GetFileName(resolved).ToLowerInvariant();
                 if (fileName == "explorer.exe" || fileName == "taskmgr.exe" ||
                     fileName == "monotificationux.exe" || fileName == "aurabar.exe" ||
+                    fileName == "glassy.exe" ||
                     fileName == "electron.exe" || fileName == "shellexperiencehost.exe") {
                   continue;
                 }
@@ -3645,7 +3726,9 @@ namespace AuraBarNative {
 
     // Echo the caller's "#<id>" tag so the Node side can match replies to requests
     private static void Reply(string text) {
-      Console.WriteLine(replyPrefix + text);
+      lock (stdoutLock) {
+        Console.WriteLine(replyPrefix + text);
+      }
     }
 
     public static void Main(string[] args) {
@@ -3731,7 +3814,7 @@ namespace AuraBarNative {
             int pidVal = int.Parse(line.Substring(9).Trim());
             Reply(QuitProcessApp(pidVal));
           } else if (line == "FULLSCREEN") {
-            Reply(IsFullscreenForeground() ? "1" : "0");
+            Reply(GetPrimaryFullscreenCode());
           } else if (line.StartsWith("FULLSCREEN_OF ")) {
             Reply(CheckFullscreenForHwnds(line.Substring(14).Trim()));
           } else if (line == "KBD_LANG") {

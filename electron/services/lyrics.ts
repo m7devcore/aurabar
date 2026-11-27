@@ -3,7 +3,7 @@ import type { LyricLine, LyricsResult } from '../../src/types';
 // Lyrics come from LRCLIB (https://lrclib.net): free, no API key, and most entries carry
 // time-synced LRC lines. Only the track title, artist, album and duration are sent.
 const API = 'https://lrclib.net/api';
-const USER_AGENT = 'AuraBar/1.0 (desktop taskbar)';
+const USER_AGENT = 'Glassy/1.0 (desktop taskbar)';
 const REQUEST_TIMEOUT_MS = 8000;
 const CACHE_LIMIT = 120;
 // A failed lookup (network down) is retried after this long; a definite "no lyrics" is kept

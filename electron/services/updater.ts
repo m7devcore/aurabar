@@ -63,7 +63,7 @@ export function checkForUpdates(manual = false): void {
     // The 'error' event normally handled this already; only cover a rejection without one
     if (status.state === 'checking') {
       set({ state: 'error' });
-      if (manualCheck) notify('AuraBar', "Couldn't check for updates. Try again later.");
+      if (manualCheck) notify('Glassy', "Couldn't check for updates. Try again later.");
       manualCheck = false;
     }
   });
@@ -105,14 +105,14 @@ export function startUpdater(
   });
   autoUpdater.on('update-not-available', () => {
     set({ state: 'upToDate' });
-    if (manualCheck) notify('AuraBar', `You're on the latest version (${app.getVersion()}).`);
+    if (manualCheck) notify('Glassy', `You're on the latest version (${app.getVersion()}).`);
     manualCheck = false;
   });
   autoUpdater.on('update-downloaded', (info) => {
     set({ state: 'ready', version: info.version });
     manualCheck = false;
     notify(
-      'AuraBar update ready',
+      'Glassy update ready',
       `Version ${info.version} is downloaded. Click to restart and update.`,
       () => installUpdateNow()
     );
@@ -120,7 +120,7 @@ export function startUpdater(
   autoUpdater.on('error', () => {
     // Offline or rate-limited: stay quiet, the next scheduled check tries again
     if (status.state !== 'ready') set({ state: 'error' });
-    if (manualCheck) notify('AuraBar', "Couldn't check for updates. Try again later.");
+    if (manualCheck) notify('Glassy', "Couldn't check for updates. Try again later.");
     manualCheck = false;
   });
 

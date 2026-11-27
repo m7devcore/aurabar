@@ -99,6 +99,11 @@ class Win32Daemon {
 
   private hasStarted = false;
   private restartListener: (() => void) | null = null;
+  private eventListener: ((event: string) => void) | null = null;
+
+  onEvent(listener: (event: string) => void): void {
+    this.eventListener = listener;
+  }
 
   whenReady(): Promise<void> {
     if (this.ready) return Promise.resolve();
@@ -205,6 +210,11 @@ class Win32Daemon {
     }
     if (!this.ready) {
       this.markReady();
+    }
+    if (line.startsWith('!')) {
+      const ev = line.slice(1).trim();
+      if (ev && this.eventListener) this.eventListener(ev);
+      return;
     }
     const match = /^#(\d+) ?(.*)$/s.exec(line);
     if (!match) return;

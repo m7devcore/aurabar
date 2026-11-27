@@ -86,6 +86,7 @@ interface SecondaryDockEntry {
   interactiveState: boolean;
   interactiveLock: boolean;
   localHitRects: HitRect[];
+  cachedBounds: Electron.Rectangle;
   lastInsideAt: number;
   fullscreenSuspended: boolean;
   notFullscreenStreak: number;
@@ -108,6 +109,8 @@ let dockInteractiveLock = false;
 let islandInteractiveLock = false;
 let dockLocalHitRects: HitRect[] = [];
 let islandLocalHitRects: HitRect[] = [];
+let dockBoundsCache: Electron.Rectangle | null = null;
+let islandBoundsCache: Electron.Rectangle | null = null;
 let dockLastInsideAt = 0;
 let islandLastInsideAt = 0;
 let taskbarWasAutoHidden = false;
@@ -263,6 +266,7 @@ function placeSecondaryDockPhysical(
   if (entry.win.isDestroyed()) return;
   const dipBounds = computeDockBoundsForDisplay(settings, display);
   setBoundsIfChanged(entry.win, dipBounds);
+  entry.cachedBounds = dipBounds;
   const hwnd = getHwndNumber(entry.win);
   if (hwnd !== '0') {
     const phys = screen.dipToScreenRect(entry.win, dipBounds);
@@ -301,6 +305,7 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     interactiveState: false,
     interactiveLock: false,
     localHitRects: [],
+    cachedBounds: bounds,
     lastInsideAt: 0,
     fullscreenSuspended: false,
     notFullscreenStreak: 0,
@@ -386,6 +391,7 @@ function syncSecondaryDocks(settings: DockSettings): void {
 
 function ensureOnTop(win: BrowserWindow | null): void {
   if (!win || win.isDestroyed()) return;
+  if (!(currentConfig?.settings.alwaysOnTop ?? true)) return;
   applyTopmost(win);
   win.moveTop();
   const hwnd = getHwndNumber(win);
@@ -411,6 +417,8 @@ function setBoundsIfChanged(win: BrowserWindow, next: Electron.Rectangle): void 
   ) {
     win.setBounds(next, false);
   }
+  if (win === dockWindow) dockBoundsCache = next;
+  else if (win === islandWindow) islandBoundsCache = next;
 }
 
 function placeDockPhysical(settings: DockSettings): void {
@@ -614,10 +622,19 @@ let islandFullscreenPeek = false;
 let fullscreenPollTimer: ReturnType<typeof setInterval> | null = null;
 let fullscreenPolling = false;
 let notFullscreenStreak = 0;
+let reassertTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearReassertTimer(): void {
+  if (reassertTimer) {
+    clearTimeout(reassertTimer);
+    reassertTimer = null;
+  }
+}
 
 function setFullscreenSuspended(next: boolean): void {
   if (next === fullscreenSuspended) return;
   fullscreenSuspended = next;
+  clearReassertTimer();
   if (next) {
     stopLiveWindowPeek();
     clearLiveThumbnails();
@@ -632,12 +649,13 @@ function setFullscreenSuspended(next: boolean): void {
     dockWindow?.setIgnoreMouseEvents(true);
     islandWindow?.setIgnoreMouseEvents(true);
     dockWindow?.webContents.send('aurabar:suspended', true);
+    islandWindow?.webContents.send('aurabar:suspended', true);
     dockWindow?.hide();
     islandWindow?.hide();
   } else {
     islandFullscreenPeek = false;
-    // The screen has just been through a mode/work-area change: lay everything out again from
-    // fresh metrics *before* showing, and once more after it settles
+    // Sync bounds synchronously BEFORE showing so the dock appears directly at the right
+    // coordinates without jumping (even after exiting 4:3 stretched fullscreen games).
     reassertLayoutAfterFullscreen();
     if ((suspendedDockWasVisible || !dockManuallyHidden) && dockWindow && !dockWindow.isDestroyed()) {
       dockWindow.showInactive();
@@ -650,6 +668,7 @@ function setFullscreenSuspended(next: boolean): void {
       !islandWindow.isDestroyed() &&
       currentConfig.settings.musicPosition === 'top'
     ) {
+      islandWindow.webContents.send('aurabar:suspended', false);
       islandWindow.showInactive();
       ensureOnTop(islandWindow);
     } else if (
@@ -669,6 +688,7 @@ function setFullscreenSuspended(next: boolean): void {
 }
 
 function reassertLayoutAfterFullscreen(): void {
+  clearReassertTimer();
   const applyOnce = () => {
     if (fullscreenSuspended || isQuitting) return;
     const settings = currentConfig.settings;
@@ -692,9 +712,11 @@ function reassertLayoutAfterFullscreen(): void {
     }
   };
   applyOnce();
-  // Games switching display mode back to native resolution often settle 400-1100ms after exit
-  setTimeout(applyOnce, 450);
-  setTimeout(applyOnce, 1200);
+  // Single settle pass for games whose display-mode switch completes ~500ms after exit
+  reassertTimer = setTimeout(() => {
+    reassertTimer = null;
+    applyOnce();
+  }, 600);
 }
 
 function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolean): void {
@@ -739,6 +761,10 @@ async function pollFullscreen(): Promise<void> {
       if (reply === '1') {
         notFullscreenStreak = 0;
         setFullscreenSuspended(true);
+      } else if (reply === '2') {
+        // User pressed Windows key (Start Menu / Search active): wake immediately with 0 delay!
+        notFullscreenStreak = 2;
+        setFullscreenSuspended(false);
       } else if (reply === '0') {
         notFullscreenStreak += 1;
         if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
@@ -761,6 +787,9 @@ async function pollFullscreen(): Promise<void> {
     } else if (flags[0] === '1') {
       notFullscreenStreak = 0;
       setFullscreenSuspended(true);
+    } else if (flags[0] === '2') {
+      notFullscreenStreak = 2;
+      setFullscreenSuspended(false);
     } else if (flags[0] === '0') {
       notFullscreenStreak += 1;
       if (notFullscreenStreak >= 2) setFullscreenSuspended(false);
@@ -772,6 +801,9 @@ async function pollFullscreen(): Promise<void> {
       if (flag === '1') {
         entry.notFullscreenStreak = 0;
         setSecondaryFullscreenSuspended(entry, true);
+      } else if (flag === '2') {
+        entry.notFullscreenStreak = 2;
+        setSecondaryFullscreenSuspended(entry, false);
       } else if (flag === '0') {
         entry.notFullscreenStreak += 1;
         if (entry.notFullscreenStreak >= 2) setSecondaryFullscreenSuspended(entry, false);
@@ -785,7 +817,7 @@ async function pollFullscreen(): Promise<void> {
 function syncFullscreenWatcher(): void {
   const wanted = currentConfig.settings.hideInFullscreen;
   if (wanted && !fullscreenPollTimer) {
-    fullscreenPollTimer = setInterval(() => void pollFullscreen(), 400);
+    fullscreenPollTimer = setInterval(() => void pollFullscreen(), 450);
   } else if (!wanted) {
     if (fullscreenPollTimer) clearInterval(fullscreenPollTimer);
     fullscreenPollTimer = null;
@@ -926,13 +958,13 @@ function updateMenuItems(): Electron.MenuItemConstructorOptions[] {
   } else {
     items.push({ label: 'Check for updates', click: () => checkForUpdates(true) });
   }
-  items.push({ label: `AuraBar v${app.getVersion()}`, enabled: false }, { type: 'separator' });
+  items.push({ label: `Glassy v${app.getVersion()}`, enabled: false }, { type: 'separator' });
   return items;
 }
 
 function setupTray(): void {
   tray = new Tray(createTrayIcon());
-  tray.setToolTip('AuraBar — Taskbar & Music Island');
+  tray.setToolTip('Glassy — Taskbar & Music Island');
   rebuildTrayMenu = () => {
     const dockVisible = dockWindow?.isVisible() ?? false;
     tray?.setContextMenu(
@@ -989,7 +1021,7 @@ function setupTray(): void {
         { type: 'separator' },
         ...updateMenuItems(),
         {
-          label: 'Quit AuraBar',
+          label: 'Quit Glassy',
           click: () => app.quit()
         }
       ])
@@ -1107,7 +1139,7 @@ function updateCursorHitTesting(force = false): void {
   const nowMs = Date.now();
 
   if (dockVis && dockWindow) {
-    const b = dockWindow.getBounds();
+    const b = dockBoundsCache ?? (dockBoundsCache = dockWindow.getBounds());
     const insideDock = isPointInRects(pt.x - b.x, pt.y - b.y, dockLocalHitRects);
     const shouldBeInteractive = isPopoverOpen || dockInteractiveLock || insideDock;
     if (shouldBeInteractive) {
@@ -1122,8 +1154,8 @@ function updateCursorHitTesting(force = false): void {
     }
   }
 
-  if (islandWindow && !islandWindow.isDestroyed() && islandWindow.isVisible()) {
-    const b = islandWindow.getBounds();
+  if (islandVis && islandWindow) {
+    const b = islandBoundsCache ?? (islandBoundsCache = islandWindow.getBounds());
     const insideIsland = isPointInRects(pt.x - b.x, pt.y - b.y, islandLocalHitRects);
     const shouldBeInteractive = isIslandExpanded || islandInteractiveLock || insideIsland;
     if (shouldBeInteractive) {
@@ -1140,8 +1172,10 @@ function updateCursorHitTesting(force = false): void {
 
   for (const entry of secondaryDocks.values()) {
     if (entry.win.isDestroyed() || !entry.win.isVisible()) continue;
-    const b = entry.win.getBounds();
-    const inside = isPointInRects(pt.x - b.x, pt.y - b.y, entry.localHitRects);
+    const b = entry.cachedBounds;
+    // Fast bounding-box reject: while gaming on Monitor 1 with a 1000Hz mouse, skip immediately!
+    const inBox = pt.x >= b.x && pt.x <= b.x + b.width && pt.y >= b.y && pt.y <= b.y + b.height;
+    const inside = inBox && isPointInRects(pt.x - b.x, pt.y - b.y, entry.localHitRects);
     const shouldBeInteractive = entry.popoverOpen || entry.interactiveLock || inside;
     if (shouldBeInteractive) {
       entry.lastInsideAt = nowMs;
@@ -1432,6 +1466,13 @@ if (!singleInstance) {
     createWindows();
     setupTray();
     applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
+    // Instant wake when the user presses the Windows key inside any fullscreen game!
+    win32Daemon.onEvent((ev) => {
+      if (ev === 'FS_WAKE' && fullscreenSuspended && !dockManuallyHidden && !isQuitting) {
+        notFullscreenStreak = 2;
+        setFullscreenSuspended(false);
+      }
+    });
     // Start fullscreen watcher only after the native bridge is ready and startup work-area
     // settlement has finished, so launch never triggers a false suspend/resume bounce.
     void win32Daemon.whenReady().then(() => {
@@ -1480,6 +1521,7 @@ if (!singleInstance) {
           Math.abs(cur.height - expected.height) > 2
         ) {
           dockWindow.setBounds(expected, false);
+          dockBoundsCache = expected;
           placeDockPhysical(currentConfig.settings);
         }
       }
@@ -1510,14 +1552,25 @@ if (!singleInstance) {
         .join('|');
     let lastTopologyKey = getTopologyKey();
 
+    let displayChangeTimer: ReturnType<typeof setTimeout> | null = null;
     const handleDisplayChange = () => {
-      const nextKey = getTopologyKey();
-      if (nextKey === lastTopologyKey) return;
-      lastTopologyKey = nextKey;
-      if (currentConfig.settings.replaceWindowsTaskbar) {
-        syncTaskbarReplacement(currentConfig.settings);
-      }
-      applyAllLayouts(currentConfig.settings);
+      if (displayChangeTimer) clearTimeout(displayChangeTimer);
+      // Debounce display-mode transitions (e.g. stretched CS2 <-> native 16:9 when pressing Win)
+      // so we never bounce the dock or broadcast TASKBAR_HIDE mid-resolution-switch.
+      displayChangeTimer = setTimeout(() => {
+        displayChangeTimer = null;
+        if (isQuitting) return;
+        const nextKey = getTopologyKey();
+        if (nextKey === lastTopologyKey) return;
+        lastTopologyKey = nextKey;
+        dockBoundsCache = null;
+        islandBoundsCache = null;
+        if (fullscreenSuspended) return;
+        if (currentConfig.settings.replaceWindowsTaskbar) {
+          syncTaskbarReplacement(currentConfig.settings);
+        }
+        applyAllLayouts(currentConfig.settings);
+      }, 350);
     };
     screen.on('display-metrics-changed', (_e, _disp, changed) => {
       if (changed.includes('bounds') || changed.includes('scaleFactor') || changed.includes('rotation')) {

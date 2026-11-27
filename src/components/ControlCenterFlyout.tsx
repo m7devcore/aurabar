@@ -551,7 +551,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
                 type="button"
                 className="cc-footer-icon-btn"
                 onClick={() => onOpenPanel('settings')}
-                title={isAr ? 'إعدادات AuraBar' : 'AuraBar Settings'}
+                title={isAr ? 'إعدادات Glassy' : 'Glassy Settings'}
               >
                 <SettingsIcon />
               </button>

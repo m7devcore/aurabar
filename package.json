@@ -1,7 +1,7 @@
 {
   "name": "aurabar",
   "version": "1.0.0",
-  "description": "AuraBar - Personal Smart Dock & Live Widget Bar for Windows",
+  "description": "Glassy - Smart Floating Taskbar & Dynamic Island for Windows",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -40,7 +40,7 @@
   "license": "MIT",
   "build": {
     "appId": "com.m7devcore.aurabar",
-    "productName": "AuraBar",
+    "productName": "Glassy",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -64,7 +64,7 @@
         }
       ],
       "icon": "build/icon.png",
-      "artifactName": "AuraBar-Setup-${version}.${ext}"
+      "artifactName": "Glassy-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
