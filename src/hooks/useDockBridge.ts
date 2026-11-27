@@ -17,6 +17,7 @@ const FALLBACK_CONFIG: AppConfig = {
     alwaysOnTop: true,
     showOpenWindowsInBar: true,
     compactMode: false,
+    dockMagnification: true,
     launchAtStartup: false,
     hideInFullscreen: true,
     showOnAllDisplays: true

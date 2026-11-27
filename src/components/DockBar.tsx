@@ -17,6 +17,8 @@ import {
   SkipBack,
   SkipForward,
   SlidersHorizontal,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
   Zap
@@ -30,6 +32,7 @@ import { t } from '../i18n';
 import type {
   ActivePanel,
   AppConfig,
+  AudioAppSession,
   BackgroundApp,
   MediaInfo,
   UpdateInfo,
@@ -40,7 +43,11 @@ import type {
   VolumeInfo
 } from '../types';
 import { AppIconGlyph } from './IconMapper';
-import { ControlCenterFlyout, type ControlCenterView } from './ControlCenterFlyout';
+import {
+  ControlCenterFlyout,
+  prefetchControlCenterStatus,
+  type ControlCenterView
+} from './ControlCenterFlyout';
 import { WindowPeek } from './WindowPeek';
 import {
   BatteryIcon,
@@ -256,8 +263,11 @@ export function DockBar({
   const [ccFlyout, setCcFlyout] = useState<{ x: number; view: ControlCenterView } | null>(null);
   const [overflowTray, setOverflowTray] = useState<{ x: number } | null>(null);
   const [backgroundApps, setBackgroundApps] = useState<BackgroundApp[]>([]);
+  const [audioSessions, setAudioSessions] = useState<AudioAppSession[]>([]);
   const [hoveredOverflowLabel, setHoveredOverflowLabel] = useState<string | null>(null);
   const [trayVol, setTrayVol] = useState<VolumeInfo>({ level: 70, muted: false });
+  const volDraggingRef = useRef(false);
+  const volLockUntilRef = useRef(0);
   const [netInfo, setNetInfo] = useState<NetworkInfo>({ connected: true, kind: 'wifi' });
   const [dragOverExternal, setDragOverExternal] = useState(false);
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
@@ -288,6 +298,10 @@ export function DockBar({
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const ctxJustClosedRef = useRef<{ key: string; at: number } | null>(null);
   const rafRef = useRef<number | null>(null);
+  const waveCacheRef = useRef<{
+    scrollLeft: number;
+    items: Array<{ btn: HTMLButtonElement; centerX: number }>;
+  } | null>(null);
   const suppressNextClickRef = useRef(false);
   const runDragRef = useRef(false);
   const [runningLayout, setRunningLayout] = useState<RunningLayout>(readRunningOrder);
@@ -301,6 +315,9 @@ export function DockBar({
   const dragCandidateRef = useRef<PointerDragState | null>(null);
   const dragSnapshotRef = useRef<DragSlotSnapshot | null>(null);
   const liveDragRef = useRef<LiveDragPlan | null>(null);
+  const dragGhostRef = useRef<HTMLDivElement | null>(null);
+  const openOverlaysRef = useRef({ ctxMenu, openFolder, ccFlyout, overflowTray, peek });
+  openOverlaysRef.current = { ctxMenu, openFolder, ccFlyout, overflowTray, peek };
 
   const activeFolderObj = openFolder
     ? pinnedApps.find((p) => p.id === openFolder.id && p.kind === 'group') ?? null
@@ -319,6 +336,19 @@ export function DockBar({
       pinnedApps.map((p) => (p.id === activeFolderObj.id ? { ...p, name: nextName } : p))
     );
   };
+
+  // Sync running app order & learned exe mappings live across primary and secondary monitors
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === RUNNING_ORDER_KEY) {
+        setRunningLayout(readRunningOrder());
+      } else if (e.key === LEARNED_PROCS_KEY) {
+        setLearnedProcs(readLearnedProcs());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   // Clear any open flyout/peek/menu when suspended for fullscreen on ANY display
   useEffect(() => {
@@ -344,7 +374,9 @@ export function DockBar({
       if (paused) return;
       const [v, n] = await Promise.all([dockBridge.getVolume(), dockBridge.getNetworkInfo()]);
       if (!alive) return;
-      setTrayVol((prev) => (prev.level === v.level && prev.muted === v.muted ? prev : v));
+      if (!volDraggingRef.current && Date.now() >= volLockUntilRef.current) {
+        setTrayVol((prev) => (prev.level === v.level && prev.muted === v.muted ? prev : v));
+      }
       setNetInfo((prev) =>
         prev.connected === n.connected &&
         prev.kind === n.kind &&
@@ -362,6 +394,42 @@ export function DockBar({
       clearInterval(id);
     };
   }, [Boolean(ccFlyout), isSecondary]);
+
+  // Lightweight audio session sync for dock sound badges & right-click mute (paused when suspended)
+  useEffect(() => {
+    let alive = true;
+    let paused = false;
+    const stopSusp = dockBridge.onSuspended((s) => {
+      paused = s;
+    });
+    const pollAudio = async () => {
+      if (paused) return;
+      const list = await dockBridge.getAudioSessions();
+      if (!alive) return;
+      setAudioSessions((prev) => {
+        if (
+          prev.length === list.length &&
+          prev.every(
+            (p, i) =>
+              p.id === list[i].id &&
+              p.active === list[i].active &&
+              p.muted === list[i].muted &&
+              p.isSystem === list[i].isSystem
+          )
+        ) {
+          return prev;
+        }
+        return list;
+      });
+    };
+    void pollAudio();
+    const id = setInterval(() => void pollAudio(), 4500);
+    return () => {
+      alive = false;
+      stopSusp();
+      clearInterval(id);
+    };
+  }, []);
 
   // Poll background/tray running apps when the overflow chevron popover is open
   useEffect(() => {
@@ -384,6 +452,7 @@ export function DockBar({
   // Report exact interactive regions (with generous hover halo) to Main process
   useLayoutEffect(() => {
     const reportHitRects = () => {
+      waveCacheRef.current = null;
       const rects: Array<{ left: number; top: number; right: number; bottom: number }> = [];
       const barEl = dockBarRef.current;
       if (barEl) {
@@ -470,60 +539,54 @@ export function DockBar({
 
   // Close context menu, Control Center flyout, overflow tray, or folder on Esc, blur, or click outside
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+    const dismissAll = () => {
+      const ov = openOverlaysRef.current;
+      const wasDragging = Boolean(dragCandidateRef.current?.active);
+      if (ov.peek) {
         dockBridge.stopWindowPeek();
         dockBridge.clearLiveThumbs();
         setPeek(null);
-        setCtxMenu(null);
-        setOpenFolder(null);
-        setCcFlyout(null);
-        setOverflowTray(null);
+      }
+      if (ov.ctxMenu) setCtxMenu(null);
+      if (ov.openFolder) setOpenFolder(null);
+      if (ov.ccFlyout) setCcFlyout(null);
+      if (ov.overflowTray) setOverflowTray(null);
+      if (dragCandidateRef.current || dragSnapshotRef.current || liveDragRef.current) {
         dragCandidateRef.current = null;
         dragSnapshotRef.current = null;
         liveDragRef.current = null;
-        dockBridge.setDockInteractive(false);
+        if (wasDragging) dockBridge.setDockInteractive(false);
         setPointerDrag(null);
         setLiveDrag(null);
       }
     };
-    const onBlur = () => {
-      dockBridge.stopWindowPeek();
-      dockBridge.clearLiveThumbs();
-      setPeek(null);
-      setCtxMenu(null);
-      setOpenFolder(null);
-      setCcFlyout(null);
-      setOverflowTray(null);
-      dragCandidateRef.current = null;
-      dragSnapshotRef.current = null;
-      liveDragRef.current = null;
-      dockBridge.setDockInteractive(false);
-      setPointerDrag(null);
-      setLiveDrag(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismissAll();
     };
+    const onBlur = () => dismissAll();
     const onDocMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      if (ctxMenu && !target.closest('.taskbar-ctx-menu')) {
+      const ov = openOverlaysRef.current;
+      if (ov.ctxMenu && !target.closest('.taskbar-ctx-menu')) {
         if (e.button === 2) {
-          ctxJustClosedRef.current = { key: ctxKeyOf(ctxMenu), at: Date.now() };
+          ctxJustClosedRef.current = { key: ctxKeyOf(ov.ctxMenu), at: Date.now() };
         }
         setCtxMenu(null);
       }
-      if (peek && !target.closest('.window-peek') && !target.closest('.dock-app-btn')) {
+      if (ov.peek && !target.closest('.window-peek') && !target.closest('.dock-app-btn')) {
         setPeek(null);
       }
-      if (openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
+      if (ov.openFolder && !target.closest('.folder-popover') && !target.closest('.dock-app-btn')) {
         // Blur first so an in-progress folder rename commits before the input unmounts
         (document.activeElement as HTMLElement | null)?.blur?.();
         setOpenFolder(null);
       }
-      if (ccFlyout && !target.closest('.control-center-flyout') && !target.closest('.cc-trigger-btn')) {
+      if (ov.ccFlyout && !target.closest('.control-center-flyout') && !target.closest('.cc-trigger-btn')) {
         setCcFlyout(null);
       }
       if (
-        overflowTray &&
+        ov.overflowTray &&
         !target.closest('.tray-overflow-popover') &&
         !target.closest('.tray-overflow-btn') &&
         !target.closest('.taskbar-ctx-menu')
@@ -539,7 +602,7 @@ export function DockBar({
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousedown', onDocMouseDown);
     };
-  }, [ctxMenu, openFolder, ccFlyout, overflowTray, peek]);
+  }, []);
 
   // Imperative pointer-drag start: ZERO React state update until pointer moves >= 11px!
   const dragActionsRef = useRef<{
@@ -717,32 +780,47 @@ export function DockBar({
 
       if (!candidate.active) {
         candidate.active = true;
+        candidate.x = e.clientX;
+        candidate.y = e.clientY;
         setPeek(null);
         dockBridge.setDockInteractive(true);
         dragActionsRef.current?.applyWaveAtClientX(null);
         setTooltip(null);
         dragSnapshotRef.current = captureSnapshot(candidate.payload);
-        liveDragRef.current = {
+        const initialPlan: LiveDragPlan = {
           gapIndex:
             dragSnapshotRef.current && dragSnapshotRef.current.origIndex >= 0
               ? dragSnapshotRef.current.origIndex
               : null,
           mergeTargetId: null
         };
+        liveDragRef.current = initialPlan;
+        setLiveDrag(initialPlan);
+        setPointerDrag({ ...candidate });
+      } else {
+        candidate.x = e.clientX;
+        candidate.y = e.clientY;
+        if (dragGhostRef.current) {
+          dragGhostRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0) translate(-50%, -50%) scale(1.12)`;
+        }
       }
 
-      candidate.x = e.clientX;
-      candidate.y = e.clientY;
+      const prevPlan = liveDragRef.current;
       const nextPlan = computeLivePlan(
         dragSnapshotRef.current,
         candidate.payload,
         e.clientX,
         e.clientY,
-        liveDragRef.current
+        prevPlan
       );
-      liveDragRef.current = nextPlan;
-      setLiveDrag(nextPlan);
-      setPointerDrag({ ...candidate });
+      if (
+        !prevPlan ||
+        prevPlan.gapIndex !== nextPlan.gapIndex ||
+        prevPlan.mergeTargetId !== nextPlan.mergeTargetId
+      ) {
+        liveDragRef.current = nextPlan;
+        setLiveDrag(nextPlan);
+      }
     };
 
     const onUp = (e: PointerEvent) => {
@@ -806,29 +884,88 @@ export function DockBar({
     };
   }, []);
 
+  // Invalidate cached button centers whenever dock items or strip layout inputs change
+  useEffect(() => {
+    waveCacheRef.current = null;
+  }, [
+    pinnedApps,
+    runningWindows,
+    settings.compactMode,
+    settings.musicPosition,
+    settings.showOpenWindowsInBar
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
   const applyWaveAtClientX = (clientX: number | null) => {
     const strip = stripRef.current;
     if (!strip || runDragRef.current) return;
-    const buttons = strip.querySelectorAll<HTMLButtonElement>('.dock-app-btn');
+
+    if (
+      clientX === null ||
+      settings.dockMagnification === false ||
+      dragCandidateRef.current?.active ||
+      pointerDrag?.active
+    ) {
+      const cached = waveCacheRef.current?.items;
+      if (cached) {
+        for (let i = 0; i < cached.length; i++) {
+          if (cached[i].btn.style.transform) cached[i].btn.style.transform = '';
+        }
+      } else {
+        const buttons = strip.querySelectorAll<HTMLButtonElement>('.dock-app-btn');
+        for (let i = 0; i < buttons.length; i++) {
+          if (buttons[i].style.transform) buttons[i].style.transform = '';
+        }
+      }
+      waveCacheRef.current = null;
+      return;
+    }
+
+    // Measure all button centers in a single read pass (zero style writes interleaved)
+    if (!waveCacheRef.current) {
+      const buttons = strip.querySelectorAll<HTMLButtonElement>('.dock-app-btn');
+      const items: Array<{ btn: HTMLButtonElement; centerX: number }> = [];
+      for (let i = 0; i < buttons.length; i++) {
+        const btn = buttons[i];
+        const rect = btn.getBoundingClientRect();
+        items.push({ btn, centerX: rect.left + rect.width / 2 });
+      }
+      waveCacheRef.current = { scrollLeft: strip.scrollLeft, items };
+    }
+
+    const cache = waveCacheRef.current;
+    const scrollDelta = strip.scrollLeft - cache.scrollLeft;
     const dir = settings.position === 'top' ? 1 : -1;
 
-    buttons.forEach((btn) => {
-      if (clientX === null || pointerDrag?.active) {
-        btn.style.transform = '';
-        return;
+    // Pure write pass: zero DOM queries or layout reads inside the loop
+    for (let i = 0; i < cache.items.length; i++) {
+      const { btn, centerX } = cache.items[i];
+      const dist = Math.abs(clientX - (centerX - scrollDelta));
+      if (dist > 170) {
+        if (btn.style.transform) btn.style.transform = '';
+        continue;
       }
-      const rect = btn.getBoundingClientRect();
-      const center = rect.left + rect.width / 2;
-      const dist = Math.abs(clientX - center);
       const influence = Math.exp(-(dist * dist) / (2 * 48 * 48));
       const scale = 1 + 0.28 * influence;
       const liftY = dir * 9 * influence;
 
       btn.style.transform = `translateY(${liftY.toFixed(1)}px) scale(${scale.toFixed(3)})`;
-    });
+    }
   };
 
+  useEffect(() => {
+    if (settings.dockMagnification === false) {
+      applyWaveAtClientX(null);
+    }
+  }, [settings.dockMagnification]);
+
   const handleStripMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (settings.dockMagnification === false) return;
     if (dragCandidateRef.current?.active || pointerDrag?.active) return;
     const x = e.clientX;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -1315,6 +1452,9 @@ export function DockBar({
         : Math.min(350, Math.max(65, Math.round(rect.bottom + 6)))
       : undefined;
     setCtxMenu({ ...payload, x: clampedX, anchorOffset });
+    if (payload.kind === 'pinned' || payload.kind === 'running' || payload.kind === 'bg') {
+      void dockBridge.getAudioSessions().then(setAudioSessions);
+    }
   };
 
   const winToPinned = (win: RunningWindow): PinnedApp | null => {
@@ -1541,6 +1681,32 @@ export function DockBar({
     }
   };
 
+  const findAudioSessionForProc = (procName?: string | null): AudioAppSession | undefined => {
+    if (!procName) return undefined;
+    const key = procName.replace(/\.exe$/i, '').toLowerCase();
+    if (!key) return undefined;
+    return audioSessions.find((s) => !s.isSystem && s.id.toLowerCase() === key);
+  };
+
+  const findAudioSessionForPinned = (
+    app: PinnedApp,
+    matchedWin?: RunningWindow
+  ): AudioAppSession | undefined => {
+    if (app.kind === 'group') return undefined;
+    return (
+      findAudioSessionForProc(matchedWin?.processName) ??
+      findAudioSessionForProc(app.exeName) ??
+      findAudioSessionForProc(learnedProcs[app.id])
+    );
+  };
+
+  const toggleAppAudioMute = (sessionId: string) => {
+    setAudioSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, muted: !s.muted } : s))
+    );
+    void dockBridge.toggleAudioSessionMute(sessionId);
+  };
+
   const renderAppThumb = (app: PinnedApp, size = 21) => {
     if (app.iconDataUrl) {
       return (
@@ -1575,8 +1741,11 @@ export function DockBar({
     <>
       {pointerDrag?.active && (
         <div
+          ref={dragGhostRef}
           className="drag-ghost"
-          style={{ left: pointerDrag.x, top: pointerDrag.y }}
+          style={{
+            transform: `translate3d(${pointerDrag.x}px, ${pointerDrag.y}px, 0) translate(-50%, -50%) scale(1.12)`
+          }}
         >
           {renderAppThumb(pointerDrag.payload.item, 22)}
         </div>
@@ -1593,7 +1762,7 @@ export function DockBar({
         <div
           className="dock-tooltip"
           style={{
-            left: Math.max(60, Math.min(window.innerWidth - 60, tooltip.x)),
+            left: Math.max(76, Math.min(window.innerWidth - 76, tooltip.x)),
             ...(settings.position === 'bottom' ? { bottom: 68 } : { top: 68 })
           }}
         >
@@ -1742,7 +1911,14 @@ export function DockBar({
           }
           netInfo={netInfo}
           trayVol={trayVol}
-          onVolumeChange={setTrayVol}
+          onVolumeChange={(v) => {
+            volLockUntilRef.current = Date.now() + 900;
+            setTrayVol(v);
+          }}
+          onVolumeDragChange={(dragging) => {
+            volDraggingRef.current = dragging;
+            if (!dragging) volLockUntilRef.current = Date.now() + 900;
+          }}
           stats={stats}
           kbdLang={kbdLang}
           onSwitchKbdLang={onSwitchKbdLang}
@@ -2043,6 +2219,30 @@ export function DockBar({
                   <span>{settings.language === 'ar' ? 'فتح نافذة جديدة' : 'Open new window'}</span>
                 </button>
               )}
+              {(() => {
+                const sess = findAudioSessionForProc(ctxMenu.running!.processName);
+                if (!sess) return null;
+                return (
+                  <button
+                    className="taskbar-ctx-item"
+                    onClick={() => {
+                      toggleAppAudioMute(sess.id);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    {sess.muted ? <Volume2 size={14} style={{ color: 'var(--accent)' }} /> : <VolumeX size={14} />}
+                    <span>
+                      {sess.muted
+                        ? settings.language === 'ar'
+                          ? 'إلغاء كتم التطبيق'
+                          : 'Unmute app'
+                        : settings.language === 'ar'
+                          ? 'كتم التطبيق'
+                          : 'Mute app'}
+                    </span>
+                  </button>
+                );
+              })()}
               {ctxMenu.running.hwnd && (
                 <button
                   className="taskbar-ctx-item"
@@ -2123,6 +2323,30 @@ export function DockBar({
                   <span>{settings.language === 'ar' ? 'تثبيت في الشريط' : 'Pin to taskbar'}</span>
                 </button>
               )}
+              {(() => {
+                const sess = findAudioSessionForProc(ctxMenu.bg!.processName);
+                if (!sess) return null;
+                return (
+                  <button
+                    className="taskbar-ctx-item"
+                    onClick={() => {
+                      toggleAppAudioMute(sess.id);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    {sess.muted ? <Volume2 size={14} style={{ color: 'var(--accent)' }} /> : <VolumeX size={14} />}
+                    <span>
+                      {sess.muted
+                        ? settings.language === 'ar'
+                          ? 'إلغاء كتم التطبيق'
+                          : 'Unmute app'
+                        : settings.language === 'ar'
+                          ? 'كتم التطبيق'
+                          : 'Mute app'}
+                    </span>
+                  </button>
+                );
+              })()}
               <button
                 className="taskbar-ctx-item danger"
                 onClick={() => {
@@ -2168,6 +2392,32 @@ export function DockBar({
                   <span>{settings.language === 'ar' ? 'فتح نافذة جديدة' : 'Open new window'}</span>
                 </button>
               )}
+
+              {ctxMenu.pinned.kind !== 'group' && (() => {
+                const matched = findWindowForPinned(ctxMenu.pinned!);
+                const sess = findAudioSessionForPinned(ctxMenu.pinned!, matched);
+                if (!sess) return null;
+                return (
+                  <button
+                    className="taskbar-ctx-item"
+                    onClick={() => {
+                      toggleAppAudioMute(sess.id);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    {sess.muted ? <Volume2 size={14} style={{ color: 'var(--accent)' }} /> : <VolumeX size={14} />}
+                    <span>
+                      {sess.muted
+                        ? settings.language === 'ar'
+                          ? 'إلغاء كتم التطبيق'
+                          : 'Unmute app'
+                        : settings.language === 'ar'
+                          ? 'كتم التطبيق'
+                          : 'Mute app'}
+                    </span>
+                  </button>
+                );
+              })()}
 
               {ctxMenu.pinnedIndex > 0 && (
                 <button
@@ -2244,7 +2494,15 @@ export function DockBar({
               <button
                 className="inline-music-trigger"
                 onClick={() => toggle('media')}
-                title={media?.title ? `${media.title}${media.artist ? ` — ${media.artist}` : ''}` : dict.media}
+                onMouseEnter={(e) =>
+                  showTooltipFor(
+                    e,
+                    media?.title
+                      ? `${media.title}${media.artist ? ` — ${media.artist}` : ''}`
+                      : dict.media
+                  )
+                }
+                onMouseLeave={() => setTooltip(null)}
               >
                 {mediaArtworkUrl ? (
                   <img
@@ -2276,22 +2534,51 @@ export function DockBar({
 
               <button
                 className="media-mini-btn"
+                aria-label={settings.language === 'ar' ? 'السابق' : 'Previous'}
                 onClick={() => void quickMedia('previous')}
-                title="Previous"
+                onMouseEnter={(e) =>
+                  showTooltipFor(e, settings.language === 'ar' ? 'السابق' : 'Previous')
+                }
+                onMouseLeave={() => setTooltip(null)}
               >
                 <SkipBack size={12} />
               </button>
               <button
                 className="media-mini-btn play"
+                aria-label={
+                  media?.status === 'Playing'
+                    ? settings.language === 'ar'
+                      ? 'إيقاف مؤقت'
+                      : 'Pause'
+                    : settings.language === 'ar'
+                      ? 'تشغيل'
+                      : 'Play'
+                }
                 onClick={() => void quickMedia('playPause')}
-                title="Play / Pause"
+                onMouseEnter={(e) =>
+                  showTooltipFor(
+                    e,
+                    media?.status === 'Playing'
+                      ? settings.language === 'ar'
+                        ? 'إيقاف مؤقت'
+                        : 'Pause'
+                      : settings.language === 'ar'
+                        ? 'تشغيل'
+                        : 'Play'
+                  )
+                }
+                onMouseLeave={() => setTooltip(null)}
               >
                 {media?.status === 'Playing' ? <Pause size={12} /> : <Play size={12} />}
               </button>
               <button
                 className="media-mini-btn"
+                aria-label={settings.language === 'ar' ? 'التالي' : 'Next'}
                 onClick={() => void quickMedia('next')}
-                title="Next"
+                onMouseEnter={(e) =>
+                  showTooltipFor(e, settings.language === 'ar' ? 'التالي' : 'Next')
+                }
+                onMouseLeave={() => setTooltip(null)}
               >
                 <SkipForward size={12} />
               </button>
@@ -2321,7 +2608,7 @@ export function DockBar({
               ref={stripRef}
               className={`dock-apps-strip ${isLiveDragging ? 'is-live-dragging' : ''} ${
                 justDropped ? 'no-transform-transition' : ''
-              }`}
+              } ${settings.dockMagnification === false ? 'no-wave' : ''}`}
               style={
                 isExternalInsertGap
                   ? { paddingRight: slotStep, transition: 'padding-right 0.2s cubic-bezier(0.22, 1, 0.36, 1)' }
@@ -2491,6 +2778,18 @@ export function DockBar({
                         } ${appWindows.length > 1 ? 'multi' : ''}`}
                       />
                     )}
+                    {(() => {
+                      const sess = findAudioSessionForPinned(app, matchedWin);
+                      if (!sess || (!sess.active && !sess.muted)) return null;
+                      return (
+                        <span
+                          className={`dock-audio-badge ${sess.muted ? 'is-muted' : 'is-playing'}`}
+                          aria-hidden="true"
+                        >
+                          {sess.muted ? <VolumeX size={8} strokeWidth={2.4} /> : <Volume2 size={8} strokeWidth={2.4} />}
+                        </span>
+                      );
+                    })()}
                   </button>
                 );
               })}
@@ -2572,6 +2871,18 @@ export function DockBar({
                         procActive ? 'active' : procWindows.every((w) => w.isMinimized) ? 'minimized' : ''
                       } ${procWindows.length > 1 ? 'multi' : ''}`}
                     />
+                    {(() => {
+                      const sess = findAudioSessionForProc(win.processName);
+                      if (!sess || (!sess.active && !sess.muted)) return null;
+                      return (
+                        <span
+                          className={`dock-audio-badge ${sess.muted ? 'is-muted' : 'is-playing'}`}
+                          aria-hidden="true"
+                        >
+                          {sess.muted ? <VolumeX size={8} strokeWidth={2.4} /> : <Volume2 size={8} strokeWidth={2.4} />}
+                        </span>
+                      );
+                    })()}
                   </button>
                 );
               })}
@@ -2605,7 +2916,7 @@ export function DockBar({
                     settings.language === 'ar' ? 'الأيقونات المخفية' : 'Hidden icons'
                   );
                 }}
-                title={settings.language === 'ar' ? 'الأيقونات المخفية' : 'Hidden icons'}
+                onMouseLeave={() => setTooltip(null)}
               >
                 <ChevronUp
                   size={14}
@@ -2625,7 +2936,15 @@ export function DockBar({
                 className="tray-lang-pill tabular"
                 aria-label={`Switch Keyboard Language (${kbdLang})`}
                 onClick={onSwitchKbdLang}
-                title="Switch Keyboard Language"
+                onMouseEnter={(e) =>
+                  showTooltipFor(
+                    e,
+                    settings.language === 'ar'
+                      ? `تبديل لغة الكيبورد (${kbdLang})`
+                      : `Keyboard language (${kbdLang})`
+                  )
+                }
+                onMouseLeave={() => setTooltip(null)}
               >
                 <GlobeLangIcon />
                 <span>{kbdLang}</span>
@@ -2634,6 +2953,7 @@ export function DockBar({
               <div
                 ref={ccClusterRef}
                 className={`tray-control-cluster ${ccFlyout ? 'open' : ''}`}
+                onMouseEnter={prefetchControlCenterStatus}
               >
                 <button
                   className={`tray-cluster-btn cc-trigger-btn ${ccFlyout ? 'active' : ''}`}
@@ -2644,13 +2964,23 @@ export function DockBar({
                     toggleControlCenter();
                   }}
                   onContextMenu={(e) => openContextMenu(e, { kind: 'network' })}
-                  title={
-                    netInfo.connected
-                      ? `${netInfo.ssid ?? 'Connected'}${
-                          netInfo.signalPercent !== undefined ? ` (${netInfo.signalPercent}%)` : ''
-                        }`
-                      : 'Not Connected'
+                  onMouseEnter={(e) =>
+                    showTooltipFor(
+                      e,
+                      netInfo.connected
+                        ? netInfo.kind === 'ethernet'
+                          ? settings.language === 'ar'
+                            ? 'اتصال سلكي (Ethernet)'
+                            : 'Ethernet connected'
+                          : `${netInfo.ssid ?? (settings.language === 'ar' ? 'متصل' : 'Connected')}${
+                              netInfo.signalPercent !== undefined ? ` (${netInfo.signalPercent}%)` : ''
+                            }`
+                        : settings.language === 'ar'
+                          ? 'غير متصل بالإنترنت'
+                          : 'Not connected'
+                    )
                   }
+                  onMouseLeave={() => setTooltip(null)}
                 >
                   <WifiIcon
                     connected={netInfo.connected}
@@ -2671,15 +3001,44 @@ export function DockBar({
                     toggleControlCenter();
                   }}
                   onContextMenu={(e) => openContextMenu(e, { kind: 'volume' })}
+                  onMouseEnter={(e) =>
+                    showTooltipFor(
+                      e,
+                      `${dict.volume}: ${
+                        trayVol.muted
+                          ? settings.language === 'ar'
+                            ? 'مكتوم'
+                            : 'Muted'
+                          : `${trayVol.level}%`
+                      }`
+                    )
+                  }
+                  onMouseLeave={() => setTooltip(null)}
                   onWheel={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     const delta = e.deltaY < 0 ? 4 : -4;
                     const nextLevel = Math.max(0, Math.min(100, (trayVol.muted ? 0 : trayVol.level) + delta));
+                    volLockUntilRef.current = Date.now() + 900;
                     setTrayVol({ level: nextLevel, muted: nextLevel === 0 });
-                    void dockBridge.setVolume(nextLevel).then(setTrayVol);
+                    setTooltip((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            label: `${dict.volume}: ${
+                              nextLevel === 0
+                                ? settings.language === 'ar'
+                                  ? 'مكتوم'
+                                  : 'Muted'
+                                : `${nextLevel}%`
+                            }`
+                          }
+                        : prev
+                    );
+                    void dockBridge.setVolume(nextLevel).then((v) => {
+                      if (!volDraggingRef.current) setTrayVol(v);
+                    });
                   }}
-                  title={`${dict.volume}: ${trayVol.muted ? 'Muted' : `${trayVol.level}%`}`}
                 >
                   <VolumeIcon level={trayVol.level} muted={trayVol.muted} />
                   <span className="tray-vol-pct tabular">
@@ -2698,7 +3057,19 @@ export function DockBar({
                         e.stopPropagation();
                         toggleControlCenter();
                       }}
-                      title={`${dict.battery}: ${stats.batteryPercent}%`}
+                      onMouseEnter={(e) =>
+                        showTooltipFor(
+                          e,
+                          `${dict.battery}: ${stats.batteryPercent}%${
+                            stats.batteryCharging
+                              ? settings.language === 'ar'
+                                ? ' · يشحن'
+                                : ' · Charging'
+                              : ''
+                          }`
+                        )
+                      }
+                      onMouseLeave={() => setTooltip(null)}
                     >
                       <BatteryIcon percent={stats.batteryPercent} charging={stats.batteryCharging} />
                       <span>{stats.batteryPercent}%</span>
@@ -2715,7 +3086,8 @@ export function DockBar({
             aria-expanded={activePanel === 'calendar'}
             onClick={() => toggle('calendar')}
             onContextMenu={(e) => openContextMenu(e, { kind: 'clock' })}
-            title={dict.calendar}
+            onMouseEnter={(e) => showTooltipFor(e, dict.calendar)}
+            onMouseLeave={() => setTooltip(null)}
           >
             <span className="tray-clock-time">{timeStr}</span>
             <span className="tray-clock-date">{dateStr}</span>
@@ -2727,7 +3099,8 @@ export function DockBar({
               aria-label={dict.settings}
               aria-expanded={activePanel === 'settings'}
               onClick={() => toggle('settings')}
-              title={dict.settings}
+              onMouseEnter={(e) => showTooltipFor(e, dict.settings)}
+              onMouseLeave={() => setTooltip(null)}
               style={
                 activePanel === 'settings'
                   ? { background: 'var(--surface-hover)', color: 'var(--text-primary)' }
@@ -2746,9 +3119,12 @@ export function DockBar({
 
           <button
             className="show-desktop-sliver"
-            aria-label="Show Desktop"
+            aria-label={settings.language === 'ar' ? 'إظهار سطح المكتب' : 'Show Desktop'}
             onClick={() => void dockBridge.systemAction('desktop')}
-            title="Show Desktop"
+            onMouseEnter={(e) =>
+              showTooltipFor(e, settings.language === 'ar' ? 'إظهار سطح المكتب' : 'Show Desktop')
+            }
+            onMouseLeave={() => setTooltip(null)}
           />
         </div>
       </div>

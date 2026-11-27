@@ -70,6 +70,8 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
   const peekingRef = useRef<string | null>(null);
   const thumbBoxRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const lastSlotsSigRef = useRef('');
+  const scrollRafRef = useRef<number | null>(null);
 
   const activeMedia = localMedia ?? propMedia;
 
@@ -116,6 +118,15 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
       });
     }
 
+    const sig = slots
+      .map(
+        (s) =>
+          `${s.hwnd}:${Math.round(s.left)},${Math.round(s.top)},${Math.round(s.width)},${Math.round(s.height)}`
+      )
+      .join(';');
+    if (sig === lastSlotsSigRef.current) return;
+    lastSlotsSigRef.current = sig;
+
     if (slots.length > 0) {
       dockBridge.setLiveThumbs(slots);
     } else {
@@ -123,12 +134,26 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
     }
   }, []);
 
+  const scheduleScrollSync = useCallback(() => {
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      syncLiveThumbSlots();
+    });
+  }, [syncLiveThumbSlots]);
+
   useLayoutEffect(() => {
     syncLiveThumbSlots();
     // Re-sync once layout settles (e.g. if media bar appeared asynchronously)
     const t1 = window.setTimeout(syncLiveThumbSlots, 60);
     window.addEventListener('resize', syncLiveThumbSlots);
+    const ro =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(syncLiveThumbSlots)
+        : null;
+    if (ro && containerRef.current) ro.observe(containerRef.current);
     return () => {
+      ro?.disconnect();
       window.clearTimeout(t1);
       window.removeEventListener('resize', syncLiveThumbSlots);
     };
@@ -180,6 +205,8 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
   useEffect(() => {
     return () => {
       if (peekTimerRef.current) window.clearTimeout(peekTimerRef.current);
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      lastSlotsSigRef.current = '';
       if (peekingRef.current !== null) {
         peekingRef.current = null;
         dockBridge.stopWindowPeek();
@@ -251,7 +278,7 @@ export const WindowPeek = forwardRef<HTMLDivElement, Props>(function WindowPeek(
       ref={assignRootRef}
       className="window-peek"
       style={{ left, width, ...(position === 'bottom' ? { bottom: 65 } : { top: 65 }) }}
-      onScroll={syncLiveThumbSlots}
+      onScroll={scheduleScrollSync}
       onMouseEnter={onMouseEnter}
       onMouseLeave={() => {
         stopLivePeekNow();

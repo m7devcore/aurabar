@@ -170,6 +170,7 @@ export interface DockSettings {
   alwaysOnTop: boolean;
   showOpenWindowsInBar: boolean;
   compactMode: boolean;
+  dockMagnification: boolean;
   launchAtStartup: boolean;
   hideInFullscreen: boolean;
   showOnAllDisplays: boolean;

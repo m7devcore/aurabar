@@ -1216,17 +1216,36 @@ export async function toggleAudioSessionMute(sessionId: string): Promise<void> {
   await win32Daemon.send(`AUDIO_SESSION_MUTE ${sessionId}`);
 }
 
-export async function getScreenBrightness(): Promise<BrightnessInfo> {
-  const raw = await win32Daemon.send('BRIGHT_GET');
-  try {
-    const p = JSON.parse(raw) as Partial<BrightnessInfo>;
-    return {
-      supported: Boolean(p.supported),
-      level: typeof p.level === 'number' ? Math.max(0, Math.min(100, p.level)) : 100
-    };
-  } catch {
-    return { supported: false, level: 100 };
+let brightnessCache: { at: number; info: BrightnessInfo } | null = null;
+let brightnessInFlight: Promise<BrightnessInfo> | null = null;
+const BRIGHTNESS_TTL_MS = 10_000;
+
+export function getScreenBrightness(): Promise<BrightnessInfo> {
+  if (brightnessCache && Date.now() - brightnessCache.at < BRIGHTNESS_TTL_MS) {
+    return Promise.resolve(brightnessCache.info);
   }
+  if (brightnessInFlight) return brightnessInFlight;
+  brightnessInFlight = win32Daemon
+    .send('BRIGHT_GET')
+    .then((raw) => {
+      try {
+        const p = JSON.parse(raw) as Partial<BrightnessInfo>;
+        const info: BrightnessInfo = {
+          supported: Boolean(p.supported),
+          level: typeof p.level === 'number' ? Math.max(0, Math.min(100, p.level)) : 100
+        };
+        brightnessCache = { at: Date.now(), info };
+        return info;
+      } catch {
+        const fallback: BrightnessInfo = { supported: false, level: 100 };
+        brightnessCache = { at: Date.now(), info: fallback };
+        return fallback;
+      }
+    })
+    .finally(() => {
+      brightnessInFlight = null;
+    });
+  return brightnessInFlight;
 }
 
 export async function setScreenBrightness(level: number): Promise<BrightnessInfo> {
@@ -1234,23 +1253,49 @@ export async function setScreenBrightness(level: number): Promise<BrightnessInfo
   const raw = await win32Daemon.send(`BRIGHT_SET ${clamped}`);
   try {
     const p = JSON.parse(raw) as Partial<BrightnessInfo>;
-    return {
+    const info: BrightnessInfo = {
       supported: Boolean(p.supported),
       level: typeof p.level === 'number' ? Math.max(0, Math.min(100, p.level)) : clamped
     };
+    brightnessCache = { at: Date.now(), info };
+    return info;
   } catch {
-    return { supported: false, level: clamped };
+    const fallback: BrightnessInfo = { supported: false, level: clamped };
+    brightnessCache = { at: Date.now(), info: fallback };
+    return fallback;
   }
 }
 
-export async function getNightLightStatus(): Promise<NightLightInfo> {
-  const raw = await win32Daemon.send('NIGHTLIGHT_GET');
-  try {
-    const p = JSON.parse(raw) as Partial<NightLightInfo>;
-    return { supported: Boolean(p.supported), enabled: Boolean(p.enabled) };
-  } catch {
-    return { supported: false, enabled: false };
+let nightLightCache: { at: number; info: NightLightInfo } | null = null;
+let nightLightInFlight: Promise<NightLightInfo> | null = null;
+const NIGHTLIGHT_TTL_MS = 6_000;
+
+export function getNightLightStatus(): Promise<NightLightInfo> {
+  if (nightLightCache && Date.now() - nightLightCache.at < NIGHTLIGHT_TTL_MS) {
+    return Promise.resolve(nightLightCache.info);
   }
+  if (nightLightInFlight) return nightLightInFlight;
+  nightLightInFlight = win32Daemon
+    .send('NIGHTLIGHT_GET')
+    .then((raw) => {
+      try {
+        const p = JSON.parse(raw) as Partial<NightLightInfo>;
+        const info: NightLightInfo = {
+          supported: Boolean(p.supported),
+          enabled: Boolean(p.enabled)
+        };
+        nightLightCache = { at: Date.now(), info };
+        return info;
+      } catch {
+        const fallback: NightLightInfo = { supported: false, enabled: false };
+        nightLightCache = { at: Date.now(), info: fallback };
+        return fallback;
+      }
+    })
+    .finally(() => {
+      nightLightInFlight = null;
+    });
+  return nightLightInFlight;
 }
 
 export async function toggleNightLight(): Promise<NightLightInfo> {
@@ -1259,12 +1304,18 @@ export async function toggleNightLight(): Promise<NightLightInfo> {
     const p = JSON.parse(raw) as Partial<NightLightInfo>;
     if (!p.supported) {
       void shell.openExternal('ms-settings:nightlight');
-      return { supported: false, enabled: false };
+      const fallback: NightLightInfo = { supported: false, enabled: false };
+      nightLightCache = { at: Date.now(), info: fallback };
+      return fallback;
     }
-    return { supported: true, enabled: Boolean(p.enabled) };
+    const info: NightLightInfo = { supported: true, enabled: Boolean(p.enabled) };
+    nightLightCache = { at: Date.now(), info };
+    return info;
   } catch {
     void shell.openExternal('ms-settings:nightlight');
-    return { supported: false, enabled: false };
+    const fallback: NightLightInfo = { supported: false, enabled: false };
+    nightLightCache = { at: Date.now(), info: fallback };
+    return fallback;
   }
 }
 

@@ -152,7 +152,9 @@ function computeIslandBounds() {
   // Tall enough for the expanded island with lyrics; the window is click-through outside it
   const height = 360;
   const x = Math.round(display.bounds.x + (display.bounds.width - width) / 2);
-  const y = display.bounds.y + 4;
+  const topOffset =
+    currentConfig?.settings.position === 'top' ? getReservedHeightPx(currentConfig.settings) + 4 : 4;
+  const y = display.bounds.y + topOffset;
   return { x, y, width, height };
 }
 
@@ -216,6 +218,22 @@ function syncKeepOnTop(settings: DockSettings): void {
 }
 
 let lastExtraHwndsKey = '';
+let liveThumbOwner: Electron.WebContents | null = null;
+let livePeekOwner: Electron.WebContents | null = null;
+
+function clearLiveThumbsIfOwner(sender?: Electron.WebContents | null): void {
+  if (!sender || liveThumbOwner === null || liveThumbOwner === sender) {
+    liveThumbOwner = null;
+    clearLiveThumbnails();
+  }
+}
+
+function stopLivePeekIfOwner(sender?: Electron.WebContents | null): void {
+  if (!sender || livePeekOwner === null || livePeekOwner === sender) {
+    livePeekOwner = null;
+    stopLiveWindowPeek();
+  }
+}
 
 function syncExtraHwndsToBridge(): void {
   const hwnds: string[] = [];
@@ -334,8 +352,8 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
   });
   win.on('blur', () => {
     entry.interactiveLock = false;
-    stopLiveWindowPeek();
-    clearLiveThumbnails();
+    stopLivePeekIfOwner(win.webContents);
+    clearLiveThumbsIfOwner(win.webContents);
     if (entry.popoverOpen) {
       entry.popoverOpen = false;
       if (!win.isDestroyed()) win.webContents.send('aurabar:blurred');
@@ -529,8 +547,8 @@ function createWindows(): void {
   });
   dockWindow.on('blur', () => {
     dockInteractiveLock = false;
-    stopLiveWindowPeek();
-    clearLiveThumbnails();
+    stopLivePeekIfOwner(dockWindow?.webContents);
+    clearLiveThumbsIfOwner(dockWindow?.webContents);
     if (isPopoverOpen) {
       isPopoverOpen = false;
       dockWindow?.webContents.send('aurabar:blurred');
@@ -1054,20 +1072,27 @@ function setupTray(): void {
 function toggleDockVisibility(): void {
   if (!dockWindow || fullscreenSuspended) return;
   if (dockWindow.isVisible()) {
-    stopLiveWindowPeek();
-    clearLiveThumbnails();
+    stopLivePeekIfOwner();
+    clearLiveThumbsIfOwner();
     dockManuallyHidden = true;
     isPopoverOpen = false;
     dockInteractiveLock = false;
     dockInteractiveState = false;
     dockWindow.setIgnoreMouseEvents(true);
+    dockWindow.webContents.send('aurabar:suspended', true);
     dockWindow.hide();
     for (const entry of secondaryDocks.values()) {
       entry.popoverOpen = false;
       entry.interactiveLock = false;
       entry.interactiveState = false;
       if (!entry.win.isDestroyed()) {
+        if (entry.lastReserveKey) {
+          const hwnd = getHwndNumber(entry.win);
+          if (hwnd !== '0') void win32Daemon.send(`SEC_RELEASE ${hwnd}`);
+          entry.lastReserveKey = '';
+        }
         entry.win.setIgnoreMouseEvents(true);
+        entry.win.webContents.send('aurabar:suspended', true);
         entry.win.hide();
       }
     }
@@ -1078,6 +1103,12 @@ function toggleDockVisibility(): void {
     }
   } else {
     dockManuallyHidden = false;
+    dockWindow.webContents.send('aurabar:suspended', false);
+    for (const entry of secondaryDocks.values()) {
+      if (!entry.win.isDestroyed() && !entry.fullscreenSuspended) {
+        entry.win.webContents.send('aurabar:suspended', false);
+      }
+    }
     if (currentConfig.settings.replaceWindowsTaskbar) {
       syncTaskbarReplacement(currentConfig.settings);
     }
@@ -1331,15 +1362,19 @@ function registerIpcHandlers(): void {
   ipcMain.handle('aurabar:activate-window', (_e, pid: number, hwnd?: string) =>
     activateWindowByPid(pid, hwnd)
   );
-  ipcMain.on('aurabar:peek-start', (_e, hwnd: string) => startLiveWindowPeek(hwnd));
-  ipcMain.on('aurabar:peek-stop', () => stopLiveWindowPeek());
+  ipcMain.on('aurabar:peek-start', (e, hwnd: string) => {
+    livePeekOwner = e.sender;
+    startLiveWindowPeek(hwnd);
+  });
+  ipcMain.on('aurabar:peek-stop', (e) => stopLivePeekIfOwner(e.sender));
   ipcMain.on('aurabar:live-thumbs', (e, slots: LiveThumbSlot[]) => {
     const sec = findSecondaryEntryBySender(e.sender);
     const hostWin = sec ? sec.win : dockWindow;
     if (!hostWin || hostWin.isDestroyed() || !Array.isArray(slots) || slots.length === 0) {
-      clearLiveThumbnails();
+      clearLiveThumbsIfOwner(e.sender);
       return;
     }
+    liveThumbOwner = e.sender;
     const winBounds = hostWin.getBounds();
     const disp = screen.getDisplayMatching(winBounds);
     const scale = disp.scaleFactor || 1;
@@ -1361,7 +1396,7 @@ function registerIpcHandlers(): void {
     });
     setLiveThumbnails(physicalSlots);
   });
-  ipcMain.on('aurabar:live-thumbs-clear', () => clearLiveThumbnails());
+  ipcMain.on('aurabar:live-thumbs-clear', (e) => clearLiveThumbsIfOwner(e.sender));
   ipcMain.handle('aurabar:wake-hidden-app', (_e, exeName?: string, installDir?: string) =>
     wakeHiddenApp(exeName, installDir)
   );

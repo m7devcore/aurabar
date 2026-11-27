@@ -236,12 +236,23 @@ export function App() {
 
   useEffect(() => {
     if (!needsMedia) return;
-    void refreshMedia();
-    const intervalMs = VIEW_MODE === 'island' || musicPosition === 'taskbar' ? 2000 : 3000;
-    const id = setInterval(() => {
-      void refreshMedia();
-    }, intervalMs);
-    return () => clearInterval(id);
+    let alive = true;
+    let timerId: number | null = null;
+    const schedule = async () => {
+      await refreshMedia();
+      if (!alive) return;
+      const delay = mediaPlayingRef.current
+        ? VIEW_MODE === 'island' || musicPosition === 'taskbar'
+          ? 2000
+          : 2500
+        : 4500;
+      timerId = window.setTimeout(() => void schedule(), delay);
+    };
+    void schedule();
+    return () => {
+      alive = false;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
   }, [needsMedia, musicPosition, refreshMedia]);
 
   // Running windows polling — keep previous array reference when nothing visibly changed so

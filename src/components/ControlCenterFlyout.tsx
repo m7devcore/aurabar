@@ -35,14 +35,29 @@ import { BatteryIcon, GlobeLangIcon, SettingsIcon, WifiIcon } from './PremiumIco
 
 export type ControlCenterView = 'main' | 'audio' | 'wifi';
 
+let cachedBrightness: BrightnessInfo | null = null;
+let cachedNightLight: NightLightInfo | null = null;
+let lastCcPrefetchAt = 0;
+
+export function prefetchControlCenterStatus(): void {
+  const now = Date.now();
+  if (now - lastCcPrefetchAt < 4000) return;
+  lastCcPrefetchAt = now;
+  void Promise.all([dockBridge.getBrightness(), dockBridge.getNightLight()]).then(([b, nl]) => {
+    cachedBrightness = b;
+    cachedNightLight = nl;
+  });
+}
+
 interface QuickSliderProps {
   value: number;
   muted?: boolean;
   ariaLabel: string;
   onChange: (next: number, commit: boolean) => void;
+  onDragChange?: (dragging: boolean) => void;
 }
 
-function QuickSlider({ value, muted = false, ariaLabel, onChange }: QuickSliderProps) {
+function QuickSlider({ value, muted = false, ariaLabel, onChange, onDragChange }: QuickSliderProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
@@ -97,6 +112,7 @@ function QuickSlider({ value, muted = false, ariaLabel, onChange }: QuickSliderP
         e.currentTarget.setPointerCapture(e.pointerId);
         draggingRef.current = true;
         setDragging(true);
+        onDragChange?.(true);
         dockBridge.setDockInteractive(true);
         onChange(valueFromClientX(e.clientX), true);
       }}
@@ -110,6 +126,7 @@ function QuickSlider({ value, muted = false, ariaLabel, onChange }: QuickSliderP
         e.stopPropagation();
         draggingRef.current = false;
         setDragging(false);
+        onDragChange?.(false);
         dockBridge.setDockInteractive(false);
         onChange(valueFromClientX(e.clientX), true);
         if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -119,6 +136,7 @@ function QuickSlider({ value, muted = false, ariaLabel, onChange }: QuickSliderP
       onPointerCancel={() => {
         draggingRef.current = false;
         setDragging(false);
+        onDragChange?.(false);
         dockBridge.setDockInteractive(false);
       }}
     >
@@ -139,6 +157,7 @@ interface Props {
   netInfo: NetworkInfo;
   trayVol: VolumeInfo;
   onVolumeChange: (v: VolumeInfo) => void;
+  onVolumeDragChange?: (dragging: boolean) => void;
   stats: SystemStats;
   kbdLang: string;
   onSwitchKbdLang: () => void;
@@ -156,6 +175,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
     netInfo,
     trayVol,
     onVolumeChange,
+    onVolumeDragChange,
     stats,
     kbdLang,
     onSwitchKbdLang,
@@ -166,8 +186,12 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
 ) {
   const isAr = lang === 'ar';
 
-  const [brightness, setBrightness] = useState<BrightnessInfo>({ supported: false, level: 100 });
-  const [nightLight, setNightLight] = useState<NightLightInfo>({ supported: false, enabled: false });
+  const [brightness, setBrightness] = useState<BrightnessInfo>(
+    () => cachedBrightness ?? { supported: false, level: 100 }
+  );
+  const [nightLight, setNightLight] = useState<NightLightInfo>(
+    () => cachedNightLight ?? { supported: false, enabled: false }
+  );
   const [devices, setDevices] = useState<AudioOutputDevice[]>([]);
   const [sessions, setSessions] = useState<AudioAppSession[]>([]);
   const [audioLoaded, setAudioLoaded] = useState(false);
@@ -179,23 +203,46 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
   const volTimerRef = useRef<number | null>(null);
   const brightSendAtRef = useRef(0);
   const brightTimerRef = useRef<number | null>(null);
+  const brightDraggingRef = useRef(false);
+  const brightLockUntilRef = useRef(0);
   const sessionSendAtRef = useRef<Record<string, number>>({});
   const sessionTimerRef = useRef<Record<string, number>>({});
+  const sessionDraggingRef = useRef<Set<string>>(new Set());
+  const sessionLockUntilRef = useRef<Record<string, number>>({});
 
   // Load brightness & night light immediately when Control Center opens
   useEffect(() => {
     let alive = true;
     void Promise.all([dockBridge.getBrightness(), dockBridge.getNightLight()]).then(([b, nl]) => {
+      cachedBrightness = b;
+      cachedNightLight = nl;
       if (!alive) return;
-      setBrightness(b);
+      if (!brightDraggingRef.current && Date.now() >= brightLockUntilRef.current) {
+        setBrightness(b);
+      }
       setNightLight(nl);
     });
     return () => {
       alive = false;
+      onVolumeDragChange?.(false);
       if (volTimerRef.current) window.clearTimeout(volTimerRef.current);
       if (brightTimerRef.current) window.clearTimeout(brightTimerRef.current);
       for (const id of Object.values(sessionTimerRef.current)) window.clearTimeout(id);
     };
+  }, []);
+
+  const mergeIncomingSessions = useCallback((incoming: AudioAppSession[]) => {
+    const now = Date.now();
+    setSessions((prev) => {
+      const prevById = new Map(prev.map((s) => [s.id, s]));
+      return incoming.map((s) => {
+        const locked =
+          sessionDraggingRef.current.has(s.id) || now < (sessionLockUntilRef.current[s.id] ?? 0);
+        if (!locked) return s;
+        const old = prevById.get(s.id);
+        return old ? { ...s, volume: old.volume, muted: old.muted } : s;
+      });
+    });
   }, []);
 
   const refreshAudio = useCallback(async () => {
@@ -204,9 +251,9 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
       dockBridge.getAudioSessions()
     ]);
     setDevices(devs);
-    setSessions(sess);
+    mergeIncomingSessions(sess);
     setAudioLoaded(true);
-  }, []);
+  }, [mergeIncomingSessions]);
 
   // Poll audio devices + per-app mixer sessions while on the Audio sub-view
   useEffect(() => {
@@ -219,7 +266,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
       ]);
       if (!alive) return;
       setDevices(devs);
-      setSessions(sess);
+      mergeIncomingSessions(sess);
       setAudioLoaded(true);
     };
     void load();
@@ -228,7 +275,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
       alive = false;
       window.clearInterval(id);
     };
-  }, [view]);
+  }, [view, mergeIncomingSessions]);
 
   const refreshWifi = useCallback(async () => {
     setWifiLoading(true);
@@ -265,7 +312,12 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
 
   const handleBrightness = (nextLevel: number, commit: boolean) => {
     const clamped = Math.max(0, Math.min(100, Math.round(nextLevel)));
-    setBrightness((prev) => ({ ...prev, level: clamped }));
+    brightLockUntilRef.current = Date.now() + 900;
+    setBrightness((prev) => {
+      const next = { ...prev, level: clamped };
+      cachedBrightness = next;
+      return next;
+    });
     const now = performance.now();
     if (commit || now - brightSendAtRef.current >= 36) {
       brightSendAtRef.current = now;
@@ -286,6 +338,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
 
   const handleSessionVol = (sessionId: string, nextLevel: number, commit: boolean) => {
     const clamped = Math.max(0, Math.min(100, Math.round(nextLevel)));
+    sessionLockUntilRef.current[sessionId] = Date.now() + 900;
     setSessions((prev) =>
       prev.map((s) =>
         s.id === sessionId ? { ...s, volume: clamped, muted: clamped === 0 } : s
@@ -313,6 +366,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
   };
 
   const handleSessionMute = (sessionId: string) => {
+    sessionLockUntilRef.current[sessionId] = Date.now() + 900;
     setSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, muted: !s.muted } : s))
     );
@@ -414,9 +468,16 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
               className={`cc-toggle-tile ${nightLight.enabled ? 'active warm' : ''}`}
               onClick={() => {
                 if (nightLight.supported) {
-                  setNightLight((prev) => ({ ...prev, enabled: !prev.enabled }));
+                  setNightLight((prev) => {
+                    const next = { ...prev, enabled: !prev.enabled };
+                    cachedNightLight = next;
+                    return next;
+                  });
                 }
-                void dockBridge.toggleNightLight().then(setNightLight);
+                void dockBridge.toggleNightLight().then((nl) => {
+                  cachedNightLight = nl;
+                  setNightLight(nl);
+                });
               }}
               title={isAr ? 'الضوء الليلي' : 'Night light'}
             >
@@ -488,6 +549,10 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
                   value={brightness.level}
                   ariaLabel={isAr ? 'سطوع الشاشة' : 'Screen Brightness'}
                   onChange={handleBrightness}
+                  onDragChange={(d) => {
+                    brightDraggingRef.current = d;
+                    if (!d) brightLockUntilRef.current = Date.now() + 900;
+                  }}
                 />
                 <span className="vol-pct tabular">{brightness.level}%</span>
               </div>
@@ -508,6 +573,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
                 muted={trayVol.muted}
                 ariaLabel={isAr ? 'مستوى الصوت' : 'Master Volume'}
                 onChange={handleMasterVol}
+                onDragChange={onVolumeDragChange}
               />
               <button
                 type="button"
@@ -647,6 +713,7 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
                     muted={trayVol.muted}
                     ariaLabel="Master"
                     onChange={handleMasterVol}
+                    onDragChange={onVolumeDragChange}
                   />
                 </div>
               </div>
@@ -690,6 +757,14 @@ export const ControlCenterFlyout = forwardRef<HTMLDivElement, Props>(function Co
                         muted={s.muted}
                         ariaLabel={s.name}
                         onChange={(v, commit) => handleSessionVol(s.id, v, commit)}
+                        onDragChange={(d) => {
+                          if (d) {
+                            sessionDraggingRef.current.add(s.id);
+                          } else {
+                            sessionDraggingRef.current.delete(s.id);
+                            sessionLockUntilRef.current[s.id] = Date.now() + 900;
+                          }
+                        }}
                       />
                     </div>
                   </div>

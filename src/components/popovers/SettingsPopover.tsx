@@ -111,22 +111,42 @@ export function SettingsPopover({
       {/* 0. App updates (installed build only) */}
       {updateInfo?.available && <UpdateCard info={updateInfo} dict={dict} />}
 
-      {/* 1. Music Player Placement */}
-      <div>
-        <div className="settings-section-title">{dict.musicSection}</div>
-        <div className="segmented-control">
-          <button
-            className={`segmented-btn ${settings.musicPosition === 'top' ? 'active' : ''}`}
-            onClick={() => onUpdateSettings({ musicPosition: 'top' })}
-          >
-            {dict.musicTop}
-          </button>
-          <button
-            className={`segmented-btn ${settings.musicPosition === 'taskbar' ? 'active' : ''}`}
-            onClick={() => onUpdateSettings({ musicPosition: 'taskbar' })}
-          >
-            {dict.musicTaskbar}
-          </button>
+      {/* 1. Music Player & Taskbar Placement */}
+      <div className="grid-2">
+        <div>
+          <div className="settings-section-title">{dict.musicSection}</div>
+          <div className="segmented-control">
+            <button
+              className={`segmented-btn ${settings.musicPosition === 'top' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ musicPosition: 'top' })}
+            >
+              {dict.musicTop}
+            </button>
+            <button
+              className={`segmented-btn ${settings.musicPosition === 'taskbar' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ musicPosition: 'taskbar' })}
+            >
+              {dict.musicTaskbar}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div className="settings-section-title">{dict.dockPosition}</div>
+          <div className="segmented-control">
+            <button
+              className={`segmented-btn ${settings.position === 'bottom' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ position: 'bottom' })}
+            >
+              {dict.posBottom}
+            </button>
+            <button
+              className={`segmented-btn ${settings.position === 'top' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ position: 'top' })}
+            >
+              {dict.posTop}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -194,6 +214,15 @@ export function SettingsPopover({
             title={dict.compactMode}
             desc={dict.compactModeDesc}
             onToggle={() => onUpdateSettings({ compactMode: !settings.compactMode })}
+          />
+
+          <ToggleSwitch
+            checked={settings.dockMagnification !== false}
+            title={dict.dockMagnification}
+            desc={dict.dockMagnificationDesc}
+            onToggle={() =>
+              onUpdateSettings({ dockMagnification: settings.dockMagnification === false })
+            }
           />
 
           <ToggleSwitch

@@ -23,6 +23,9 @@ export interface Translations {
   musicSection: string;
   musicTop: string;
   musicTaskbar: string;
+  dockPosition: string;
+  posBottom: string;
+  posTop: string;
   appearanceSection: string;
   theme: string;
   themeObsidian: string;
@@ -36,6 +39,8 @@ export interface Translations {
   showOpenWindowsDesc: string;
   compactMode: string;
   compactModeDesc: string;
+  dockMagnification: string;
+  dockMagnificationDesc: string;
   alwaysOnTop: string;
   alwaysOnTopDesc: string;
   launchAtStartup: string;
@@ -97,6 +102,9 @@ const EN: Translations = {
   musicSection: 'Music Player Position',
   musicTop: 'Top Island (Under Camera)',
   musicTaskbar: 'In Taskbar (Left)',
+  dockPosition: 'Taskbar Position',
+  posBottom: 'Bottom',
+  posTop: 'Top',
   appearanceSection: 'Appearance & Theme',
   theme: 'Theme',
   themeObsidian: 'Classy Obsidian',
@@ -110,6 +118,8 @@ const EN: Translations = {
   showOpenWindowsDesc: 'Display unpinned running apps in the center dock',
   compactMode: 'Compact Taskbar',
   compactModeDesc: 'Use a slimmer 44px bar height',
+  dockMagnification: 'Icon Wave Magnification',
+  dockMagnificationDesc: 'Smoothly lift and scale taskbar icons under your cursor',
   alwaysOnTop: 'Always on Top',
   alwaysOnTopDesc: 'Keep taskbar and overlays above other open apps',
   launchAtStartup: 'Launch at Windows startup',
@@ -171,6 +181,9 @@ const AR: Translations = {
   musicSection: 'مكان شريط الأغاني',
   musicTop: 'في الأعلى (تحت الكاميرا)',
   musicTaskbar: 'داخل شريط المهام',
+  dockPosition: 'مكان شريط المهام',
+  posBottom: 'الأسفل',
+  posTop: 'الأعلى',
   appearanceSection: 'المظهر والخطوط',
   theme: 'الثيم',
   themeObsidian: 'أوبسيديان كلاسيك',
@@ -184,6 +197,8 @@ const AR: Translations = {
   showOpenWindowsDesc: 'عرض البرامج الشغالة غير المثبتة في منتصف الشريط',
   compactMode: 'شريط مدمج (Compact)',
   compactModeDesc: 'تقليل ارتفاع الشريط إلى 44px لمظهر أنحف',
+  dockMagnification: 'تكبير الأيقونات عند التمرير',
+  dockMagnificationDesc: 'رفع وتكبير أيقونات الشريط بنعومة تحت مؤشر الماوس',
   alwaysOnTop: 'دائماً في المقدمة',
   alwaysOnTopDesc: 'إبقاء الشريط والأيقونات فوق جميع النوافذ المفتوحة',
   launchAtStartup: 'التشغيل مع ويندوز',

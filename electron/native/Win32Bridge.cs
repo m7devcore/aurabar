@@ -2611,20 +2611,38 @@ namespace AuraBarNative {
       keybd_event(modVk, 0, 2, 0);
     }
 
+    private static void SafeReleaseCom(object obj) {
+      if (obj != null) {
+        try {
+          if (Marshal.IsComObject(obj)) Marshal.ReleaseComObject(obj);
+        } catch { }
+      }
+    }
+
     private static IAudioEndpointVolume GetEndpointVolume() {
-      IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-      IMMDevice device;
-      enumerator.GetDefaultAudioEndpoint(0, 1, out device);
-      if (device == null) return null;
-      Guid iid = typeof(IAudioEndpointVolume).GUID;
-      object obj;
-      device.Activate(ref iid, 23, IntPtr.Zero, out obj);
-      return obj as IAudioEndpointVolume;
+      IMMDeviceEnumerator enumerator = null;
+      IMMDevice device = null;
+      try {
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return null;
+        Guid iid = typeof(IAudioEndpointVolume).GUID;
+        object obj;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return null;
+        IAudioEndpointVolume vol = obj as IAudioEndpointVolume;
+        if (vol == null) SafeReleaseCom(obj);
+        return vol;
+      } catch {
+        return null;
+      } finally {
+        SafeReleaseCom(device);
+        SafeReleaseCom(enumerator);
+      }
     }
 
     private static string GetVolumeJson() {
+      IAudioEndpointVolume vol = null;
       try {
-        IAudioEndpointVolume vol = GetEndpointVolume();
+        vol = GetEndpointVolume();
         if (vol == null) return "{\"level\":50,\"muted\":false}";
         float scalar;
         bool muted;
@@ -2634,32 +2652,42 @@ namespace AuraBarNative {
         return "{\"level\":" + pct + ",\"muted\":" + (muted ? "true" : "false") + "}";
       } catch {
         return "{\"level\":50,\"muted\":false}";
+      } finally {
+        SafeReleaseCom(vol);
       }
     }
 
     private static string SetVolumeLevel(int pct) {
+      IAudioEndpointVolume vol = null;
       try {
-        IAudioEndpointVolume vol = GetEndpointVolume();
+        vol = GetEndpointVolume();
         if (vol != null) {
           int clamped = Math.Max(0, Math.Min(100, pct));
           Guid ctx = Guid.Empty;
           vol.SetMasterVolumeLevelScalar(clamped / 100f, ref ctx);
           if (clamped > 0) vol.SetMute(false, ref ctx);
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(vol);
+      }
       return GetVolumeJson();
     }
 
     private static string ToggleVolumeMute() {
+      IAudioEndpointVolume vol = null;
       try {
-        IAudioEndpointVolume vol = GetEndpointVolume();
+        vol = GetEndpointVolume();
         if (vol != null) {
           bool muted;
           vol.GetMute(out muted);
           Guid ctx = Guid.Empty;
           vol.SetMute(!muted, ref ctx);
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(vol);
+      }
       return GetVolumeJson();
     }
 
@@ -2695,13 +2723,16 @@ namespace AuraBarNative {
       string cached;
       if (winAppIdCache.TryGetValue(key, out cached)) return cached;
       string appId = "";
+      IPropertyStore store = null;
       try {
         Guid iid = typeof(IPropertyStore).GUID;
-        IPropertyStore store;
         if (SHGetPropertyStoreForWindow(hWnd, ref iid, out store) == 0 && store != null) {
           appId = ReadAppIdFromStore(store);
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(store);
+      }
       if (winAppIdCache.Count > 250) winAppIdCache.Clear();
       winAppIdCache[key] = appId;
       return appId;
@@ -2709,13 +2740,16 @@ namespace AuraBarNative {
 
     private static string GetShortcutAppId(string filePath) {
       if (string.IsNullOrWhiteSpace(filePath)) return "";
+      IPropertyStore store = null;
       try {
         Guid iid = typeof(IPropertyStore).GUID;
-        IPropertyStore store;
         if (SHGetPropertyStoreFromParsingName(filePath, IntPtr.Zero, 0, ref iid, out store) == 0 && store != null) {
           return ReadAppIdFromStore(store);
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(store);
+      }
       return "";
     }
 
@@ -2788,8 +2822,8 @@ namespace AuraBarNative {
 
     private static string GetDeviceFriendlyName(IMMDevice dev) {
       if (dev == null) return "";
+      IPropertyStore store = null;
       try {
-        IPropertyStore store;
         if (dev.OpenPropertyStore(0, out store) != 0 || store == null) return "";
         PROPVARIANT pv;
         if (store.GetValue(ref PKEY_Device_FriendlyName, out pv) == 0) {
@@ -2801,22 +2835,29 @@ namespace AuraBarNative {
             PropVariantClear(ref pv);
           }
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(store);
+      }
       return "";
     }
 
     private static string GetAudioDevicesJson() {
+      IMMDeviceEnumerator enumerator = null;
+      IMMDeviceCollection col = null;
       try {
-        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         string defaultId = "";
+        IMMDevice defDev = null;
         try {
-          IMMDevice defDev;
           if (enumerator.GetDefaultAudioEndpoint(0, 1, out defDev) == 0 && defDev != null) {
             defDev.GetId(out defaultId);
           }
-        } catch { }
+        } catch {
+        } finally {
+          SafeReleaseCom(defDev);
+        }
 
-        IMMDeviceCollection col;
         if (enumerator.EnumAudioEndpoints(0, 1, out col) != 0 || col == null) return "[]";
         uint count;
         if (col.GetCount(out count) != 0) return "[]";
@@ -2824,35 +2865,46 @@ namespace AuraBarNative {
         StringBuilder sb = new StringBuilder("[");
         bool first = true;
         for (uint i = 0; i < count; i++) {
-          IMMDevice dev;
-          if (col.Item(i, out dev) != 0 || dev == null) continue;
-          string id;
-          if (dev.GetId(out id) != 0 || string.IsNullOrEmpty(id)) continue;
-          string name = GetDeviceFriendlyName(dev);
-          if (string.IsNullOrEmpty(name)) name = "Audio Device";
-          bool isDef = string.Equals(id, defaultId, StringComparison.OrdinalIgnoreCase);
-          if (!first) sb.Append(',');
-          first = false;
-          sb.Append("{\"id\":\"").Append(JsonEscape(id))
-            .Append("\",\"name\":\"").Append(JsonEscape(name))
-            .Append("\",\"isDefault\":").Append(isDef ? "true" : "false")
-            .Append('}');
+          IMMDevice dev = null;
+          try {
+            if (col.Item(i, out dev) != 0 || dev == null) continue;
+            string id;
+            if (dev.GetId(out id) != 0 || string.IsNullOrEmpty(id)) continue;
+            string name = GetDeviceFriendlyName(dev);
+            if (string.IsNullOrEmpty(name)) name = "Audio Device";
+            bool isDef = string.Equals(id, defaultId, StringComparison.OrdinalIgnoreCase);
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append("{\"id\":\"").Append(JsonEscape(id))
+              .Append("\",\"name\":\"").Append(JsonEscape(name))
+              .Append("\",\"isDefault\":").Append(isDef ? "true" : "false")
+              .Append('}');
+          } finally {
+            SafeReleaseCom(dev);
+          }
         }
         sb.Append(']');
         return sb.ToString();
       } catch {
         return "[]";
+      } finally {
+        SafeReleaseCom(col);
+        SafeReleaseCom(enumerator);
       }
     }
 
     private static string SetDefaultAudioDevice(string deviceId) {
       if (!string.IsNullOrEmpty(deviceId)) {
+        IPolicyConfig policy = null;
         try {
-          IPolicyConfig policy = (IPolicyConfig)new PolicyConfigClientComObject();
+          policy = (IPolicyConfig)new PolicyConfigClientComObject();
           policy.SetDefaultEndpoint(deviceId, 0);
           policy.SetDefaultEndpoint(deviceId, 1);
           policy.SetDefaultEndpoint(deviceId, 2);
-        } catch { }
+        } catch {
+        } finally {
+          SafeReleaseCom(policy);
+        }
       }
       return GetAudioDevicesJson();
     }
@@ -2906,65 +2958,70 @@ namespace AuraBarNative {
     }
 
     private static string GetAudioSessionsJson() {
+      IMMDeviceEnumerator enumerator = null;
+      IMMDevice device = null;
+      object mgrObj = null;
+      IAudioSessionEnumerator sessionEnum = null;
       try {
-        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-        IMMDevice device;
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "[]";
         Guid iid = typeof(IAudioSessionManager2).GUID;
-        object obj;
-        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "[]";
-        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out mgrObj) != 0 || mgrObj == null) return "[]";
+        IAudioSessionManager2 mgr = mgrObj as IAudioSessionManager2;
         if (mgr == null) return "[]";
 
-        IAudioSessionEnumerator sessionEnum;
         if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "[]";
         int count;
         if (sessionEnum.GetCount(out count) != 0) return "[]";
 
         Dictionary<string, AudioSessionGroup> grouped = new Dictionary<string, AudioSessionGroup>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < count; i++) {
-          IAudioSessionControl ctrl;
-          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
-          int state = 0;
-          ctrl.GetState(out state);
-          if (state == 2) continue; // Expired
+          IAudioSessionControl ctrl = null;
+          try {
+            if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+            int state = 0;
+            ctrl.GetState(out state);
+            if (state == 2) continue; // Expired
 
-          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
-          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
-          if (ctrl2 == null || vol == null) continue;
+            IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+            ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+            if (ctrl2 == null || vol == null) continue;
 
-          string name, exePath;
-          bool isSys;
-          string key = ComputeAudioSessionKey(ctrl2, out name, out exePath, out isSys);
-          if (string.IsNullOrEmpty(key)) continue;
+            string name, exePath;
+            bool isSys;
+            string key = ComputeAudioSessionKey(ctrl2, out name, out exePath, out isSys);
+            if (string.IsNullOrEmpty(key)) continue;
 
-          float scalar = 1f;
-          bool muted = false;
-          vol.GetMasterVolume(out scalar);
-          vol.GetMute(out muted);
-          int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100f)));
-          bool active = state == 1;
+            float scalar = 1f;
+            bool muted = false;
+            vol.GetMasterVolume(out scalar);
+            vol.GetMute(out muted);
+            int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100f)));
+            bool active = state == 1;
 
-          AudioSessionGroup existing;
-          if (grouped.TryGetValue(key, out existing)) {
-            if (active && !existing.active) {
-              existing.active = true;
-              existing.volume = pct;
-              existing.muted = muted;
+            AudioSessionGroup existing;
+            if (grouped.TryGetValue(key, out existing)) {
+              if (active && !existing.active) {
+                existing.active = true;
+                existing.volume = pct;
+                existing.muted = muted;
+              }
+              if (string.IsNullOrEmpty(existing.exePath) && !string.IsNullOrEmpty(exePath)) {
+                existing.exePath = exePath;
+              }
+            } else {
+              grouped[key] = new AudioSessionGroup {
+                id = key,
+                name = name,
+                exePath = exePath,
+                volume = pct,
+                muted = muted,
+                isSystem = isSys,
+                active = active
+              };
             }
-            if (string.IsNullOrEmpty(existing.exePath) && !string.IsNullOrEmpty(exePath)) {
-              existing.exePath = exePath;
-            }
-          } else {
-            grouped[key] = new AudioSessionGroup {
-              id = key,
-              name = name,
-              exePath = exePath,
-              volume = pct,
-              muted = muted,
-              isSystem = isSys,
-              active = active
-            };
+          } finally {
+            SafeReleaseCom(ctrl);
           }
         }
 
@@ -2992,83 +3049,106 @@ namespace AuraBarNative {
         return sb.ToString();
       } catch {
         return "[]";
+      } finally {
+        SafeReleaseCom(sessionEnum);
+        SafeReleaseCom(mgrObj);
+        SafeReleaseCom(device);
+        SafeReleaseCom(enumerator);
       }
     }
 
     private static string SetAudioSessionVolume(string targetKey, int pct) {
       if (string.IsNullOrEmpty(targetKey)) return "ok";
+      IMMDeviceEnumerator enumerator = null;
+      IMMDevice device = null;
+      object mgrObj = null;
+      IAudioSessionEnumerator sessionEnum = null;
       try {
         int clamped = Math.Max(0, Math.Min(100, pct));
-        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-        IMMDevice device;
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "ok";
         Guid iid = typeof(IAudioSessionManager2).GUID;
-        object obj;
-        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "ok";
-        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out mgrObj) != 0 || mgrObj == null) return "ok";
+        IAudioSessionManager2 mgr = mgrObj as IAudioSessionManager2;
         if (mgr == null) return "ok";
 
-        IAudioSessionEnumerator sessionEnum;
         if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "ok";
         int count;
         if (sessionEnum.GetCount(out count) != 0) return "ok";
 
         Guid ctx = Guid.Empty;
         for (int i = 0; i < count; i++) {
-          IAudioSessionControl ctrl;
-          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
-          int state = 0;
-          ctrl.GetState(out state);
-          if (state == 2) continue;
-          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
-          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
-          if (ctrl2 == null || vol == null) continue;
+          IAudioSessionControl ctrl = null;
+          try {
+            if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+            int state = 0;
+            ctrl.GetState(out state);
+            if (state == 2) continue;
+            IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+            ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+            if (ctrl2 == null || vol == null) continue;
 
-          string dn, ep;
-          bool isSys;
-          string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
-          if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
-            vol.SetMasterVolume(clamped / 100f, ref ctx);
-            if (clamped > 0) vol.SetMute(false, ref ctx);
+            string dn, ep;
+            bool isSys;
+            string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
+            if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
+              vol.SetMasterVolume(clamped / 100f, ref ctx);
+              if (clamped > 0) vol.SetMute(false, ref ctx);
+            }
+          } finally {
+            SafeReleaseCom(ctrl);
           }
         }
-      } catch { }
+      } catch {
+      } finally {
+        SafeReleaseCom(sessionEnum);
+        SafeReleaseCom(mgrObj);
+        SafeReleaseCom(device);
+        SafeReleaseCom(enumerator);
+      }
       return "ok";
     }
 
     private static string ToggleAudioSessionMute(string targetKey) {
       if (string.IsNullOrEmpty(targetKey)) return "ok";
+      IMMDeviceEnumerator enumerator = null;
+      IMMDevice device = null;
+      object mgrObj = null;
+      IAudioSessionEnumerator sessionEnum = null;
+      List<ISimpleAudioVolume> matches = new List<ISimpleAudioVolume>();
       try {
-        IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-        IMMDevice device;
+        enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) != 0 || device == null) return "ok";
         Guid iid = typeof(IAudioSessionManager2).GUID;
-        object obj;
-        if (device.Activate(ref iid, 23, IntPtr.Zero, out obj) != 0 || obj == null) return "ok";
-        IAudioSessionManager2 mgr = obj as IAudioSessionManager2;
+        if (device.Activate(ref iid, 23, IntPtr.Zero, out mgrObj) != 0 || mgrObj == null) return "ok";
+        IAudioSessionManager2 mgr = mgrObj as IAudioSessionManager2;
         if (mgr == null) return "ok";
 
-        IAudioSessionEnumerator sessionEnum;
         if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) return "ok";
         int count;
         if (sessionEnum.GetCount(out count) != 0) return "ok";
 
-        List<ISimpleAudioVolume> matches = new List<ISimpleAudioVolume>();
         for (int i = 0; i < count; i++) {
-          IAudioSessionControl ctrl;
-          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
-          int state = 0;
-          ctrl.GetState(out state);
-          if (state == 2) continue;
-          IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
-          ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
-          if (ctrl2 == null || vol == null) continue;
+          IAudioSessionControl ctrl = null;
+          bool kept = false;
+          try {
+            if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+            int state = 0;
+            ctrl.GetState(out state);
+            if (state == 2) continue;
+            IAudioSessionControl2 ctrl2 = ctrl as IAudioSessionControl2;
+            ISimpleAudioVolume vol = ctrl as ISimpleAudioVolume;
+            if (ctrl2 == null || vol == null) continue;
 
-          string dn, ep;
-          bool isSys;
-          string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
-          if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
-            matches.Add(vol);
+            string dn, ep;
+            bool isSys;
+            string key = ComputeAudioSessionKey(ctrl2, out dn, out ep, out isSys);
+            if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase)) {
+              matches.Add(vol);
+              kept = true;
+            }
+          } finally {
+            if (!kept) SafeReleaseCom(ctrl);
           }
         }
 
@@ -3081,7 +3161,14 @@ namespace AuraBarNative {
             matches[i].SetMute(nextMuted, ref ctx);
           }
         }
-      } catch { }
+      } catch {
+      } finally {
+        for (int i = 0; i < matches.Count; i++) SafeReleaseCom(matches[i]);
+        SafeReleaseCom(sessionEnum);
+        SafeReleaseCom(mgrObj);
+        SafeReleaseCom(device);
+        SafeReleaseCom(enumerator);
+      }
       return "ok";
     }
 

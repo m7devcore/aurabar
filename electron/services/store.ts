@@ -13,6 +13,7 @@ const DEFAULT_CONFIG: AppConfig = {
     alwaysOnTop: true,
     showOpenWindowsInBar: true,
     compactMode: false,
+    dockMagnification: true,
     launchAtStartup: false,
     hideInFullscreen: true,
     showOnAllDisplays: true
@@ -90,6 +91,10 @@ export function loadConfig(): AppConfig {
           typeof rawSettings.compactMode === 'boolean'
             ? rawSettings.compactMode
             : DEFAULT_CONFIG.settings.compactMode,
+        dockMagnification:
+          typeof rawSettings.dockMagnification === 'boolean'
+            ? rawSettings.dockMagnification
+            : DEFAULT_CONFIG.settings.dockMagnification,
         launchAtStartup:
           typeof rawSettings.launchAtStartup === 'boolean'
             ? rawSettings.launchAtStartup
