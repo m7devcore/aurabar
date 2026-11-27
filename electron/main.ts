@@ -160,8 +160,8 @@ function computeIslandBounds() {
 
 function getReservedHeightPx(settings: DockSettings): number {
   const barH = settings.compactMode ? 46 : 54;
-  // Floating pill sits 4px from bottom edge + 4px clean breathing gap below maximized apps
-  return barH + 8;
+  // Floating pill sits 4px from edge + 6px clean breathing gap so maximized borders never touch
+  return barH + 10;
 }
 
 function syncTaskbarReplacement(settings: DockSettings): void {

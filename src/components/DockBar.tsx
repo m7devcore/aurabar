@@ -304,6 +304,7 @@ export function DockBar({
   } | null>(null);
   const suppressNextClickRef = useRef(false);
   const runDragRef = useRef(false);
+  const cancelRunDragRef = useRef<(() => void) | null>(null);
   const [runningLayout, setRunningLayout] = useState<RunningLayout>(readRunningOrder);
   const [learnedProcs, setLearnedProcs] = useState<Record<string, string>>(readLearnedProcs);
   const pendingLaunchRef = useRef<{
@@ -551,6 +552,9 @@ export function DockBar({
       if (ov.openFolder) setOpenFolder(null);
       if (ov.ccFlyout) setCcFlyout(null);
       if (ov.overflowTray) setOverflowTray(null);
+      if (cancelRunDragRef.current) {
+        cancelRunDragRef.current();
+      }
       if (dragCandidateRef.current || dragSnapshotRef.current || liveDragRef.current) {
         dragCandidateRef.current = null;
         dragSnapshotRef.current = null;
@@ -898,6 +902,7 @@ export function DockBar({
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (cancelRunDragRef.current) cancelRunDragRef.current();
     };
   }, []);
 
@@ -1373,10 +1378,11 @@ export function DockBar({
       });
     };
 
-    const finish = () => {
+    const finish = (cancelled = false) => {
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      cancelRunDragRef.current = null;
       if (!active) return;
       runDragRef.current = false;
       suppressNextClickRef.current = true;
@@ -1388,7 +1394,7 @@ export function DockBar({
       setJustDropped(true);
       setTimeout(() => setJustDropped(false), 50);
       clearInline();
-      if (to === from) return;
+      if (cancelled || to === from) return;
       const next = items.slice();
       next.splice(to, 0, next.splice(from, 1)[0]);
       const anchors = { ...runningLayout.anchors };
@@ -1412,9 +1418,13 @@ export function DockBar({
       }
     };
 
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
+    cancelRunDragRef.current = onCancel;
+
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   };
 
   const openContextMenu = (

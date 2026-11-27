@@ -1012,11 +1012,13 @@ export async function quitAppByPid(pid: number, executablePath?: string): Promis
     runTaskkillDetached(pidArgs);
   }
 
-  // Background image sweep only for non-system user executables
+  // Background image sweep only for non-system, non-shared-runtime user executables
   if (
     executablePath &&
     !executablePath.toLowerCase().startsWith('c:\\windows\\') &&
-    !/^(cmd|powershell|pwsh|conhost|explorer|node|python)\.exe$/i.test(path.basename(executablePath))
+    !/^(cmd|powershell|pwsh|conhost|explorer|node|python|pythonw|java|javaw|dotnet|electron|wt|windowsterminal)\.exe$/i.test(
+      path.basename(executablePath)
+    )
   ) {
     const img = path.basename(executablePath);
     if (img.toLowerCase().endsWith('.exe')) {
@@ -1579,13 +1581,6 @@ export function restoreWindowsTaskbarSync(): void {
           IntPtr h = IntPtr.Zero;
           while ((h = FindWindowEx(IntPtr.Zero, h, classes[i], null)) != IntPtr.Zero) {
             ShowWindow(h, 5);
-            if (i == 0) {
-              var abd = new APPBARDATA();
-              abd.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
-              abd.hWnd = h;
-              abd.lParam = IntPtr.Zero;
-              SHAppBarMessage(10, ref abd);
-            }
           }
         }
       }

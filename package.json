@@ -1,6 +1,6 @@
 {
   "name": "glassy",
-  "version": "1.0.0",
+  "version": "2.0.1",
   "description": "Glassy - Smart Floating Taskbar & Dynamic Island for Windows",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -67,6 +67,7 @@
       "artifactName": "Glassy-Setup-${version}.${ext}"
     },
     "nsis": {
+      "guid": "4023dd8e-5bb3-581a-aa34-f83b6e90b44c",
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,

@@ -291,6 +291,12 @@ namespace GlassyNative {
     private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [DllImport("user32.dll")]
+    private static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
@@ -628,11 +634,34 @@ namespace GlassyNative {
     private const uint WM_PEEK_STOP = 0x8011;
     private const uint WM_THUMBS_SYNC = 0x8012;
     private const uint WM_THUMBS_CLEAR = 0x8013;
+    private const uint WM_APPBAR_SYNC = 0x8014;
+    private const uint WM_APPBAR_CLEAR = 0x8015;
+    private const uint WM_APPBAR_CALLBACK = 0x8020;
+
+    private struct AppBarSpec {
+      public IntPtr monitor;
+      public bool isTop;
+      public int reservePhys;
+    }
+
+    private class AppBarSlot {
+      public IntPtr hWnd;
+      public bool isTop;
+      public RECT appliedRc;
+      public bool hasApplied;
+    }
+
+    private static readonly ManualResetEvent peekLoopReady = new ManualResetEvent(false);
+    private static readonly object appBarLock = new object();
+    private static readonly Dictionary<IntPtr, AppBarSpec> desiredAppBars = new Dictionary<IntPtr, AppBarSpec>();
+    private static readonly Dictionary<IntPtr, AppBarSlot> activeAppBars = new Dictionary<IntPtr, AppBarSlot>();
+    private static readonly HashSet<IntPtr> appBarHwndSet = new HashSet<IntPtr>();
+    private static bool inAppBarSync = false;
+    private static uint wmTaskbarCreated = 0;
     private static readonly object extraHwndsLock = new object();
     private static readonly List<IntPtr> extraDockHwnds = new List<IntPtr>();
     private static readonly Dictionary<IntPtr, RECT> extraDockRects = new Dictionary<IntPtr, RECT>();
     private static readonly Dictionary<IntPtr, RECT> savedSecWorkAreas = new Dictionary<IntPtr, RECT>();
-    private static readonly Dictionary<IntPtr, RECT> desiredSecWorkAreas = new Dictionary<IntPtr, RECT>();
     private static RECT dockTargetRect = new RECT();
     private static bool hasDockTargetRect = false;
     private static int parentElectronPid = 0;
@@ -659,15 +688,6 @@ namespace GlassyNative {
     private const int THUMB_W = 400;
     private const int THUMB_H = 240;
     private static volatile bool taskbarHiddenByUs = false;
-    // The work area we reserved for the dock; Windows resets it behind our back (a full-screen
-    // app exiting, a display change), which lets maximized windows slide under the dock
-    private static bool hasDesiredWorkArea = false;
-    private static RECT desiredWorkArea;
-    private static int primaryWorkAreaBackoffUntil = 0;
-    private static readonly Dictionary<IntPtr, int> secWorkAreaBackoffUntil = new Dictionary<IntPtr, int>();
-    private static int savedScreenLeft = 0;
-    private static int savedScreenRight = 1920;
-    private static int savedScreenBottom = 1080;
 
     private struct WinEntry {
       public long seq;
@@ -800,8 +820,6 @@ namespace GlassyNative {
     }
 
     private static volatile int lastWorkAreaChangeAt = 0;
-    private static int primaryWorkAreaLastSetAt = 0;
-    private static readonly Dictionary<IntPtr, int> secWorkAreaLastSetAt = new Dictionary<IntPtr, int>();
 
     private static bool IsExtraDockHwnd(IntPtr hWnd) {
       if (hWnd == IntPtr.Zero) return false;
@@ -819,101 +837,12 @@ namespace GlassyNative {
         lock (liveThumbLock) {
           if (liveThumbHwndSet.Contains(hWnd)) return true;
         }
+        lock (appBarLock) {
+          if (appBarHwndSet.Contains(hWnd)) return true;
+        }
       }
       if (parentElectronPid > 0 && pid == (uint)parentElectronPid) return true;
       return GetProcMeta(pid).isElectron;
-    }
-
-    // Never call SW_RESTORE + SW_MAXIMIZE on user windows (that makes every open window visibly
-    // shrink and grow / bounce on both monitors). Silently reserving the work area with fWinIni=0
-    // lets Windows apply it cleanly without waking explorer.exe to overwrite it back.
-    private static void EnforceWorkArea() {
-      if (!taskbarHiddenByUs) return;
-      // Never touch work area while ANY monitor has an active fullscreen game or video.
-      if (IsAnyMonitorFullscreen()) return;
-
-      int now = Environment.TickCount;
-
-      if (hasDesiredWorkArea && unchecked(now - primaryWorkAreaBackoffUntil) >= 0) {
-        RECT cur = new RECT();
-        if (SystemParametersInfo(0x0030, 0, ref cur, 0)) {
-          RECT want = desiredWorkArea;
-          bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
-                         Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
-          if (drifted) {
-            // If Windows/Explorer reverted our work area within 8s of us setting it, back off 60s
-            // so we never enter a tug-of-war bounce loop.
-            if (primaryWorkAreaLastSetAt != 0 && unchecked(now - primaryWorkAreaLastSetAt) < 8000) {
-              primaryWorkAreaBackoffUntil = unchecked(now + 60000);
-            } else {
-              lastWorkAreaChangeAt = now;
-              primaryWorkAreaLastSetAt = now;
-              SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: do NOT broadcast WM_SETTINGCHANGE to explorer.exe!
-              RECT after = new RECT();
-              if (SystemParametersInfo(0x0030, 0, ref after, 0)) {
-                bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
-                                    Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
-                if (stillDrifted) {
-                  primaryWorkAreaBackoffUntil = unchecked(now + 60000);
-                }
-              }
-            }
-          }
-        }
-      }
-
-      List<KeyValuePair<IntPtr, RECT>> secList = null;
-      lock (extraHwndsLock) {
-        if (desiredSecWorkAreas.Count > 0) {
-          secList = new List<KeyValuePair<IntPtr, RECT>>(desiredSecWorkAreas);
-        }
-      }
-      if (secList != null) {
-        for (int i = 0; i < secList.Count; i++) {
-          IntPtr mon = secList[i].Key;
-          int backoffUntil;
-          int lastSetAt = 0;
-          bool backedOff = false;
-          lock (extraHwndsLock) {
-            if (secWorkAreaBackoffUntil.TryGetValue(mon, out backoffUntil) && unchecked(now - backoffUntil) < 0) {
-              backedOff = true;
-            }
-            secWorkAreaLastSetAt.TryGetValue(mon, out lastSetAt);
-          }
-          if (backedOff) continue;
-          RECT want = secList[i].Value;
-          MONITORINFO mi = new MONITORINFO();
-          mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-          if (!GetMonitorInfo(mon, ref mi)) continue;
-          RECT cur = mi.rcWork;
-          bool drifted = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
-                         Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
-          if (!drifted) continue;
-          if (lastSetAt != 0 && unchecked(now - lastSetAt) < 8000) {
-            lock (extraHwndsLock) {
-              secWorkAreaBackoffUntil[mon] = unchecked(now + 60000);
-            }
-            continue;
-          }
-          lastWorkAreaChangeAt = now;
-          lock (extraHwndsLock) {
-            secWorkAreaLastSetAt[mon] = now;
-          }
-          SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: never wake explorer.exe AppBar!
-          MONITORINFO afterMi = new MONITORINFO();
-          afterMi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-          if (GetMonitorInfo(mon, ref afterMi)) {
-            RECT after = afterMi.rcWork;
-            bool stillDrifted = Math.Abs(after.left - want.left) > 6 || Math.Abs(after.top - want.top) > 6 ||
-                                Math.Abs(after.right - want.right) > 6 || Math.Abs(after.bottom - want.bottom) > 6;
-            if (stillDrifted) {
-              lock (extraHwndsLock) {
-                secWorkAreaBackoffUntil[mon] = unchecked(now + 60000);
-              }
-            }
-          }
-        }
-      }
     }
 
     private static void EnforceDockPlacement() {
@@ -1217,7 +1146,6 @@ namespace GlassyNative {
                 if (taskbarHiddenByUs) {
                   SetAllNativeTaskbarsVisible(false);
                 }
-                EnforceWorkArea();
               }
             }
           }
@@ -1508,9 +1436,10 @@ namespace GlassyNative {
           GetWindowThreadProcessId(fg, out fgPid);
           if (!IsGlassyWindow(fgPid, fg)) {
             if (IsFullscreenWindowOnMonitor(fg, monitor)) return true;
-            if (monitor == primaryMon && primaryD3dFs) return true;
-            // A normal non-fullscreen app is foreground on this monitor: monitor is NOT fullscreen
+            // A normal non-fullscreen app is foreground on this monitor (e.g. just Alt+Tabbed out
+            // of a D3D game before SHQueryUserNotificationState caught up): monitor is NOT fullscreen
             if (IsTaskbarWindow(fg)) return false;
+            if (monitor == primaryMon && primaryD3dFs) return true;
           }
         }
       }
@@ -1797,6 +1726,27 @@ namespace GlassyNative {
         ClearLiveThumbsOnThread();
         return IntPtr.Zero;
       }
+      if (msg == WM_APPBAR_SYNC) {
+        SyncAppBarsOnThread();
+        return IntPtr.Zero;
+      }
+      if (msg == WM_APPBAR_CLEAR) {
+        ClearAppBarsOnThread();
+        return IntPtr.Zero;
+      }
+      if (msg == WM_APPBAR_CALLBACK) {
+        if (wParam.ToInt64() == 1 && !inAppBarSync) { // ABN_POSCHANGED
+          SyncAppBarsOnThread();
+        }
+        return IntPtr.Zero;
+      }
+      if (wmTaskbarCreated != 0 && msg == wmTaskbarCreated) {
+        // Explorer restarted: drop stale AppBar registrations and re-register cleanly
+        ClearAppBarsOnThread();
+        if (taskbarHiddenByUs) SetAllNativeTaskbarsVisible(false);
+        SyncAppBarsOnThread();
+        return IntPtr.Zero;
+      }
       return DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
@@ -1920,7 +1870,9 @@ namespace GlassyNative {
         int r = Math.Max(0, sp.radius) * 2;
         IntPtr rgn = CreateRoundRectRgn(0, 0, sp.w + 1, sp.h + 1, r, r);
         if (rgn != IntPtr.Zero) {
-          SetWindowRgn(slotWin, rgn, false);
+          if (SetWindowRgn(slotWin, rgn, false) == 0) {
+            DeleteObject(rgn);
+          }
         }
 
         SetWindowPos(slotWin, new IntPtr(-1), sx, sy, sp.w, sp.h, 0x0010 | 0x0040); // SWP_NOACTIVATE | SWP_SHOWWINDOW
@@ -2040,6 +1992,14 @@ namespace GlassyNative {
           lpszClassName = "GlassyLiveThumbSlot"
         };
         RegisterClassEx(ref tc);
+
+        WNDCLASSEX ac = new WNDCLASSEX {
+          cbSize = (uint)Marshal.SizeOf(typeof(WNDCLASSEX)),
+          lpfnWndProc = Marshal.GetFunctionPointerForDelegate(peekWndProcRef),
+          hInstance = hInst,
+          lpszClassName = "GlassyAppBarAnchor"
+        };
+        RegisterClassEx(ref ac);
         // WS_POPUP (0x80000000), WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST
         IntPtr h = CreateWindowEx(
           0x080800A8u,
@@ -2050,6 +2010,8 @@ namespace GlassyNative {
           IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero
         );
         peekOverlayHwnd = h;
+        wmTaskbarCreated = RegisterWindowMessage("TaskbarCreated");
+        peekLoopReady.Set();
         if (h == IntPtr.Zero) return;
         SetLayeredWindowAttributes(h, 0, 255, 2); // LWA_ALPHA = 255 so WS_EX_TRANSPARENT is 100% click-through
         MSG msg;
@@ -3670,75 +3632,264 @@ namespace GlassyNative {
       return IconHandleToDataUrl(hIcon, false);
     }
 
+    private static bool RectsEqual(RECT a, RECT b) {
+      return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+    }
+
+    private static void DestroyAppBarSlotOnThread(IntPtr monitor, AppBarSlot slot) {
+      if (slot == null) return;
+      if (slot.hWnd != IntPtr.Zero) {
+        try {
+          APPBARDATA abd = new APPBARDATA();
+          abd.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+          abd.hWnd = slot.hWnd;
+          SHAppBarMessage(1u, ref abd); // ABM_REMOVE
+        } catch { }
+        lock (appBarLock) {
+          appBarHwndSet.Remove(slot.hWnd);
+        }
+        try { DestroyWindow(slot.hWnd); } catch { }
+        slot.hWnd = IntPtr.Zero;
+      }
+      activeAppBars.Remove(monitor);
+    }
+
+    private static void ClearAppBarsOnThread() {
+      inAppBarSync = true;
+      try {
+        List<KeyValuePair<IntPtr, AppBarSlot>> copy = new List<KeyValuePair<IntPtr, AppBarSlot>>(activeAppBars);
+        for (int i = 0; i < copy.Count; i++) {
+          DestroyAppBarSlotOnThread(copy[i].Key, copy[i].Value);
+        }
+        activeAppBars.Clear();
+      } finally {
+        inAppBarSync = false;
+      }
+    }
+
+    // Official Per-Monitor Delta AppBar (SHAppBarMessage):
+    // Queries Explorer via ABM_QUERYPOS to detect what Windows' native taskbar already reserves on
+    // each monitor (e.g. 48 DIP if shown, 0 DIP if Auto-Hide or disabled on Monitor 2), then claims
+    // ONLY the exact remaining delta (or full height on Top/Auto-Hide) via ABM_SETPOS. Explorer
+    // itself updates rcWork, DisplayArea, Snap Layouts, and all Chromium/Electron/Win32 apps!
+    private static void SyncAppBarsOnThread() {
+      if (inAppBarSync) return;
+      inAppBarSync = true;
+      try {
+        Dictionary<IntPtr, AppBarSpec> wanted;
+        lock (appBarLock) {
+          wanted = new Dictionary<IntPtr, AppBarSpec>(desiredAppBars);
+        }
+
+        // 1) Remove AppBars for monitors that no longer want reserved space
+        List<IntPtr> toRemove = new List<IntPtr>();
+        foreach (IntPtr mon in activeAppBars.Keys) {
+          if (!wanted.ContainsKey(mon)) toRemove.Add(mon);
+        }
+        for (int i = 0; i < toRemove.Count; i++) {
+          AppBarSlot oldSlot;
+          if (activeAppBars.TryGetValue(toRemove[i], out oldSlot)) {
+            DestroyAppBarSlotOnThread(toRemove[i], oldSlot);
+          }
+        }
+
+        // 2) Create or update each desired monitor's Delta AppBar
+        IntPtr hInst = GetModuleHandle(null);
+        foreach (KeyValuePair<IntPtr, AppBarSpec> kv in wanted) {
+          IntPtr mon = kv.Key;
+          AppBarSpec spec = kv.Value;
+          MONITORINFO mi = new MONITORINFO();
+          mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (spec.reservePhys <= 0 || !GetMonitorInfo(mon, ref mi)) {
+            AppBarSlot staleSlot;
+            if (activeAppBars.TryGetValue(mon, out staleSlot)) {
+              DestroyAppBarSlotOnThread(mon, staleSlot);
+            }
+            continue;
+          }
+
+          AppBarSlot slot;
+          if (!activeAppBars.TryGetValue(mon, out slot) || slot.hWnd == IntPtr.Zero || !IsWindow(slot.hWnd)) {
+            // 100% invisible (LWA_ALPHA=0), click-through, non-activating AppBar anchor window
+            const uint ANCHOR_EX = 0x080800A0u; // TOOLWINDOW | NOACTIVATE | LAYERED | TRANSPARENT
+            IntPtr w = CreateWindowEx(
+              ANCHOR_EX,
+              "GlassyAppBarAnchor",
+              "",
+              0x80000000u, // WS_POPUP
+              mi.rcMonitor.left,
+              mi.rcMonitor.top,
+              1,
+              1,
+              IntPtr.Zero,
+              IntPtr.Zero,
+              hInst,
+              IntPtr.Zero
+            );
+            if (w == IntPtr.Zero) continue;
+            SetLayeredWindowAttributes(w, 0, 0, 2); // alpha = 0 (invisible)
+
+            APPBARDATA reg = new APPBARDATA();
+            reg.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+            reg.hWnd = w;
+            reg.uCallbackMessage = WM_APPBAR_CALLBACK;
+            uint regOk = SHAppBarMessage(0u, ref reg); // ABM_NEW
+            if (regOk == 0) {
+              try { DestroyWindow(w); } catch { }
+              continue;
+            }
+            lock (appBarLock) {
+              appBarHwndSet.Add(w);
+            }
+            slot = new AppBarSlot { hWnd = w, isTop = spec.isTop, hasApplied = false };
+            activeAppBars[mon] = slot;
+          }
+
+          // Query Explorer for the available strip next to any existing native taskbar on this monitor
+          APPBARDATA q = new APPBARDATA();
+          q.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+          q.hWnd = slot.hWnd;
+          q.uEdge = spec.isTop ? 1u : 3u; // ABE_TOP : ABE_BOTTOM
+          q.rc = mi.rcMonitor;
+          if (spec.isTop) {
+            q.rc.bottom = mi.rcMonitor.top + spec.reservePhys;
+          } else {
+            q.rc.top = mi.rcMonitor.bottom - spec.reservePhys;
+          }
+          SHAppBarMessage(2u, ref q); // ABM_QUERYPOS
+
+          bool needDelta = false;
+          if (spec.isTop) {
+            int wantBottom = mi.rcMonitor.top + spec.reservePhys;
+            if (q.rc.top < wantBottom) {
+              q.rc.bottom = wantBottom;
+              needDelta = (q.rc.bottom - q.rc.top) > 0;
+            }
+          } else {
+            int wantTop = mi.rcMonitor.bottom - spec.reservePhys;
+            if (q.rc.bottom > wantTop) {
+              q.rc.top = wantTop;
+              needDelta = (q.rc.bottom - q.rc.top) > 0;
+            }
+          }
+
+          if (!needDelta) {
+            // Native taskbar already reserves >= Glassy's height on this monitor; no delta bar needed!
+            DestroyAppBarSlotOnThread(mon, slot);
+            continue;
+          }
+
+          if (slot.hasApplied && slot.isTop == spec.isTop && RectsEqual(slot.appliedRc, q.rc)) {
+            continue;
+          }
+
+          lastWorkAreaChangeAt = Environment.TickCount;
+          SHAppBarMessage(3u, ref q); // ABM_SETPOS
+          SetWindowPos(
+            slot.hWnd,
+            IntPtr.Zero,
+            q.rc.left,
+            q.rc.top,
+            Math.Max(1, q.rc.right - q.rc.left),
+            Math.Max(1, q.rc.bottom - q.rc.top),
+            0x0004 | 0x0010 | 0x0040 // SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
+          );
+          slot.isTop = spec.isTop;
+          slot.appliedRc = q.rc;
+          slot.hasApplied = true;
+          lastWorkAreaChangeAt = Environment.TickCount;
+
+          // Verify Windows updated rcWork on this monitor; if an exotic Windows build ignored
+          // secondary-monitor ABM_SETPOS, fall back cleanly to SPI_SETWORKAREA for that monitor.
+          MONITORINFO afterMi = new MONITORINFO();
+          afterMi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (GetMonitorInfo(mon, ref afterMi)) {
+            bool ok = spec.isTop
+              ? (afterMi.rcWork.top >= mi.rcMonitor.top + spec.reservePhys - 3)
+              : (afterMi.rcWork.bottom <= mi.rcMonitor.bottom - spec.reservePhys + 3);
+            if (!ok) {
+              RECT fb = mi.rcMonitor;
+              if (spec.isTop) fb.top = mi.rcMonitor.top + spec.reservePhys;
+              else fb.bottom = mi.rcMonitor.bottom - spec.reservePhys;
+              SystemParametersInfo(0x002F, 0, ref fb, 0);
+            }
+          }
+        }
+      } catch { } finally {
+        inAppBarSync = false;
+      }
+    }
+
+    private static void SyncAppBarsSync() {
+      peekLoopReady.WaitOne(1000);
+      IntPtr ov = peekOverlayHwnd;
+      if (ov == IntPtr.Zero) return;
+      IntPtr res;
+      SendMessageTimeoutRaw(ov, WM_APPBAR_SYNC, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1500, out res);
+    }
+
+    private static void ClearAppBarsSync() {
+      IntPtr ov = peekOverlayHwnd;
+      if (ov == IntPtr.Zero) return;
+      IntPtr res;
+      SendMessageTimeoutRaw(ov, WM_APPBAR_CLEAR, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1000, out res);
+    }
+
     private static void HideWindowsTaskbar(int left, int top, int right, int bottom) {
       taskbarHiddenByUs = true;
-      savedScreenLeft = left;
-      savedScreenRight = right;
-      savedScreenBottom = Math.Max(bottom, 1080);
-      IntPtr tray = FindWindow("Shell_TrayWnd", null);
-      if (tray != IntPtr.Zero) {
-        RECT trayRc = new RECT();
-        if (GetWindowRect(tray, out trayRc)) {
-          savedScreenLeft = trayRc.left;
-          savedScreenRight = trayRc.right;
-          savedScreenBottom = trayRc.bottom;
-        }
-      }
       SetAllNativeTaskbarsVisible(false);
-      RECT rc = new RECT { left = left, top = top, right = right, bottom = bottom };
-      desiredWorkArea = rc;
-      hasDesiredWorkArea = true;
-      primaryWorkAreaBackoffUntil = 0;
 
-      RECT curWa = new RECT();
-      bool waChanged = true;
-      if (SystemParametersInfo(0x0030, 0, ref curWa, 0)) {
-        waChanged = Math.Abs(curWa.left - rc.left) > 6 || Math.Abs(curWa.top - rc.top) > 6 ||
-                    Math.Abs(curWa.right - rc.right) > 6 || Math.Abs(curWa.bottom - rc.bottom) > 6;
+      POINT primaryPt = new POINT { X = left + 8, Y = top + 8 };
+      IntPtr primaryMon = MonitorFromPoint(primaryPt, 1);
+      if (primaryMon == IntPtr.Zero) return;
+      MONITORINFO mi = new MONITORINFO();
+      mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+      if (!GetMonitorInfo(primaryMon, ref mi)) return;
+
+      int topGap = Math.Max(0, top - mi.rcMonitor.top);
+      int botGap = Math.Max(0, mi.rcMonitor.bottom - bottom);
+      bool isTop = topGap > botGap;
+      int reservePhys = isTop ? topGap : botGap;
+
+      lock (appBarLock) {
+        desiredAppBars[primaryMon] = new AppBarSpec {
+          monitor = primaryMon,
+          isTop = isTop,
+          reservePhys = reservePhys
+        };
       }
-      if (waChanged) {
-        lastWorkAreaChangeAt = Environment.TickCount;
-        primaryWorkAreaLastSetAt = lastWorkAreaChangeAt;
-        // fWinIni=0: update work area silently without sending WM_SETTINGCHANGE to explorer.exe
-        // (broadcasting SPIF_SENDCHANGE wakes explorer's AppBar, which immediately overwrites rcWork back!)
-        SystemParametersInfo(0x002F, 0, ref rc, 0);
-      }
+      SyncAppBarsSync();
     }
 
     private static void RestoreWindowsTaskbar() {
       taskbarHiddenByUs = false;
-      hasDesiredWorkArea = false;
-      IntPtr tray = FindWindow("Shell_TrayWnd", null);
-      if (tray != IntPtr.Zero) {
-        ShowWindow(tray, 5);
-        SetWindowPos(tray, IntPtr.Zero, 0, 0, 0, 0, 0x0047);
-        int trayH = 72;
-        RECT trayRc = new RECT();
-        if (GetWindowRect(tray, out trayRc) && (trayRc.bottom - trayRc.top) > 20) {
-          trayH = trayRc.bottom - trayRc.top;
-        }
-        RECT wa = new RECT {
-          left = savedScreenLeft,
-          top = 0,
-          right = savedScreenRight,
-          bottom = savedScreenBottom - trayH
-        };
-        SystemParametersInfo(0x002F, 0, ref wa, 2);
+      lock (appBarLock) {
+        desiredAppBars.Clear();
       }
+      ClearAppBarsSync();
       SetAllNativeTaskbarsVisible(true);
       ReleaseAllSecondaryWorkAreas();
     }
 
     private static void ReleaseAllSecondaryWorkAreas() {
-      List<RECT> toRestore = new List<RECT>();
-      lock (extraHwndsLock) {
-        foreach (RECT orig in savedSecWorkAreas.Values) toRestore.Add(orig);
-        savedSecWorkAreas.Clear();
-        desiredSecWorkAreas.Clear();
+      List<IntPtr> secMons = new List<IntPtr>();
+      lock (appBarLock) {
+        foreach (IntPtr mon in desiredAppBars.Keys) {
+          MONITORINFO mi = new MONITORINFO();
+          mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+          if (GetMonitorInfo(mon, ref mi) && (mi.dwFlags & 1) == 0) {
+            secMons.Add(mon);
+          }
+        }
+        for (int i = 0; i < secMons.Count; i++) {
+          desiredAppBars.Remove(secMons[i]);
+        }
       }
-      for (int i = 0; i < toRestore.Count; i++) {
-        RECT r = toRestore[i];
-        SystemParametersInfo(0x002F, 0, ref r, 2);
+      if (secMons.Count > 0) {
+        SyncAppBarsSync();
+      }
+      lock (extraHwndsLock) {
+        savedSecWorkAreas.Clear();
       }
     }
 
@@ -3778,52 +3929,33 @@ namespace GlassyNative {
       mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
       if (!GetMonitorInfo(mon, ref mi)) return;
 
-      // Never overwrite the primary monitor's work area from this secondary helper
+      // Never overwrite the primary monitor's AppBar from this secondary helper
       if ((mi.dwFlags & 1) != 0) return;
 
-      RECT want = mi.rcMonitor;
-      if (isTop) {
-        want.top = mi.rcMonitor.top + reservePhys;
-      } else {
-        want.bottom = mi.rcMonitor.bottom - reservePhys;
+      if (taskbarHiddenByUs) {
+        SetAllNativeTaskbarsVisible(false);
       }
 
-      lock (extraHwndsLock) {
-        if (!savedSecWorkAreas.ContainsKey(mon)) {
-          savedSecWorkAreas[mon] = mi.rcWork;
-        }
-        desiredSecWorkAreas[mon] = want;
-        secWorkAreaBackoffUntil.Remove(mon);
+      lock (appBarLock) {
+        desiredAppBars[mon] = new AppBarSpec {
+          monitor = mon,
+          isTop = isTop,
+          reservePhys = reservePhys
+        };
       }
-
-      RECT cur = mi.rcWork;
-      bool changed = Math.Abs(cur.left - want.left) > 6 || Math.Abs(cur.top - want.top) > 6 ||
-                     Math.Abs(cur.right - want.right) > 6 || Math.Abs(cur.bottom - want.bottom) > 6;
-      if (changed) {
-        int nowTick = Environment.TickCount;
-        lastWorkAreaChangeAt = nowTick;
-        lock (extraHwndsLock) {
-          secWorkAreaLastSetAt[mon] = nowTick;
-        }
-        SystemParametersInfo(0x002F, 0, ref want, 0); // fWinIni=0: never wake explorer.exe AppBar!
-      }
+      SyncAppBarsSync();
     }
 
     private static void ReleaseSecondaryWorkAreaForHwnd(IntPtr h) {
       if (h == IntPtr.Zero || !IsWindow(h)) return;
       IntPtr mon = MonitorFromWindow(h, 2);
       if (mon == IntPtr.Zero) return;
-      RECT orig;
-      bool had = false;
-      lock (extraHwndsLock) {
-        desiredSecWorkAreas.Remove(mon);
-        if (savedSecWorkAreas.TryGetValue(mon, out orig)) {
-          savedSecWorkAreas.Remove(mon);
-          had = true;
-        }
+      bool removed = false;
+      lock (appBarLock) {
+        removed = desiredAppBars.Remove(mon);
       }
-      if (had) {
-        SystemParametersInfo(0x002F, 0, ref orig, 2);
+      if (removed) {
+        SyncAppBarsSync();
       }
     }
 
