@@ -1729,7 +1729,7 @@ export function DockBar({
         </div>
       )}
 
-      {/* AuraBar Quick Settings / Control Center Flyout */}
+      {/* Glassy Quick Settings / Control Center Flyout */}
       {ccFlyout && (
         <ControlCenterFlyout
           ref={ccFlyoutRef}

@@ -1,7 +1,7 @@
 name: Release
 
 # Push a version tag (for example v1.0.1) to build the Windows installer and publish it as a
-# GitHub Release. Installed copies of AuraBar find that release and update themselves.
+# GitHub Release. Installed copies of Glassy find that release and update themselves.
 on:
   push:
     tags:

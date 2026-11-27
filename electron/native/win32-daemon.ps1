@@ -8,7 +8,7 @@ $sha.Dispose()
 
 $loaded = $false
 try {
-  $cacheDir = Join-Path $env:LOCALAPPDATA "AuraBar\native-cache"
+  $cacheDir = Join-Path $env:LOCALAPPDATA "Glassy\native-cache"
   if (-not (Test-Path $cacheDir)) {
     New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
   }

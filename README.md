@@ -30,7 +30,7 @@ npm run build
 npm start
 ```
 
-Or double-click **`Start-AuraBar.bat`** / **`Start-AuraBar-Silent.vbs`** on Windows after building.
+Or double-click **`Start-Glassy.bat`** / **`Start-Glassy-Silent.vbs`** on Windows after building.
 
 ## Releasing a new version
 

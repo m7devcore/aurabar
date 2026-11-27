@@ -71,7 +71,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
     },
     "publish": [
       {

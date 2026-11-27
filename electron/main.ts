@@ -9,6 +9,7 @@ import {
   screen,
   Tray
 } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/mediaControl';
 import { getLyrics } from './services/lyrics';
@@ -120,11 +121,11 @@ let isQuitting = false;
 function createTrayIcon() {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-      <rect x="2" y="2" width="28" height="28" rx="8" fill="#0B1120" stroke="#60A5FA" stroke-width="2.5"/>
-      <rect x="7" y="12" width="18" height="8" rx="4" fill="#60A5FA"/>
-      <circle cx="11" cy="16" r="2" fill="#0B1120"/>
-      <circle cx="16" cy="16" r="2" fill="#0B1120"/>
-      <circle cx="21" cy="16" r="2" fill="#0B1120"/>
+      <rect x="2" y="2" width="28" height="28" rx="8" fill="#121215" stroke="#D8BF95" stroke-width="1.6"/>
+      <rect x="6" y="11" width="20" height="10" rx="5" fill="#2A2B31" stroke="#8C8F99" stroke-width="0.9"/>
+      <rect x="9.5" y="13.5" width="3" height="5" rx="1.5" fill="#C9CFD8"/>
+      <rect x="14.5" y="13.5" width="3" height="5" rx="1.5" fill="#EBD2A4"/>
+      <rect x="19.5" y="13.5" width="3" height="5" rx="1.5" fill="#C9CFD8"/>
     </svg>
   `.trim();
   return nativeImage.createFromDataURL(
@@ -830,7 +831,26 @@ function syncFullscreenWatcher(): void {
   }
 }
 
-// Registers AuraBar to open when the user signs in. Only the installed build can: running from
+// Removes leftover legacy AuraBar shortcuts/cache after upgrading to Glassy
+function cleanupLegacyBrandArtifacts(): void {
+  if (!app.isPackaged) return;
+  const targets = [
+    path.join(app.getPath('desktop'), 'AuraBar.lnk'),
+    path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'AuraBar.lnk'),
+    path.join(process.env.LOCALAPPDATA || '', 'AuraBar', 'native-cache')
+  ];
+  for (const p of targets) {
+    try {
+      if (p && fs.existsSync(p)) {
+        fs.rmSync(p, { recursive: true, force: true });
+      }
+    } catch {
+      // Best-effort cleanup
+    }
+  }
+}
+
+// Registers Glassy to open when the user signs in. Only the installed build can: running from
 // source would register the bare electron.exe, which is not the app.
 function applyLaunchAtStartup(enabled: boolean): void {
   if (!app.isPackaged) return;
@@ -1465,6 +1485,7 @@ if (!singleInstance) {
     registerIpcHandlers();
     createWindows();
     setupTray();
+    cleanupLegacyBrandArtifacts();
     applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
     // Instant wake when the user presses the Windows key inside any fullscreen game!
     win32Daemon.onEvent((ev) => {

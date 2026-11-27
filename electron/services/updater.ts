@@ -69,7 +69,7 @@ export function checkForUpdates(manual = false): void {
   });
 }
 
-/** Closes AuraBar, runs the installer silently and starts the new version. */
+/** Closes Glassy, runs the installer silently and starts the new version. */
 export function installUpdateNow(): void {
   if (status.state !== 'ready') return;
   // Let the app put things back first (e.g. show the Windows taskbar again) so the installer
