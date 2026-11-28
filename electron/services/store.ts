@@ -19,6 +19,8 @@ const DEFAULT_CONFIG: AppConfig = {
     autoHideIdleIsland: false,
     notchNookEnabled: true,
     notchPlacement: 'top',
+    adaptiveAccent: true,
+    islandHudEnabled: true,
     showOnAllDisplays: true
   },
   pinnedApps: [
@@ -141,6 +143,14 @@ export function loadConfig(): AppConfig {
             : rawSettings.notchNookEnabled === false
               ? 'off'
               : DEFAULT_CONFIG.settings.notchPlacement,
+        adaptiveAccent:
+          typeof rawSettings.adaptiveAccent === 'boolean'
+            ? rawSettings.adaptiveAccent
+            : DEFAULT_CONFIG.settings.adaptiveAccent,
+        islandHudEnabled:
+          typeof rawSettings.islandHudEnabled === 'boolean'
+            ? rawSettings.islandHudEnabled
+            : DEFAULT_CONFIG.settings.islandHudEnabled,
         showOnAllDisplays:
           typeof rawSettings.showOnAllDisplays === 'boolean'
             ? rawSettings.showOnAllDisplays

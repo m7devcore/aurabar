@@ -11,7 +11,12 @@ import {
 } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCurrentMedia, sendMediaCommand, stopMediaWorker } from './services/mediaControl';
+import {
+  getCurrentMedia,
+  seekMediaPosition,
+  sendMediaCommand,
+  stopMediaWorker
+} from './services/mediaControl';
 import { getLyrics } from './services/lyrics';
 import {
   checkForUpdates,
@@ -24,6 +29,7 @@ import {
 } from './services/updater';
 import { loadConfig, saveConfig } from './services/store';
 import { getSystemStats } from './services/systemStats';
+import { getWallpaperAdaptiveTint } from './services/accentService';
 import {
   inspectShelfPaths,
   openShelfItem,
@@ -80,7 +86,7 @@ import {
   wakeHiddenApp,
   type LiveThumbSlot
 } from './services/windowsManager';
-import type { AppConfig, DockSettings, PinnedApp, SystemAction } from '../src/types';
+import type { AppConfig, DockSettings, HudEvent, PinnedApp, SystemAction } from '../src/types';
 
 interface HitRect {
   left: number;
@@ -116,6 +122,8 @@ let isPopoverOpen = false;
 let isIslandExpanded = false;
 let islandDialogOpen = false;
 let dockDialogOpen = false;
+let hudTransientVisible = false;
+let hudHideTimer: ReturnType<typeof setTimeout> | null = null;
 let dockInteractiveState = false;
 let islandInteractiveState = false;
 let dockInteractiveLock = false;
@@ -162,14 +170,53 @@ function shouldShowTopIsland(settings: DockSettings): boolean {
   return settings.musicPosition === 'top' || settings.notchPlacement === 'top';
 }
 
+function dispatchHudEvent(ev: HudEvent): void {
+  if (isQuitting || fullscreenSuspended) return;
+  if (!currentConfig?.settings.islandHudEnabled) return;
+  if (!islandWindow || islandWindow.isDestroyed()) return;
+
+  if (hudHideTimer) {
+    clearTimeout(hudHideTimer);
+    hudHideTimer = null;
+  }
+
+  const persistentIsland = shouldShowTopIsland(currentConfig.settings);
+  if (!persistentIsland && !islandWindow.isVisible()) {
+    hudTransientVisible = true;
+    islandWindow.setBounds(computeIslandBounds(), false);
+    islandWindow.setIgnoreMouseEvents(true);
+    islandWindow.showInactive();
+    ensureOnTop(islandWindow);
+  }
+
+  islandWindow.webContents.send('glassy:hud-event', ev);
+
+  if (hudTransientVisible) {
+    hudHideTimer = setTimeout(() => {
+      hudHideTimer = null;
+      if (!hudTransientVisible) return;
+      hudTransientVisible = false;
+      if (
+        islandWindow &&
+        !islandWindow.isDestroyed() &&
+        !shouldShowTopIsland(currentConfig.settings) &&
+        !isIslandExpanded
+      ) {
+        islandWindow.setIgnoreMouseEvents(true);
+        islandWindow.hide();
+      }
+    }, 2050);
+  }
+}
+
 function computeIslandBounds() {
   const display = screen.getPrimaryDisplay();
-  const width = 440;
-  // Tall enough for the expanded island (lyrics + NotchNook tray); click-through outside it
-  const height = 380;
+  const width = 480;
+  // Tall enough for the expanded island + crisp shadow margin without window-edge clipping; click-through outside
+  const height = 410;
   const x = Math.round(display.bounds.x + (display.bounds.width - width) / 2);
   const topOffset =
-    currentConfig?.settings.position === 'top' ? getReservedHeightPx(currentConfig.settings) + 4 : 4;
+    currentConfig?.settings.position === 'top' ? getReservedHeightPx(currentConfig.settings) : 0;
   const y = display.bounds.y + topOffset;
   return { x, y, width, height };
 }
@@ -1537,6 +1584,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle('glassy:send-media-cmd', (_e, cmd: 'playPause' | 'next' | 'previous') =>
     sendMediaCommand(cmd)
   );
+  ipcMain.handle('glassy:seek-media', (_e, positionSec: unknown) =>
+    seekMediaPosition(typeof positionSec === 'number' && Number.isFinite(positionSec) ? positionSec : 0)
+  );
   ipcMain.handle('glassy:adjust-volume', (_e, action: 'up' | 'down' | 'mute') =>
     adjustSystemVolume(action)
   );
@@ -1590,7 +1640,14 @@ function registerIpcHandlers(): void {
     toggleAudioSessionMute(sessionId)
   );
   ipcMain.handle('glassy:get-brightness', () => getScreenBrightness());
-  ipcMain.handle('glassy:set-brightness', (_e, level: number) => setScreenBrightness(level));
+  ipcMain.handle('glassy:set-brightness', async (_e, level: number) => {
+    const info = await setScreenBrightness(level);
+    if (info.supported) {
+      dispatchHudEvent({ kind: 'brightness', level: info.level, ts: Date.now() });
+    }
+    return info;
+  });
+  ipcMain.handle('glassy:get-wallpaper-tint', () => getWallpaperAdaptiveTint());
   ipcMain.handle('glassy:get-nightlight', () => getNightLightStatus());
   ipcMain.handle('glassy:toggle-nightlight', () => toggleNightLight());
   ipcMain.handle('glassy:list-wifi-networks', () => listWifiNetworks());
@@ -1655,7 +1712,7 @@ if (!singleInstance) {
         ensureOnTop(entry.win);
       }
     }
-    if (islandWindow && currentConfig.settings.musicPosition === 'top') {
+    if (islandWindow && shouldShowTopIsland(currentConfig.settings)) {
       if (!islandWindow.isVisible() && !fullscreenSuspended) islandWindow.showInactive();
       ensureOnTop(islandWindow);
     }
@@ -1667,11 +1724,33 @@ if (!singleInstance) {
     setupTray();
     cleanupLegacyBrandArtifacts();
     applyLaunchAtStartup(currentConfig.settings.launchAtStartup);
-    // Instant wake when the user presses the Windows key inside any fullscreen game!
+    // Instant wake on Windows key inside fullscreen games + real-time hardware HUD events
     win32Daemon.onEvent((ev) => {
       if (ev === 'FS_WAKE' && fullscreenSuspended && !dockManuallyHidden && !isQuitting) {
         notFullscreenStreak = 2;
         setFullscreenSuspended(false);
+        return;
+      }
+      if (ev.startsWith('HUD_VOL ')) {
+        const p = ev.slice(8).trim().split(' ');
+        const level = Number(p[0]);
+        const muted = p[1] === '1';
+        if (Number.isFinite(level)) {
+          dispatchHudEvent({ kind: 'volume', level, muted, ts: Date.now() });
+        }
+      } else if (ev.startsWith('HUD_KBD ')) {
+        const code = ev.slice(8).trim();
+        if (code) {
+          dispatchHudEvent({ kind: 'keyboard', code, ts: Date.now() });
+        }
+      } else if (ev.startsWith('HUD_BAT ')) {
+        const p = ev.slice(8).trim().split(' ');
+        const percent = Number(p[0]);
+        const charging = p[1] === '1';
+        const low = p[2] === '1';
+        if (Number.isFinite(percent)) {
+          dispatchHudEvent({ kind: 'battery', percent, charging, low, ts: Date.now() });
+        }
       }
     });
     // Start fullscreen watcher only after the native bridge is ready and startup work-area

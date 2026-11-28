@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  AdaptiveTint,
   AppConfig,
   AudioAppSession,
   AudioOutputDevice,
   BackgroundApp,
   BrightnessInfo,
+  HudEvent,
   InstalledApp,
   LyricsResult,
   UpdateInfo,
@@ -75,6 +77,7 @@ export interface GlassyApi {
   getAppIcon: (target: string) => Promise<string | undefined>;
   getMediaInfo: () => Promise<MediaInfo | null>;
   sendMediaCommand: (cmd: 'playPause' | 'next' | 'previous') => Promise<void>;
+  seekMedia: (positionSec: number) => Promise<boolean>;
   getLyrics: (title: string, artist: string, album: string, durationSec: number) => Promise<LyricsResult | null>;
   adjustVolume: (action: 'up' | 'down' | 'mute') => Promise<void>;
   getVolume: () => Promise<VolumeInfo>;
@@ -95,6 +98,7 @@ export interface GlassyApi {
   toggleAudioSessionMute: (sessionId: string) => Promise<void>;
   getBrightness: () => Promise<BrightnessInfo>;
   setBrightness: (level: number) => Promise<BrightnessInfo>;
+  getWallpaperTint: () => Promise<AdaptiveTint | null>;
   getNightLight: () => Promise<NightLightInfo>;
   toggleNightLight: () => Promise<NightLightInfo>;
   listWifiNetworks: () => Promise<WifiNetwork[]>;
@@ -109,6 +113,7 @@ export interface GlassyApi {
   onToggleNookPopover: (cb: () => void) => () => void;
   onIslandBlurred: (cb: () => void) => () => void;
   onIslandOpenTray: (cb: () => void) => () => void;
+  onHudEvent: (cb: (event: HudEvent) => void) => () => void;
   onIslandVisibility: (cb: (visible: boolean) => void) => () => void;
   onSuspended: (cb: (suspended: boolean) => void) => () => void;
   onConfigUpdated: (cb: (cfg: AppConfig) => void) => () => void;
@@ -153,6 +158,7 @@ const api: GlassyApi = {
   getAppIcon: (target) => ipcRenderer.invoke('glassy:get-app-icon', target),
   getMediaInfo: () => ipcRenderer.invoke('glassy:get-media-info'),
   sendMediaCommand: (cmd) => ipcRenderer.invoke('glassy:send-media-cmd', cmd),
+  seekMedia: (positionSec) => ipcRenderer.invoke('glassy:seek-media', positionSec),
   getLyrics: (title, artist, album, durationSec) =>
     ipcRenderer.invoke('glassy:get-lyrics', title, artist, album, durationSec),
   adjustVolume: (action) => ipcRenderer.invoke('glassy:adjust-volume', action),
@@ -178,6 +184,7 @@ const api: GlassyApi = {
     ipcRenderer.invoke('glassy:toggle-audio-session-mute', sessionId),
   getBrightness: () => ipcRenderer.invoke('glassy:get-brightness'),
   setBrightness: (level) => ipcRenderer.invoke('glassy:set-brightness', level),
+  getWallpaperTint: () => ipcRenderer.invoke('glassy:get-wallpaper-tint'),
   getNightLight: () => ipcRenderer.invoke('glassy:get-nightlight'),
   toggleNightLight: () => ipcRenderer.invoke('glassy:toggle-nightlight'),
   listWifiNetworks: () => ipcRenderer.invoke('glassy:list-wifi-networks'),
@@ -207,6 +214,11 @@ const api: GlassyApi = {
     const handler = () => cb();
     ipcRenderer.on('glassy:island-open-tray', handler);
     return () => ipcRenderer.removeListener('glassy:island-open-tray', handler);
+  },
+  onHudEvent: (cb) => {
+    const handler = (_e: Electron.IpcRendererEvent, event: HudEvent) => cb(event);
+    ipcRenderer.on('glassy:hud-event', handler);
+    return () => ipcRenderer.removeListener('glassy:hud-event', handler);
   },
   onIslandVisibility: (cb) => {
     const handler = (_e: Electron.IpcRendererEvent, visible: boolean) => cb(visible);

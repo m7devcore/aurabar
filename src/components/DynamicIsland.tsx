@@ -25,9 +25,10 @@ import { formatFileSize, useShelfItems } from '../hooks/useShelfItems';
 import { VolumeSlider } from './VolumeSlider';
 import { IslandLyrics } from './IslandLyrics';
 import { PlaybackTimeline } from './PlaybackTimeline';
+import { BatteryIcon, BrightnessIcon, GlobeLangIcon, VolumeIcon } from './PremiumIcons';
 import { useActiveLine, useLyrics, useLyricsPref, usePlaybackClock } from '../hooks/useLyrics';
 import { t } from '../i18n';
-import type { Language, MediaInfo, PrivacyStatus } from '../types';
+import type { HudEvent, Language, MediaInfo, PrivacyStatus } from '../types';
 
 interface Props {
   lang: Language;
@@ -35,6 +36,7 @@ interface Props {
   musicInIsland: boolean;
   notchNookEnabled: boolean;
   privacy: PrivacyStatus;
+  hudEvent?: HudEvent | null;
   expanded: boolean;
   autoHideIdle?: boolean;
   onToggleExpand: (next: boolean) => void;
@@ -66,6 +68,7 @@ export function DynamicIsland({
   musicInIsland,
   notchNookEnabled,
   privacy,
+  hudEvent = null,
   expanded,
   autoHideIdle = false,
   onToggleExpand,
@@ -128,12 +131,14 @@ export function DynamicIsland({
 
   const hasPrivacyActivity = notchNookEnabled && (privacy.micActive || privacy.camActive);
   const hasParkedFiles = notchNookEnabled && shelfItems.length > 0;
+  const showHud = Boolean(hudEvent) && !expanded;
   const hiddenIdle =
     autoHideIdle &&
     !effectiveMedia &&
     !expanded &&
     !hasPrivacyActivity &&
     !hasParkedFiles &&
+    !showHud &&
     !isDragOver &&
     !edgePeek;
 
@@ -144,7 +149,7 @@ export function DynamicIsland({
         // file toward the top of the screen wakes the Drop Tray smoothly without blocking titlebars
         dockBridge.setHitRects(
           'island',
-          notchNookEnabled ? [{ left: 100, top: 0, right: 340, bottom: 8 }] : []
+          notchNookEnabled ? [{ left: 120, top: 0, right: 360, bottom: 8 }] : []
         );
         return;
       }
@@ -176,6 +181,8 @@ export function DynamicIsland({
     activeTab,
     shelfItems.length,
     hasPrivacyActivity,
+    showHud,
+    hudEvent?.kind,
     isDragOver
   ]);
 
@@ -199,7 +206,9 @@ export function DynamicIsland({
 
   const sendCmd = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
-    setTimeout(onRefreshMedia, 250);
+    setTimeout(onRefreshMedia, 140);
+    setTimeout(onRefreshMedia, 500);
+    setTimeout(onRefreshMedia, 1000);
   };
 
   const endSec = effectiveMedia?.endSec ?? 0;
@@ -283,14 +292,18 @@ export function DynamicIsland({
       <div
         ref={islandRef}
         className={`dynamic-island ${expanded ? 'expanded' : ''} ${
+          showHud && hudEvent ? `is-hud-mode hud-${hudEvent.kind}` : ''
+        } ${
           expanded && isTrayView ? 'is-tray-view' : ''
         } ${expanded && isTrayView && shelfItems.length > 4 ? 'is-tray-many' : ''} ${
           expanded && hasPrivacyActivity ? 'has-privacy-bar' : ''
         } ${
           isPlaying ? 'is-playing' : ''
-        } ${isIdle ? 'is-idle' : ''} ${!musicInIsland && !expanded ? 'is-nook-only' : ''} ${
+        } ${isIdle && !showHud ? 'is-idle' : ''} ${
+          !musicInIsland && !expanded && !showHud ? 'is-nook-only' : ''
+        } ${
           hiddenIdle ? 'is-hidden-idle' : ''
-        } ${showLyricsPanel ? 'with-lyrics' : ''} ${compactLyric ? 'has-lyric' : ''} ${
+        } ${showLyricsPanel ? 'with-lyrics' : ''} ${compactLyric && !showHud ? 'has-lyric' : ''} ${
           isDragOver ? 'is-drag-over' : ''
         }`}
         aria-hidden={hiddenIdle || undefined}
@@ -318,6 +331,81 @@ export function DynamicIsland({
         }
       >
         {!expanded ? (
+          showHud && hudEvent ? (
+            <div className="island-hud-row" role="status" aria-live="polite">
+              {hudEvent.kind === 'volume' && (
+                <>
+                  <span className={`island-hud-icon ${hudEvent.muted ? 'is-danger' : ''}`}>
+                    <VolumeIcon level={hudEvent.level} muted={hudEvent.muted} />
+                  </span>
+                  <div className="island-hud-bar-track">
+                    <div
+                      className={`island-hud-bar-fill ${hudEvent.muted ? 'is-muted' : ''}`}
+                      style={{
+                        transform: `scaleX(${hudEvent.muted ? 0 : Math.max(0, Math.min(1, hudEvent.level / 100))})`
+                      }}
+                    />
+                  </div>
+                  <span className={`island-hud-val tabular ${hudEvent.muted ? 'is-danger' : ''}`}>
+                    {hudEvent.muted ? dict.hudMuted : `${hudEvent.level}%`}
+                  </span>
+                </>
+              )}
+
+              {hudEvent.kind === 'brightness' && (
+                <>
+                  <span className="island-hud-icon">
+                    <BrightnessIcon size={16} />
+                  </span>
+                  <div className="island-hud-bar-track">
+                    <div
+                      className="island-hud-bar-fill"
+                      style={{
+                        transform: `scaleX(${Math.max(0, Math.min(1, hudEvent.level / 100))})`
+                      }}
+                    />
+                  </div>
+                  <span className="island-hud-val tabular">{hudEvent.level}%</span>
+                </>
+              )}
+
+              {hudEvent.kind === 'battery' && (
+                <>
+                  <span className="island-hud-icon">
+                    <BatteryIcon percent={hudEvent.percent} charging={hudEvent.charging} />
+                  </span>
+                  <span
+                    className={`island-hud-label ${
+                      hudEvent.charging ? 'is-good' : hudEvent.low ? 'is-danger' : ''
+                    }`}
+                  >
+                    {hudEvent.charging
+                      ? dict.hudCharging
+                      : hudEvent.low
+                        ? dict.hudLowBattery
+                        : dict.hudOnBattery}
+                  </span>
+                  <span className="island-hud-val tabular">{hudEvent.percent}%</span>
+                </>
+              )}
+
+              {hudEvent.kind === 'keyboard' && (
+                <>
+                  <span className="island-hud-icon">
+                    <GlobeLangIcon size={15} />
+                  </span>
+                  <span className="island-hud-label">
+                    {hudEvent.code === 'AR'
+                      ? 'العربية'
+                      : hudEvent.code === 'EN'
+                        ? 'English'
+                        : hudEvent.code}
+                  </span>
+                  <span className="island-hud-kbd-pill tabular">{hudEvent.code}</span>
+                </>
+              )}
+            </div>
+          ) : (
           <div className="island-compact-row">
             {musicInIsland ? (
               <>
@@ -435,6 +523,7 @@ export function DynamicIsland({
               )}
             </div>
           </div>
+          )
         ) : (
           <div className="island-expanded-body">
             {/* Top NotchNook Header Bar: Mode tabs + Mic Mute + Collapse */}
@@ -714,7 +803,16 @@ export function DynamicIsland({
                   <IslandLyrics state={lyrics} active={activeLine} dict={dict} />
                 )}
 
-                <PlaybackTimeline clock={clock} endSec={endSec} />
+                <PlaybackTimeline
+                  clock={clock}
+                  endSec={endSec}
+                  onSeek={(sec) => {
+                    void dockBridge.seekMedia(sec).then(() => {
+                      setTimeout(onRefreshMedia, 120);
+                      setTimeout(onRefreshMedia, 450);
+                    });
+                  }}
+                />
 
                 <div className="row-between" style={{ justifyContent: 'center', gap: 18 }}>
                   <button
@@ -753,7 +851,11 @@ export function DynamicIsland({
                   </button>
                 </div>
 
-                <VolumeSlider compact surface="island" />
+                <VolumeSlider
+                  compact
+                  surface="island"
+                  targetAppId={effectiveMedia?.appId}
+                />
               </>
             )}
           </div>

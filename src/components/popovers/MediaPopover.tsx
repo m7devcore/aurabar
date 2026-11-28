@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { MicVocal, Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { dockBridge } from '../../hooks/useDockBridge';
 import { useMediaArtwork } from '../../hooks/useMediaArtwork';
@@ -18,13 +19,16 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
   const dict = t(lang);
   const artworkUrl = useMediaArtwork(media);
   const [lyricsOn, toggleLyrics] = useLyricsPref();
+  const [volAppName, setVolAppName] = useState<string | null>(null);
   const lyrics = useLyrics(media, lyricsOn);
   const clock = usePlaybackClock(media);
   const activeLine = useActiveLine(lyrics.status === 'ready' ? lyrics.lyrics.synced : null, clock);
 
   const send = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
-    setTimeout(onRefreshMedia, 250);
+    setTimeout(onRefreshMedia, 140);
+    setTimeout(onRefreshMedia, 500);
+    setTimeout(onRefreshMedia, 1000);
   };
 
   return (
@@ -121,13 +125,24 @@ export function MediaPopover({ lang, media, onRefreshMedia }: Props) {
               className="in-popover"
             />
           )}
-          <PlaybackTimeline clock={clock} endSec={media.endSec ?? 0} />
+          <PlaybackTimeline
+            clock={clock}
+            endSec={media.endSec ?? 0}
+            onSeek={(sec) => {
+              void dockBridge.seekMedia(sec).then(() => {
+                setTimeout(onRefreshMedia, 120);
+                setTimeout(onRefreshMedia, 450);
+              });
+            }}
+          />
         </div>
       )}
 
       <div className="card stack-sm" style={{ padding: '10px 14px' }}>
-        <div className="muted-sm" style={{ fontWeight: 600 }}>{dict.volume}</div>
-        <VolumeSlider />
+        <div className="muted-sm" style={{ fontWeight: 600 }}>
+          {volAppName ? `${volAppName} · ${dict.volume}` : dict.volume}
+        </div>
+        <VolumeSlider targetAppId={media?.appId} onTargetAppChange={setVolAppName} />
       </div>
     </div>
   );

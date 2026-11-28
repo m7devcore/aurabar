@@ -95,6 +95,8 @@ export interface MediaInfo {
   posMs?: number;
   /** Unix ms when `posMs` was true (the player's timeline update time) */
   posAt?: number;
+  /** Exact album artwork from Windows SMTC session (data URL), when provided by the player */
+  thumbnailDataUrl?: string;
 }
 
 export interface LyricLine {
@@ -132,6 +134,23 @@ export interface ShelfItem {
   isImage: boolean;
   previewDataUrl?: string;
 }
+
+export interface AdaptiveTint {
+  darkHex: string;
+  lightHex: string;
+  softDark: string;
+  softLight: string;
+  glowDark: string;
+  glowLight: string;
+  borderDark?: string;
+  borderLight?: string;
+}
+
+export type HudEvent =
+  | { kind: 'volume'; level: number; muted: boolean; ts: number }
+  | { kind: 'brightness'; level: number; ts: number }
+  | { kind: 'battery'; percent: number; charging: boolean; low?: boolean; ts: number }
+  | { kind: 'keyboard'; code: string; ts: number };
 
 export interface AudioOutputDevice {
   id: string;
@@ -197,6 +216,8 @@ export interface DockSettings {
   autoHideIdleIsland: boolean;
   notchNookEnabled: boolean;
   notchPlacement: NotchPlacement;
+  adaptiveAccent: boolean;
+  islandHudEnabled: boolean;
   showOnAllDisplays: boolean;
 }
 

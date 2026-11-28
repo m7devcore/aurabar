@@ -9,12 +9,15 @@ import { NotchNookPopover } from './components/popovers/NotchNookPopover';
 import { SettingsPopover } from './components/popovers/SettingsPopover';
 import { SystemPopover } from './components/popovers/SystemPopover';
 import { dockBridge } from './hooks/useDockBridge';
+import { useAdaptiveGlassTint } from './hooks/useAdaptiveGlassTint';
+import { useMediaArtwork } from './hooks/useMediaArtwork';
 import { useShelfItems } from './hooks/useShelfItems';
 import { panelTitleLabel } from './i18n';
 import type {
   ActivePanel,
   AppConfig,
   DockSettings,
+  HudEvent,
   MediaInfo,
   PrivacyStatus,
   UpdateInfo,
@@ -58,6 +61,8 @@ export function App() {
   const [runningWindows, setRunningWindows] = useState<RunningWindow[]>([]);
   const [media, setMedia] = useState<MediaInfo | null>(null);
   const [privacy, setPrivacy] = useState<PrivacyStatus>(DEFAULT_PRIVACY);
+  const [hudEvent, setHudEvent] = useState<HudEvent | null>(null);
+  const hudTimerRef = useRef<number | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [kbdLang, setKbdLang] = useState('EN');
   const [now, setNow] = useState(() => new Date());
@@ -222,15 +227,16 @@ export function App() {
         prev.album === m.album &&
         prev.appId === m.appId &&
         prev.status === m.status &&
-        prev.endSec === m.endSec
+        prev.endSec === m.endSec &&
+        prev.thumbnailDataUrl === m.thumbnailDataUrl
       ) {
         if (m.status !== 'Playing') {
           return prev.posSec === m.posSec ? prev : m;
         }
-        // While playing, only re-render on a real seek (> 1.6s drift from linear extrapolation)
+        // While playing, only re-render on a real seek (> 0.9s drift from linear extrapolation)
         const prevPosMs = (prev.posMs ?? (prev.posSec ?? 0) * 1000) + Math.max(0, (m.posAt ?? Date.now()) - (prev.posAt ?? Date.now()));
         const curPosMs = m.posMs ?? (m.posSec ?? 0) * 1000;
-        if (Math.abs(curPosMs - prevPosMs) < 1600) {
+        if (Math.abs(curPosMs - prevPosMs) < 900) {
           return prev;
         }
       }
@@ -256,9 +262,9 @@ export function App() {
       if (!alive) return;
       const delay = mediaPlayingRef.current
         ? VIEW_MODE === 'island' || musicPosition === 'taskbar'
-          ? 2000
-          : 2500
-        : 4500;
+          ? 750
+          : 1200
+        : 1600;
       timerId = window.setTimeout(() => void schedule(), delay);
     };
     void schedule();
@@ -353,6 +359,41 @@ export function App() {
     };
   }, [shouldPollPrivacy]);
 
+  // Subscribe to hardware HUD events (Volume, Brightness, Battery, Keyboard) inside Top Island
+  const islandHudEnabled = config?.settings.islandHudEnabled !== false;
+  useEffect(() => {
+    if (VIEW_MODE !== 'island' || suspended || !islandHudEnabled) {
+      setHudEvent(null);
+      return;
+    }
+    const unsub = dockBridge.onHudEvent((ev) => {
+      setHudEvent(ev);
+      if (hudTimerRef.current !== null) window.clearTimeout(hudTimerRef.current);
+      hudTimerRef.current = window.setTimeout(() => {
+        hudTimerRef.current = null;
+        setHudEvent(null);
+      }, 1700);
+    });
+    return () => {
+      unsub();
+      if (hudTimerRef.current !== null) {
+        window.clearTimeout(hudTimerRef.current);
+        hudTimerRef.current = null;
+      }
+    };
+  }, [suspended, islandHudEnabled]);
+
+  // Living Glass adaptive accent: extract from active album art where media is hosted, else sync via storage/wallpaper
+  const hostsMedia =
+    (VIEW_MODE === 'island' && (config?.settings.musicPosition ?? 'top') === 'top') ||
+    (VIEW_MODE === 'dock' && config?.settings.musicPosition === 'taskbar');
+  const activeMediaArt = useMediaArtwork(hostsMedia && !suspended ? media : null);
+  useAdaptiveGlassTint(
+    config?.settings.adaptiveAccent !== false,
+    config?.settings.theme ?? 'obsidian',
+    hostsMedia ? activeMediaArt : undefined
+  );
+
   const handleToggleMicMute = useCallback(async () => {
     const next = await dockBridge.toggleMicMute();
     setPrivacy(next);
@@ -366,6 +407,7 @@ export function App() {
         musicInIsland={(config?.settings.musicPosition ?? 'top') === 'top'}
         notchNookEnabled={nookInIsland}
         privacy={privacy}
+        hudEvent={suspended ? null : hudEvent}
         expanded={suspended ? false : islandExpanded}
         autoHideIdle={Boolean(config?.settings.autoHideIdleIsland)}
         onToggleExpand={(open) => {

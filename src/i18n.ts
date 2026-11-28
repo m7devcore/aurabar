@@ -55,6 +55,14 @@ export interface Translations {
   notchPlaceTop: string;
   notchPlaceTaskbar: string;
   notchPlaceOff: string;
+  adaptiveAccent: string;
+  adaptiveAccentDesc: string;
+  islandHud: string;
+  islandHudDesc: string;
+  hudCharging: string;
+  hudOnBattery: string;
+  hudLowBattery: string;
+  hudMuted: string;
   showOnAllDisplays: string;
   showOnAllDisplaysDesc: string;
   updateReady: string;
@@ -158,6 +166,14 @@ const EN: Translations = {
   notchPlaceTop: 'Top Island',
   notchPlaceTaskbar: 'Taskbar (Right)',
   notchPlaceOff: 'Off',
+  adaptiveAccent: 'Adaptive Glass Accent',
+  adaptiveAccentDesc: 'Subtly harmonize accent and glass highlights with album art or desktop wallpaper',
+  islandHud: 'Island System HUD',
+  islandHudDesc: 'Show a quiet macOS-style indicator in the top island for volume, brightness, charging, and keyboard',
+  hudCharging: 'Charging',
+  hudOnBattery: 'On battery',
+  hudLowBattery: 'Low battery',
+  hudMuted: 'Muted',
   showOnAllDisplays: 'Show on all monitors',
   showOnAllDisplaysDesc: 'Display a streamlined bar with apps and clock on secondary monitors',
   updateReady: 'Update ready',
@@ -261,6 +277,14 @@ const AR: Translations = {
   notchPlaceTop: 'الجزيرة العلوية',
   notchPlaceTaskbar: 'يمين التاسك بار',
   notchPlaceOff: 'مخفي',
+  adaptiveAccent: 'الزجاج الحيّ (ألوان متكيّفة)',
+  adaptiveAccentDesc: 'تكييف ناعم لألوان التمييز ولمعة الزجاج مع غلاف الأغنية أو خلفية سطح المكتب',
+  islandHud: 'مؤشر الجزيرة السريع (HUD)',
+  islandHudDesc: 'عرض مؤشر هادئ وأنيق بالجزيرة العلوية للصوت والسطوع والشحن وتبديل اللغة',
+  hudCharging: 'جاري الشحن',
+  hudOnBattery: 'على البطارية',
+  hudLowBattery: 'بطارية منخفضة',
+  hudMuted: 'مكتوم',
   showOnAllDisplays: 'إظهار على جميع الشاشات',
   showOnAllDisplaysDesc: 'عرض شريط أنيق بالتطبيقات والساعة على الشاشات الإضافية',
   updateReady: 'التحديث جاهز',

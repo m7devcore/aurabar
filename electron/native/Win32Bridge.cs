@@ -1018,8 +1018,15 @@ namespace GlassyNative {
     private static void PollForegroundLoop() {
       int parentCheckTick = 0;
       int enforceTick = 0;
+      int volCheckTick = 0;
       bool inFullscreenSleep = false;
       bool wasStartMenu = false;
+      IntPtr prevKbdFg = IntPtr.Zero;
+      string prevKbdLang = "";
+      int prevHudVol = -1;
+      bool prevHudMuted = false;
+      int prevAcLine = -1;
+      bool lowBatAlerted = false;
       while (true) {
         try {
           if (++parentCheckTick >= 10) {
@@ -1089,12 +1096,78 @@ namespace GlassyNative {
                        (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
               lastExternalForeground = IntPtr.Zero;
             }
+
+            // Detect keyboard language switches for BOTH Alt+Shift AND Win+Space instantly:
+            // Win+Space briefly shifts foreground to Windows' InputIndicator overlay, so track
+            // the last real taskbar window (prevKbdFg) and never overwrite it with shell popups!
+            if (!inFullscreenSleep && !isAura) {
+              bool isRealApp = IsTaskbarWindow(fg);
+              if (isRealApp) {
+                string kbdNow = GetKbdLangForHwnd(fg);
+                if (!string.IsNullOrEmpty(kbdNow)) {
+                  if (fg == prevKbdFg && !string.IsNullOrEmpty(prevKbdLang) && kbdNow != prevKbdLang) {
+                    EmitEvent("HUD_KBD " + kbdNow);
+                  }
+                  prevKbdFg = fg;
+                  prevKbdLang = kbdNow;
+                }
+              } else if (prevKbdFg != IntPtr.Zero && IsWindow(prevKbdFg)) {
+                string kbdNow = GetKbdLangForHwnd(prevKbdFg);
+                if (!string.IsNullOrEmpty(kbdNow) && !string.IsNullOrEmpty(prevKbdLang) && kbdNow != prevKbdLang) {
+                  prevKbdLang = kbdNow;
+                  EmitEvent("HUD_KBD " + kbdNow);
+                }
+              }
+            }
           }
           wasStartMenu = isStartNow;
+
+          // Lightweight volume change watcher (~280ms, zero work during fullscreen gaming)
+          if (!inFullscreenSleep && ++volCheckTick >= 2) {
+            volCheckTick = 0;
+            IAudioEndpointVolume epVol = null;
+            try {
+              epVol = GetEndpointVolume();
+              if (epVol != null) {
+                float sc;
+                bool mt;
+                if (epVol.GetMasterVolumeLevelScalar(out sc) == 0 && epVol.GetMute(out mt) == 0) {
+                  int pct = Math.Max(0, Math.Min(100, (int)Math.Round(sc * 100f)));
+                  if (prevHudVol >= 0 && (pct != prevHudVol || mt != prevHudMuted)) {
+                    EmitEvent("HUD_VOL " + pct + " " + (mt ? "1" : "0"));
+                  }
+                  prevHudVol = pct;
+                  prevHudMuted = mt;
+                }
+              }
+            } catch {
+            } finally {
+              SafeReleaseCom(epVol);
+            }
+          }
 
           // Enforce work area, dock rect, and topmost z-order every ~600ms (zero work while hidden in fullscreen!)
           if (++enforceTick >= 4) {
             enforceTick = 0;
+
+            // Charger plug/unplug + low-battery HUD (O(1) syscall)
+            if (!inFullscreenSleep) {
+              SYSTEM_POWER_STATUS sps;
+              if (GetSystemPowerStatus(out sps) && sps.BatteryFlag != 128 && sps.BatteryLifePercent <= 100) {
+                int ac = sps.ACLineStatus == 1 ? 1 : 0;
+                int pct = sps.BatteryLifePercent;
+                if (prevAcLine >= 0 && ac != prevAcLine) {
+                  EmitEvent("HUD_BAT " + pct + " " + ac + " 0");
+                }
+                if (ac == 1 || pct >= 20) {
+                  lowBatAlerted = false;
+                } else if (ac == 0 && pct <= 15 && !lowBatAlerted) {
+                  lowBatAlerted = true;
+                  EmitEvent("HUD_BAT " + pct + " 0 1");
+                }
+                prevAcLine = ac;
+              }
+            }
             bool primaryDockVis = dockHwnd != IntPtr.Zero && IsWindow(dockHwnd) && IsWindowVisible(dockHwnd);
             List<IntPtr> extrasCopy = null;
             lock (extraHwndsLock) {
@@ -1150,7 +1223,7 @@ namespace GlassyNative {
             }
           }
         } catch { }
-        Thread.Sleep(inFullscreenSleep ? 220 : 140);
+        Thread.Sleep(inFullscreenSleep ? 220 : 100);
       }
     }
 
@@ -3609,10 +3682,9 @@ namespace GlassyNative {
       }
     }
 
-    private static string GetKbdLang() {
-      IntPtr fg = lastExternalForeground != IntPtr.Zero ? lastExternalForeground : GetForegroundWindow();
+    private static string GetKbdLangForHwnd(IntPtr target) {
       uint dummy;
-      uint tid = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
+      uint tid = target != IntPtr.Zero ? GetWindowThreadProcessId(target, out dummy) : 0;
       int lang = (int)(GetKeyboardLayout(tid).ToInt64() & 0xFFFF);
       if (lang > 0) {
         try {
@@ -3628,6 +3700,11 @@ namespace GlassyNative {
       if (primary == 0x0C) return "FR";
       if (primary == 0x07) return "DE";
       return "EN";
+    }
+
+    private static string GetKbdLang() {
+      IntPtr fg = lastExternalForeground != IntPtr.Zero ? lastExternalForeground : GetForegroundWindow();
+      return GetKbdLangForHwnd(fg);
     }
 
     private static string IconHandleToDataUrl(IntPtr hIcon, bool shouldDestroy) {

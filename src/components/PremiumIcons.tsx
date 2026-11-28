@@ -24,12 +24,34 @@ export function SearchIcon() {
   );
 }
 
-export function GlobeLangIcon() {
+export function GlobeLangIcon({ size = 11 }: { size?: number }) {
   return (
-    <svg width="11" height="11" viewBox="0 0 20 20" fill="none">
-      <circle cx="10" cy="10" r="7.2" stroke="currentColor" strokeWidth="1.55" strokeOpacity="0.82" />
-      <ellipse cx="10" cy="10" rx="3.4" ry="7.2" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.72" />
-      <path d="M3.2 10H16.8" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.72" />
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none">
+      <circle cx="10" cy="10" r="7.2" stroke="currentColor" strokeWidth="1.55" strokeOpacity="0.86" />
+      <ellipse cx="10" cy="10" rx="3.4" ry="7.2" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.76" />
+      <path d="M3.2 10H16.8" stroke="currentColor" strokeWidth="1.35" strokeOpacity="0.76" />
+    </svg>
+  );
+}
+
+export function BrightnessIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none">
+      <circle
+        cx="10"
+        cy="10"
+        r="3.4"
+        fill="currentColor"
+        fillOpacity="0.16"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M10 2.6V4.3M10 15.7V17.4M2.6 10H4.3M15.7 10H17.4M4.8 4.8L6 6M14 14L15.2 15.2M15.2 4.8L14 6M6 14L4.8 15.2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

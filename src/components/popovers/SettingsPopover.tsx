@@ -294,6 +294,24 @@ export function SettingsPopover({
           )}
 
           <ToggleSwitch
+            checked={settings.adaptiveAccent !== false}
+            title={dict.adaptiveAccent}
+            desc={dict.adaptiveAccentDesc}
+            onToggle={() =>
+              onUpdateSettings({ adaptiveAccent: settings.adaptiveAccent === false })
+            }
+          />
+
+          <ToggleSwitch
+            checked={settings.islandHudEnabled !== false}
+            title={dict.islandHud}
+            desc={dict.islandHudDesc}
+            onToggle={() =>
+              onUpdateSettings({ islandHudEnabled: settings.islandHudEnabled === false })
+            }
+          />
+
+          <ToggleSwitch
             checked={settings.showOnAllDisplays}
             title={dict.showOnAllDisplays}
             desc={dict.showOnAllDisplaysDesc}

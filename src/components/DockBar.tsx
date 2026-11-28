@@ -1074,7 +1074,9 @@ export function DockBar({
 
   const quickMedia = async (cmd: 'playPause' | 'next' | 'previous') => {
     await dockBridge.sendMediaCommand(cmd);
-    setTimeout(onRefreshMedia, 250);
+    setTimeout(onRefreshMedia, 140);
+    setTimeout(onRefreshMedia, 500);
+    setTimeout(onRefreshMedia, 1000);
   };
 
   const allLeafPinnedApps: PinnedApp[] = [];
