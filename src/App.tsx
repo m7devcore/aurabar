@@ -389,8 +389,11 @@ export function App() {
       ((config?.settings.musicPosition ?? 'top') === 'top' || islandPeekVisible)) ||
     (VIEW_MODE === 'dock' && config?.settings.musicPosition === 'taskbar');
   const activeMediaArt = useMediaArtwork(hostsMedia && !suspended ? media : null);
+  const adaptiveMode =
+    config?.settings.adaptiveAccentMode ??
+    (config?.settings.adaptiveAccent === false ? 'off' : 'media');
   useAdaptiveGlassTint(
-    config?.settings.adaptiveAccent !== false,
+    adaptiveMode,
     config?.settings.theme ?? 'obsidian',
     hostsMedia ? activeMediaArt : undefined,
     suspended
@@ -440,7 +443,7 @@ export function App() {
         </button>
       </div>
 
-      <div className="popover-body">
+      <div className={`popover-body ${activePanel === 'settings' ? 'is-settings' : ''}`}>
         {activePanel === 'apps' && (
           <AppLauncherPopover
             lang={settings.language}

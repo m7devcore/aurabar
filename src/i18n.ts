@@ -31,7 +31,13 @@ export interface Translations {
   theme: string;
   themeObsidian: string;
   themePlatinum: string;
+  themeOled: string;
+  themeMidnight: string;
+  themeEmerald: string;
+  themeRosewood: string;
+  themeAmethyst: string;
   themeFrost: string;
+  themeSand: string;
   language: string;
   behaviorSection: string;
   replaceWindowsTaskbar: string;
@@ -57,6 +63,9 @@ export interface Translations {
   notchPlaceOff: string;
   adaptiveAccent: string;
   adaptiveAccentDesc: string;
+  adaptiveModeOff: string;
+  adaptiveModeMedia: string;
+  adaptiveModeAll: string;
   islandHud: string;
   islandHudDesc: string;
   hudCharging: string;
@@ -109,6 +118,17 @@ export interface Translations {
   nookCamActive: string;
   nookMuteMic: string;
   nookUnmuteMic: string;
+  settingsTabDock: string;
+  settingsTabIsland: string;
+  settingsTabAppearance: string;
+  settingsTabSystem: string;
+  shortcutsSection: string;
+  shortcutToggleDock: string;
+  shortcutToggleIsland: string;
+  shortcutOpenNook: string;
+  shortcutClosePanel: string;
+  hideShort: string;
+  quitShort: string;
 }
 
 const EN: Translations = {
@@ -142,7 +162,13 @@ const EN: Translations = {
   theme: 'Theme',
   themeObsidian: 'Classy Obsidian',
   themePlatinum: 'Platinum Gold',
+  themeOled: 'Pure OLED',
+  themeMidnight: 'Midnight Blue',
+  themeEmerald: 'Pine Emerald',
+  themeRosewood: 'Rosewood',
+  themeAmethyst: 'Graphite Violet',
   themeFrost: 'Frost Light',
+  themeSand: 'Warm Sand',
   language: 'Language',
   behaviorSection: 'Taskbar Behavior',
   replaceWindowsTaskbar: 'Replace Windows Taskbar',
@@ -167,7 +193,10 @@ const EN: Translations = {
   notchPlaceTaskbar: 'Taskbar (Right)',
   notchPlaceOff: 'Off',
   adaptiveAccent: 'Adaptive Glass Accent',
-  adaptiveAccentDesc: 'Subtly harmonize accent and glass highlights with album art or desktop wallpaper',
+  adaptiveAccentDesc: 'Harmonize accent and glass highlights with playing album art or desktop wallpaper',
+  adaptiveModeOff: 'Off',
+  adaptiveModeMedia: 'Music only',
+  adaptiveModeAll: 'Music + Wallpaper',
   islandHud: 'Island System HUD',
   islandHudDesc: 'Show a quiet macOS-style indicator in the top island for volume, brightness, charging, and keyboard',
   hudCharging: 'Charging',
@@ -219,7 +248,18 @@ const EN: Translations = {
   nookMicMuted: 'Mic muted',
   nookCamActive: 'Camera live',
   nookMuteMic: 'Mute microphone',
-  nookUnmuteMic: 'Unmute microphone'
+  nookUnmuteMic: 'Unmute microphone',
+  settingsTabDock: 'Taskbar',
+  settingsTabIsland: 'Island & Media',
+  settingsTabAppearance: 'Appearance',
+  settingsTabSystem: 'System & Gaming',
+  shortcutsSection: 'Keyboard Shortcuts',
+  shortcutToggleDock: 'Show / hide taskbar',
+  shortcutToggleIsland: 'Toggle Dynamic Island (works in fullscreen)',
+  shortcutOpenNook: 'Open NotchNook Drop Tray',
+  shortcutClosePanel: 'Close open popover',
+  hideShort: 'Hide',
+  quitShort: 'Quit'
 };
 
 const AR: Translations = {
@@ -253,7 +293,13 @@ const AR: Translations = {
   theme: 'الثيم',
   themeObsidian: 'أوبسيديان كلاسيك',
   themePlatinum: 'بلاتينيوم ذهبي',
+  themeOled: 'أسود OLED',
+  themeMidnight: 'أزرق ليلي',
+  themeEmerald: 'زمردي داكن',
+  themeRosewood: 'عنابي مخملي',
+  themeAmethyst: 'جرافيت بنفسجي',
   themeFrost: 'فروست فاتح',
+  themeSand: 'رملي دافئ',
   language: 'اللغة',
   behaviorSection: 'سلوك شريط المهام',
   replaceWindowsTaskbar: 'استبدال شريط ويندوز الأساسي',
@@ -279,6 +325,9 @@ const AR: Translations = {
   notchPlaceOff: 'مخفي',
   adaptiveAccent: 'الزجاج الحيّ (ألوان متكيّفة)',
   adaptiveAccentDesc: 'تكييف ناعم لألوان التمييز ولمعة الزجاج مع غلاف الأغنية أو خلفية سطح المكتب',
+  adaptiveModeOff: 'مغلق',
+  adaptiveModeMedia: 'مع الأغاني فقط',
+  adaptiveModeAll: 'الأغاني + الخلفية',
   islandHud: 'مؤشر الجزيرة السريع (HUD)',
   islandHudDesc: 'عرض مؤشر هادئ وأنيق بالجزيرة العلوية للصوت والسطوع والشحن وتبديل اللغة',
   hudCharging: 'جاري الشحن',
@@ -330,7 +379,18 @@ const AR: Translations = {
   nookMicMuted: 'المايك مكتوم',
   nookCamActive: 'الكاميرا شغّالة',
   nookMuteMic: 'كتم المايكروفون',
-  nookUnmuteMic: 'إلغاء كتم المايكروفون'
+  nookUnmuteMic: 'إلغاء كتم المايكروفون',
+  settingsTabDock: 'شريط المهام',
+  settingsTabIsland: 'الآيسلند والميديا',
+  settingsTabAppearance: 'المظهر واللغة',
+  settingsTabSystem: 'النظام واللعب',
+  shortcutsSection: 'اختصارات الكيبورد',
+  shortcutToggleDock: 'إظهار أو إخفاء شريط المهام',
+  shortcutToggleIsland: 'إظهار الآيسلند (حتى داخل الألعاب)',
+  shortcutOpenNook: 'فتح رفّ الملفات NotchNook',
+  shortcutClosePanel: 'إغلاق القائمة المفتوحة',
+  hideShort: 'إخفاء',
+  quitShort: 'خروج'
 };
 
 export function t(lang: Language): Translations {

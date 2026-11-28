@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { dockBridge } from '../hooks/useDockBridge';
-import type { AdaptiveTint, ThemeId } from '../types';
+import type { AdaptiveAccentMode, AdaptiveTint, ThemeId } from '../types';
 
 const MEDIA_TINT_STORAGE_KEY = 'glassy.mediaTint.v2';
 const artworkTintCache = new Map<string, AdaptiveTint | null>();
@@ -168,17 +168,22 @@ export function publishMediaAdaptiveTint(artworkUrl: string | null): void {
  * from active album art (preferred) or current desktop wallpaper (fallback).
  */
 export function useAdaptiveGlassTint(
-  enabled: boolean,
+  mode: AdaptiveAccentMode,
   theme: ThemeId,
   localArtworkUrl?: string | null,
   suspended = false
 ): void {
+  const enabled = mode !== 'off';
+  const useWallpaper = mode === 'all';
   const [wallpaperTint, setWallpaperTint] = useState<AdaptiveTint | null>(null);
   const [mediaTint, setMediaTint] = useState<AdaptiveTint | null>(() => readStoredMediaTint());
 
-  // Fetch wallpaper tint on mount and refresh gently once a minute (paused during fullscreen games)
+  // Fetch wallpaper tint only when mode === 'all' (paused during fullscreen games)
   useEffect(() => {
-    if (!enabled || suspended) return;
+    if (!useWallpaper || suspended) {
+      if (!useWallpaper) setWallpaperTint(null);
+      return;
+    }
     let alive = true;
     const load = () => {
       void dockBridge.getWallpaperTint().then((tint) => {
@@ -191,7 +196,7 @@ export function useAdaptiveGlassTint(
       alive = false;
       window.clearInterval(id);
     };
-  }, [enabled, suspended]);
+  }, [useWallpaper, suspended]);
 
   // Extract from local artwork when this window hosts the active media player
   useEffect(() => {
@@ -233,7 +238,7 @@ export function useAdaptiveGlassTint(
   // Apply (or clear) CSS custom properties cleanly on :root
   useEffect(() => {
     const root = document.documentElement;
-    const active = enabled ? (mediaTint ?? wallpaperTint) : null;
+    const active = enabled ? (mediaTint ?? (useWallpaper ? wallpaperTint : null)) : null;
     if (!active) {
       root.style.removeProperty('--accent');
       root.style.removeProperty('--accent-soft');
@@ -241,12 +246,12 @@ export function useAdaptiveGlassTint(
       root.style.removeProperty('--adaptive-border');
       return;
     }
-    const isLight = theme === 'frost';
+    const isLight = theme === 'frost' || theme === 'sand';
     root.style.setProperty('--accent', isLight ? active.lightHex : active.darkHex);
     root.style.setProperty('--accent-soft', isLight ? active.softLight : active.softDark);
     root.style.setProperty('--adaptive-glow', isLight ? active.glowLight : active.glowDark);
     const rim = isLight ? active.borderLight : active.borderDark;
     if (rim) root.style.setProperty('--adaptive-border', rim);
     else root.style.removeProperty('--adaptive-border');
-  }, [enabled, theme, mediaTint, wallpaperTint]);
+  }, [enabled, useWallpaper, theme, mediaTint, wallpaperTint]);
 }

@@ -20,6 +20,7 @@ const DEFAULT_CONFIG: AppConfig = {
     notchNookEnabled: true,
     notchPlacement: 'top',
     adaptiveAccent: true,
+    adaptiveAccentMode: 'media',
     islandHudEnabled: true,
     showOnAllDisplays: true
   },
@@ -62,8 +63,20 @@ function migrateLegacyConfigIfNeeded(targetPath: string): void {
   }
 }
 
+const VALID_THEMES = new Set<ThemeId>([
+  'obsidian',
+  'platinum',
+  'oled',
+  'midnight',
+  'emerald',
+  'rosewood',
+  'amethyst',
+  'frost',
+  'sand'
+]);
+
 function normalizeTheme(raw: unknown): ThemeId {
-  if (raw === 'frost' || raw === 'platinum' || raw === 'obsidian') return raw;
+  if (typeof raw === 'string' && VALID_THEMES.has(raw as ThemeId)) return raw as ThemeId;
   return 'obsidian';
 }
 
@@ -144,9 +157,21 @@ export function loadConfig(): AppConfig {
               ? 'off'
               : DEFAULT_CONFIG.settings.notchPlacement,
         adaptiveAccent:
-          typeof rawSettings.adaptiveAccent === 'boolean'
-            ? rawSettings.adaptiveAccent
-            : DEFAULT_CONFIG.settings.adaptiveAccent,
+          rawSettings.adaptiveAccentMode === 'off'
+            ? false
+            : rawSettings.adaptiveAccentMode === 'media' || rawSettings.adaptiveAccentMode === 'all'
+              ? true
+              : typeof rawSettings.adaptiveAccent === 'boolean'
+                ? rawSettings.adaptiveAccent
+                : DEFAULT_CONFIG.settings.adaptiveAccent,
+        adaptiveAccentMode:
+          rawSettings.adaptiveAccentMode === 'off' ||
+          rawSettings.adaptiveAccentMode === 'media' ||
+          rawSettings.adaptiveAccentMode === 'all'
+            ? rawSettings.adaptiveAccentMode
+            : rawSettings.adaptiveAccent === false
+              ? 'off'
+              : DEFAULT_CONFIG.settings.adaptiveAccentMode,
         islandHudEnabled:
           typeof rawSettings.islandHudEnabled === 'boolean'
             ? rawSettings.islandHudEnabled

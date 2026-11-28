@@ -1,7 +1,17 @@
 export type DockPosition = 'top' | 'bottom';
 export type MusicPosition = 'top' | 'taskbar';
 export type NotchPlacement = 'top' | 'taskbar' | 'off';
-export type ThemeId = 'obsidian' | 'platinum' | 'frost';
+export type AdaptiveAccentMode = 'off' | 'media' | 'all';
+export type ThemeId =
+  | 'obsidian'
+  | 'platinum'
+  | 'oled'
+  | 'midnight'
+  | 'emerald'
+  | 'rosewood'
+  | 'amethyst'
+  | 'frost'
+  | 'sand';
 export type Language = 'en' | 'ar';
 
 export type ActivePanel = 'apps' | 'media' | 'system' | 'calendar' | 'settings' | 'nook' | null;
@@ -217,6 +227,7 @@ export interface DockSettings {
   notchNookEnabled: boolean;
   notchPlacement: NotchPlacement;
   adaptiveAccent: boolean;
+  adaptiveAccentMode?: AdaptiveAccentMode;
   islandHudEnabled: boolean;
   showOnAllDisplays: boolean;
 }
