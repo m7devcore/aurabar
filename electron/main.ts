@@ -110,6 +110,11 @@ interface SecondaryDockEntry {
   lastReserveKey: string;
 }
 
+// Glassy is a lightweight 2D transparent overlay; disabling Chromium's hardware D3D11/ANGLE GPU
+// process eliminates VRAM usage, DWM Multi-Plane Overlay (MPO) contention, and nvlddmkm/dxgkrnl
+// watchdog freezes (0x133 / 0x116 / LKD_0x193) during fullscreen DirectX/Vulkan games (e.g. CS2).
+app.disableHardwareAcceleration();
+
 const DOCK_CANVAS_HEIGHT = 500;
 
 let dockWindow: BrowserWindow | null = null;
@@ -394,7 +399,6 @@ function createSecondaryDock(display: Electron.Display, settings: DockSettings):
     lastReserveKey: ''
   };
   applyTopmost(win);
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true);
   lockDownNavigation(win);
   loadView(win, 'secondary-dock');
@@ -574,7 +578,6 @@ function createWindows(): void {
     }
   });
   applyTopmost(dockWindow);
-  dockWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   dockWindow.setIgnoreMouseEvents(true);
   lockDownNavigation(dockWindow);
   loadView(dockWindow, 'dock');
@@ -646,7 +649,6 @@ function createWindows(): void {
     }
   });
   applyTopmost(islandWindow);
-  islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   islandWindow.setIgnoreMouseEvents(true);
   lockDownNavigation(islandWindow);
   loadView(islandWindow, 'island');
@@ -741,10 +743,13 @@ function setFullscreenSuspended(next: boolean): void {
     islandWindow?.setIgnoreMouseEvents(true);
     dockWindow?.webContents.send('glassy:suspended', true);
     islandWindow?.webContents.send('glassy:suspended', true);
+    islandWindow?.webContents.send('glassy:island-visibility', false);
     dockWindow?.hide();
     islandWindow?.hide();
+    syncCursorHitTestTimer();
   } else {
     islandFullscreenPeek = false;
+    islandWindow?.webContents.send('glassy:island-visibility', false);
     // Sync bounds synchronously BEFORE showing so the dock appears directly at the right
     // coordinates without jumping (even after exiting 4:3 stretched fullscreen games).
     reassertLayoutAfterFullscreen();
@@ -753,6 +758,7 @@ function setFullscreenSuspended(next: boolean): void {
       ensureOnTop(dockWindow);
       dockWindow.webContents.send('glassy:suspended', false);
     }
+    syncCursorHitTestTimer();
     if (
       suspendedIslandWasVisible &&
       islandWindow &&
@@ -838,7 +844,14 @@ function setSecondaryFullscreenSuspended(entry: SecondaryDockEntry, next: boolea
 async function pollFullscreen(): Promise<void> {
   if (fullscreenPolling || isQuitting) return;
   const primaryLockedByIsland =
-    fullscreenSuspended && Boolean(islandWindow && !islandWindow.isDestroyed() && islandWindow.isFocused());
+    fullscreenSuspended &&
+    islandFullscreenPeek &&
+    Boolean(
+      islandWindow &&
+        !islandWindow.isDestroyed() &&
+        islandWindow.isVisible() &&
+        (islandWindow.isFocused() || isIslandExpanded)
+    );
 
   const secEntries = Array.from(secondaryDocks.values()).filter((e) => !e.win.isDestroyed());
   if (secEntries.length === 0) {
@@ -1243,24 +1256,30 @@ function toggleIslandVisibility(): void {
     return;
   }
   if (islandWindow.isVisible()) {
-    if (fullscreenSuspended && !shouldShowTopIsland(currentConfig.settings)) {
-      islandFullscreenPeek = false;
-    }
+    islandFullscreenPeek = false;
     isIslandExpanded = false;
     islandInteractiveLock = false;
     islandInteractiveState = false;
     islandWindow.setIgnoreMouseEvents(true);
     islandWindow.hide();
     islandWindow.webContents.send('glassy:island-visibility', false);
+    if (fullscreenSuspended) {
+      islandWindow.webContents.send('glassy:suspended', true);
+    }
+    syncCursorHitTestTimer();
   } else {
-    if (fullscreenSuspended && !shouldShowTopIsland(currentConfig.settings)) {
+    if (fullscreenSuspended) {
       islandFullscreenPeek = true;
     }
+    // Wake the island renderer BEFORE showing so active media & artwork load immediately on Alt+H
+    islandWindow.webContents.send('glassy:suspended', false);
+    islandWindow.webContents.send('glassy:island-visibility', true);
     islandWindow.setAlwaysOnTop(true, 'screen-saver');
     islandWindow.setBounds(computeIslandBounds(), false);
+    islandBoundsCache = islandWindow.getBounds();
     islandWindow.showInactive();
-    islandWindow.webContents.send('glassy:island-visibility', true);
     ensureOnTop(islandWindow);
+    syncCursorHitTestTimer();
   }
 }
 
@@ -1277,6 +1296,7 @@ function isPointInRects(x: number, y: number, rects: HitRect[]): boolean {
 let lastCursorX = Number.NaN;
 let lastCursorY = Number.NaN;
 let cursorHitTimer: ReturnType<typeof setInterval> | null = null;
+let cursorHitTimerMs = 0;
 
 function hasAnyVisibleOverlay(): boolean {
   if (isQuitting) return false;
@@ -1290,11 +1310,19 @@ function hasAnyVisibleOverlay(): boolean {
 
 function syncCursorHitTestTimer(): void {
   const needed = hasAnyVisibleOverlay();
-  if (needed && !cursorHitTimer) {
-    cursorHitTimer = setInterval(() => updateCursorHitTesting(false), 25);
-  } else if (!needed && cursorHitTimer) {
+  // While a fullscreen game is active on Monitor 1 (even if Monitor 2 shows a secondary dock),
+  // slow GetCursorPos polling from 40Hz (25ms) down to ~8Hz (120ms) — unless Alt+H Island peek is open.
+  const targetMs = fullscreenSuspended && !islandFullscreenPeek ? 120 : 25;
+  if (needed) {
+    if (!cursorHitTimer || cursorHitTimerMs !== targetMs) {
+      if (cursorHitTimer) clearInterval(cursorHitTimer);
+      cursorHitTimerMs = targetMs;
+      cursorHitTimer = setInterval(() => updateCursorHitTesting(false), targetMs);
+    }
+  } else if (cursorHitTimer) {
     clearInterval(cursorHitTimer);
     cursorHitTimer = null;
+    cursorHitTimerMs = 0;
   }
 }
 
@@ -1827,8 +1855,10 @@ if (!singleInstance) {
       }
     );
     // Cheap safety net: re-sync dock bounds only if they actually drifted from display metrics
+    // Never touch window placement/Z-order while a fullscreen game is running on the primary display.
     setInterval(() => {
-      if (!fullscreenSuspended && dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) {
+      if (fullscreenSuspended || isQuitting) return;
+      if (dockWindow && !dockWindow.isDestroyed() && dockWindow.isVisible()) {
         const expected = computeDockBounds(currentConfig.settings);
         const cur = dockWindow.getBounds();
         if (

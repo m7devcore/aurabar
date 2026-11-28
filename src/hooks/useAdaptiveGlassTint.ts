@@ -170,14 +170,15 @@ export function publishMediaAdaptiveTint(artworkUrl: string | null): void {
 export function useAdaptiveGlassTint(
   enabled: boolean,
   theme: ThemeId,
-  localArtworkUrl?: string | null
+  localArtworkUrl?: string | null,
+  suspended = false
 ): void {
   const [wallpaperTint, setWallpaperTint] = useState<AdaptiveTint | null>(null);
   const [mediaTint, setMediaTint] = useState<AdaptiveTint | null>(() => readStoredMediaTint());
 
-  // Fetch wallpaper tint on mount and refresh gently once a minute
+  // Fetch wallpaper tint on mount and refresh gently once a minute (paused during fullscreen games)
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || suspended) return;
     let alive = true;
     const load = () => {
       void dockBridge.getWallpaperTint().then((tint) => {
@@ -190,7 +191,7 @@ export function useAdaptiveGlassTint(
       alive = false;
       window.clearInterval(id);
     };
-  }, [enabled]);
+  }, [enabled, suspended]);
 
   // Extract from local artwork when this window hosts the active media player
   useEffect(() => {

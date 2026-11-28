@@ -262,9 +262,9 @@ export function App() {
       if (!alive) return;
       const delay = mediaPlayingRef.current
         ? VIEW_MODE === 'island' || musicPosition === 'taskbar'
-          ? 750
-          : 1200
-        : 1600;
+          ? 1100
+          : 1800
+        : 2200;
       timerId = window.setTimeout(() => void schedule(), delay);
     };
     void schedule();
@@ -307,7 +307,7 @@ export function App() {
     void refreshWindows();
     const id = setInterval(() => {
       void refreshWindows();
-    }, 1800);
+    }, VIEW_MODE === 'secondary-dock' ? 3200 : 1800);
     return () => clearInterval(id);
   }, [refreshWindows, suspended]);
 
@@ -385,13 +385,15 @@ export function App() {
 
   // Living Glass adaptive accent: extract from active album art where media is hosted, else sync via storage/wallpaper
   const hostsMedia =
-    (VIEW_MODE === 'island' && (config?.settings.musicPosition ?? 'top') === 'top') ||
+    (VIEW_MODE === 'island' &&
+      ((config?.settings.musicPosition ?? 'top') === 'top' || islandPeekVisible)) ||
     (VIEW_MODE === 'dock' && config?.settings.musicPosition === 'taskbar');
   const activeMediaArt = useMediaArtwork(hostsMedia && !suspended ? media : null);
   useAdaptiveGlassTint(
     config?.settings.adaptiveAccent !== false,
     config?.settings.theme ?? 'obsidian',
-    hostsMedia ? activeMediaArt : undefined
+    hostsMedia ? activeMediaArt : undefined,
+    suspended
   );
 
   const handleToggleMicMute = useCallback(async () => {
@@ -404,12 +406,12 @@ export function App() {
       <DynamicIsland
         lang={config?.settings.language ?? 'en'}
         media={suspended ? null : media}
-        musicInIsland={(config?.settings.musicPosition ?? 'top') === 'top'}
+        musicInIsland={(config?.settings.musicPosition ?? 'top') === 'top' || islandPeekVisible}
         notchNookEnabled={nookInIsland}
         privacy={privacy}
         hudEvent={suspended ? null : hudEvent}
         expanded={suspended ? false : islandExpanded}
-        autoHideIdle={Boolean(config?.settings.autoHideIdleIsland)}
+        autoHideIdle={Boolean(config?.settings.autoHideIdleIsland) && !islandPeekVisible}
         onToggleExpand={(open) => {
           setIslandExpanded(open);
           void dockBridge.setIslandExpanded(open);

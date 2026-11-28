@@ -719,17 +719,18 @@ namespace GlassyNative {
     // procCache is shared by the command loop and PollForegroundLoop; Dictionary is not
     // thread-safe and concurrent writes can corrupt it into an infinite loop.
     private static ProcMeta GetProcMeta(uint pid) {
+      if (pid <= 4) return new ProcMeta { name = "", exePath = "", isElectron = false };
       ProcMeta cached;
       lock (procCacheLock) {
         if (procCache.TryGetValue(pid, out cached)) return cached;
       }
 
       ProcMeta meta = QueryProcMeta(pid);
-      if (!string.IsNullOrEmpty(meta.name)) {
-        lock (procCacheLock) {
-          if (procCache.Count > 200) procCache.Clear();
-          procCache[pid] = meta;
-        }
+      // Cache even empty/anti-cheat-blocked lookups so protected games (FACEIT AC, EAC, Vanguard)
+      // are never repeatedly hit with OpenProcess on every poll cycle.
+      lock (procCacheLock) {
+        if (procCache.Count > 200) procCache.Clear();
+        procCache[pid] = meta;
       }
       return meta;
     }
@@ -790,8 +791,9 @@ namespace GlassyNative {
 
       if (string.IsNullOrEmpty(procName)) {
         try {
-          Process p = Process.GetProcessById((int)pid);
-          procName = p.ProcessName;
+          using (Process p = Process.GetProcessById((int)pid)) {
+            procName = p.ProcessName;
+          }
         } catch { }
       }
 
@@ -841,7 +843,7 @@ namespace GlassyNative {
           if (appBarHwndSet.Contains(hWnd)) return true;
         }
       }
-      if (parentElectronPid > 0 && pid == (uint)parentElectronPid) return true;
+      if (parentElectronPid > 0) return pid == (uint)parentElectronPid;
       return GetProcMeta(pid).isElectron;
     }
 
@@ -967,8 +969,20 @@ namespace GlassyNative {
       }
     }
 
+    private static volatile bool anyFullscreenGame = false;
+    private static volatile bool pendingAppBarResync = false;
+
     private static bool IsStartMenuWindow(IntPtr hWnd, uint pid) {
       if (hWnd == IntPtr.Zero || pid <= 4 || !IsWindowVisible(hWnd) || IsCloaked(hWnd)) return false;
+      // Fast Win32 class filter BEFORE touching GetProcMeta/OpenProcess: all Windows 10/11
+      // Start Menu, Search, and Shell flyouts are CoreWindow/ApplicationFrameWindow — games
+      // (SDL_app, UnrealWindow, Valve001, etc.) are rejected in O(1) without ever opening a handle!
+      StringBuilder cls = new StringBuilder(64);
+      GetClassName(hWnd, cls, cls.Capacity);
+      string clsName = cls.ToString();
+      if (clsName != "Windows.UI.Core.CoreWindow" && clsName != "ApplicationFrameWindow") {
+        return false;
+      }
       string name = GetProcMeta(pid).name;
       return name.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("SearchHost", StringComparison.OrdinalIgnoreCase) ||
@@ -980,6 +994,9 @@ namespace GlassyNative {
       if (monitor == IntPtr.Zero) return false;
       IntPtr fg = GetForegroundWindow();
       if (fg == IntPtr.Zero) return false;
+      // Clicking/expanding the Top Dynamic Island via Alt+H during a fullscreen game must NEVER
+      // wake the bottom taskbar over the game — only Start Menu or an actual Dock window does.
+      if (fg == islandHwnd) return false;
       uint pid;
       GetWindowThreadProcessId(fg, out pid);
       if (pid <= 4) return false;
@@ -1027,11 +1044,15 @@ namespace GlassyNative {
       bool prevHudMuted = false;
       int prevAcLine = -1;
       bool lowBatAlerted = false;
+      IAudioEndpointVolume cachedEpVol = null;
+      int volReacquireTick = 0;
       while (true) {
         try {
           if (++parentCheckTick >= 10) {
             parentCheckTick = 0;
             if (!IsParentAlive()) {
+              SafeReleaseCom(cachedEpVol);
+              cachedEpVol = null;
               if (taskbarHiddenByUs) {
                 try { RestoreWindowsTaskbar(); } catch { }
               } else {
@@ -1084,17 +1105,19 @@ namespace GlassyNative {
               startMenuOpen = false;
               startMenuClosedByDockAt = 0;
             }
-            if (!isAura && IsTaskbarWindow(fg)) {
-              if (fg != lastExternalForeground) {
-                lastExternalForeground = fg;
+            if (!inFullscreenSleep) {
+              if (!isAura && IsTaskbarWindow(fg)) {
+                if (fg != lastExternalForeground) {
+                  lastExternalForeground = fg;
+                }
+              } else if (!isAura) {
+                // Focus went to the desktop, Start, a shell popup...: the old window is no longer
+                // "the active one", so clicking its icon must bring it forward, not minimize it
+                lastExternalForeground = IntPtr.Zero;
+              } else if (lastExternalForeground != IntPtr.Zero &&
+                         (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
+                lastExternalForeground = IntPtr.Zero;
               }
-            } else if (!isAura) {
-              // Focus went to the desktop, Start, a shell popup...: the old window is no longer
-              // "the active one", so clicking its icon must bring it forward, not minimize it
-              lastExternalForeground = IntPtr.Zero;
-            } else if (lastExternalForeground != IntPtr.Zero &&
-                       (!IsWindow(lastExternalForeground) || IsIconic(lastExternalForeground))) {
-              lastExternalForeground = IntPtr.Zero;
             }
 
             // Detect keyboard language switches for BOTH Alt+Shift AND Win+Space instantly:
@@ -1122,31 +1145,47 @@ namespace GlassyNative {
           }
           wasStartMenu = isStartNow;
 
-          // Lightweight volume change watcher (~280ms, zero work during fullscreen gaming)
-          if (!inFullscreenSleep && ++volCheckTick >= 2) {
+          // Lightweight volume change watcher (~350ms, reuses cached COM endpoint — zero churn, zero work during fullscreen gaming!)
+          if (inFullscreenSleep) {
+            if (cachedEpVol != null) {
+              SafeReleaseCom(cachedEpVol);
+              cachedEpVol = null;
+            }
+          } else if (++volCheckTick >= 3) {
             volCheckTick = 0;
-            IAudioEndpointVolume epVol = null;
             try {
-              epVol = GetEndpointVolume();
-              if (epVol != null) {
+              // Periodically refresh endpoint every ~30s in case default audio device changed silently
+              if (cachedEpVol != null && ++volReacquireTick >= 90) {
+                volReacquireTick = 0;
+                SafeReleaseCom(cachedEpVol);
+                cachedEpVol = null;
+              }
+              if (cachedEpVol == null) {
+                cachedEpVol = GetEndpointVolume();
+                volReacquireTick = 0;
+              }
+              if (cachedEpVol != null) {
                 float sc;
                 bool mt;
-                if (epVol.GetMasterVolumeLevelScalar(out sc) == 0 && epVol.GetMute(out mt) == 0) {
+                if (cachedEpVol.GetMasterVolumeLevelScalar(out sc) == 0 && cachedEpVol.GetMute(out mt) == 0) {
                   int pct = Math.Max(0, Math.Min(100, (int)Math.Round(sc * 100f)));
                   if (prevHudVol >= 0 && (pct != prevHudVol || mt != prevHudMuted)) {
                     EmitEvent("HUD_VOL " + pct + " " + (mt ? "1" : "0"));
                   }
                   prevHudVol = pct;
                   prevHudMuted = mt;
+                } else {
+                  SafeReleaseCom(cachedEpVol);
+                  cachedEpVol = null;
                 }
               }
             } catch {
-            } finally {
-              SafeReleaseCom(epVol);
+              SafeReleaseCom(cachedEpVol);
+              cachedEpVol = null;
             }
           }
 
-          // Enforce work area, dock rect, and topmost z-order every ~600ms (zero work while hidden in fullscreen!)
+          // Enforce work area, dock rect, and topmost z-order every ~600ms (zero work while any fullscreen game is running!)
           if (++enforceTick >= 4) {
             enforceTick = 0;
 
@@ -1187,6 +1226,7 @@ namespace GlassyNative {
             if (!primaryDockVis && !anyExtraVis) {
               // All Glassy docks are hidden (e.g. fullscreen game): skip EnumWindows/DWM completely!
               inFullscreenSleep = true;
+              anyFullscreenGame = true;
             } else {
               POINT origin = new POINT();
               IntPtr primaryMon = MonitorFromPoint(origin, 1);
@@ -1195,35 +1235,50 @@ namespace GlassyNative {
               bool primaryFs = primaryDockVis ? IsMonitorShowingFullscreen(primaryMon, primaryMon, primaryD3dFs) : true;
               bool anyFs = primaryFs;
 
-              if (primaryDockVis && !primaryFs) {
-                EnforceDockPlacement();
-                KeepOnTopIfDemoted(dockHwnd);
-                KeepOnTopIfDemoted(islandHwnd);
-              }
-              if (extrasCopy != null) {
+              if (!primaryFs && extrasCopy != null) {
                 for (int i = 0; i < extrasCopy.Count; i++) {
                   IntPtr eh = extrasCopy[i];
                   if (eh == IntPtr.Zero || !IsWindow(eh) || !IsWindowVisible(eh)) continue;
                   IntPtr eMon = MonitorFromWindow(eh, 2);
-                  bool eFs = eMon != IntPtr.Zero && IsMonitorShowingFullscreen(eMon, primaryMon, primaryD3dFs);
-                  if (eFs) {
+                  if (eMon != IntPtr.Zero && IsMonitorShowingFullscreen(eMon, primaryMon, primaryD3dFs)) {
                     anyFs = true;
-                  } else {
+                    break;
+                  }
+                }
+              }
+
+              inFullscreenSleep = anyFs;
+              anyFullscreenGame = anyFs;
+
+              // Zero-Touch Gaming Rule: whenever ANY monitor is running a fullscreen game, NEVER
+              // issue SetWindowPos(HWND_TOPMOST) or native taskbar changes even on secondary displays.
+              if (!anyFs) {
+                if (primaryDockVis) {
+                  EnforceDockPlacement();
+                  KeepOnTopIfDemoted(dockHwnd);
+                  KeepOnTopIfDemoted(islandHwnd);
+                }
+                if (extrasCopy != null) {
+                  for (int i = 0; i < extrasCopy.Count; i++) {
+                    IntPtr eh = extrasCopy[i];
+                    if (eh == IntPtr.Zero || !IsWindow(eh) || !IsWindowVisible(eh)) continue;
                     EnforceExtraDockPlacement(eh);
                     KeepOnTopIfDemoted(eh);
                   }
                 }
-              }
-              inFullscreenSleep = anyFs;
-              if (!anyFs) {
                 if (taskbarHiddenByUs) {
                   SetAllNativeTaskbarsVisible(false);
+                }
+                if (pendingAppBarResync) {
+                  pendingAppBarResync = false;
+                  IntPtr ov = peekOverlayHwnd;
+                  if (ov != IntPtr.Zero) PostMessage(ov, WM_APPBAR_SYNC, IntPtr.Zero, IntPtr.Zero);
                 }
               }
             }
           }
         } catch { }
-        Thread.Sleep(inFullscreenSleep ? 220 : 100);
+        Thread.Sleep(inFullscreenSleep ? 420 : 110);
       }
     }
 
@@ -1809,7 +1864,12 @@ namespace GlassyNative {
       }
       if (msg == WM_APPBAR_CALLBACK) {
         if (wParam.ToInt64() == 1 && !inAppBarSync) { // ABN_POSCHANGED
-          SyncAppBarsOnThread();
+          // Never invoke SHAppBarMessage(ABM_SETPOS) during active fullscreen gameplay / mode switches
+          if (anyFullscreenGame || IsAnyMonitorFullscreen()) {
+            pendingAppBarResync = true;
+          } else {
+            SyncAppBarsOnThread();
+          }
         }
         return IntPtr.Zero;
       }

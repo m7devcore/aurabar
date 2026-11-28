@@ -1,6 +1,6 @@
 {
   "name": "glassy",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Glassy - Smart Floating Taskbar & Dynamic Island for Windows",
   "main": "dist-electron/main.cjs",
   "scripts": {

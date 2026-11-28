@@ -27,14 +27,32 @@ if ($parentPid -gt 4) {
 Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
 $asStreamMethod = ([System.IO.WindowsRuntimeStreamExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsStream' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IRandomAccessStream' })[0]
-function Await($WinRtTask, $ResultType) {
-  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-  $netTask = $asTask.Invoke($null, @($WinRtTask))
-  if (-not $netTask.Wait(2000)) { throw 'timeout' }
-  $netTask.Result
-}
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime] | Out-Null
 [Windows.Storage.Streams.IRandomAccessStreamWithContentType,Windows.Storage.Streams,ContentType=WindowsRuntime] | Out-Null
+$asTaskCache = @{}
+function Await($WinRtTask, $ResultType) {
+  $key = $ResultType.FullName
+  $asTask = $asTaskCache[$key]
+  if ($null -eq $asTask) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $asTaskCache[$key] = $asTask
+  }
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  try {
+    if (-not $netTask.Wait(2000)) { throw 'timeout' }
+    return $netTask.Result
+  } finally {
+    try { $netTask.Dispose() } catch {}
+    if ($null -ne $WinRtTask -and [System.Runtime.InteropServices.Marshal]::IsComObject($WinRtTask)) {
+      try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($WinRtTask) } catch {}
+    }
+  }
+}
+function Release-WinRt($obj) {
+  if ($null -ne $obj -and [System.Runtime.InteropServices.Marshal]::IsComObject($obj)) {
+    try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($obj) } catch {}
+  }
+}
 $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 $lastThumbSig = ''
 $lastTrackKey = ''
@@ -47,6 +65,8 @@ while ($true) {
   $id = $parts[0]
   if ($parts.Length -ge 3 -and $parts[1] -eq 'SEEK') {
     $ok = '0'
+    $session = $null
+    $tl = $null
     try {
       $session = $mgr.GetCurrentSession()
       if ($null -ne $session) {
@@ -60,6 +80,9 @@ while ($true) {
       }
     } catch {
       $ok = '0'
+    } finally {
+      Release-WinRt $tl
+      Release-WinRt $session
     }
     [Console]::Out.WriteLine("$id $ok")
     [Console]::Out.Flush()
@@ -67,6 +90,10 @@ while ($true) {
   }
   $out = ''
   $pollCount++
+  $session = $null
+  $props = $null
+  $playback = $null
+  $timeline = $null
   try {
     $session = $mgr.GetCurrentSession()
     if ($null -ne $session) {
@@ -78,17 +105,20 @@ while ($true) {
       $trackKey = ($session.SourceAppUserModelId + '|' + $props.Title + '|' + $props.Artist)
       if ($trackKey -ne $lastTrackKey) {
         $lastTrackKey = $trackKey
-        $thumbChecksLeft = 6
+        $thumbChecksLeft = 5
       }
       $thumbSig = $lastThumbSig
       $thumbB64 = $null
-      $shouldReadThumb = ($thumbChecksLeft -gt 0 -or $lastThumbSig -eq '' -or ($pollCount % 6 -eq 0))
+      $shouldReadThumb = ($thumbChecksLeft -gt 0 -or $lastThumbSig -eq '' -or ($pollCount % 12 -eq 0))
       if ($shouldReadThumb) {
         if ($thumbChecksLeft -gt 0) { $thumbChecksLeft-- }
         $thumbSig = ''
+        $thumbRef = $null
+        $st = $null
         try {
-          if ($null -ne $props.Thumbnail -and $null -ne $asStreamMethod) {
-            $st = Await ($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+          $thumbRef = $props.Thumbnail
+          if ($null -ne $thumbRef -and $null -ne $asStreamMethod) {
+            $st = Await ($thumbRef.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
             if ($null -ne $st) {
               $ns = $asStreamMethod.Invoke($null, @($st))
               $ms = [System.IO.MemoryStream]::new()
@@ -116,6 +146,9 @@ while ($true) {
         } catch {
           $thumbSig = ''
           $thumbB64 = $null
+        } finally {
+          Release-WinRt $st
+          Release-WinRt $thumbRef
         }
       }
       $payload = [ordered]@{
@@ -139,6 +172,14 @@ while ($true) {
     }
   } catch {
     $out = ''
+  } finally {
+    Release-WinRt $timeline
+    Release-WinRt $playback
+    Release-WinRt $props
+    Release-WinRt $session
+    if ($pollCount % 30 -eq 0) {
+      [System.GC]::Collect()
+    }
   }
   [Console]::Out.WriteLine("$id $out")
   [Console]::Out.Flush()
